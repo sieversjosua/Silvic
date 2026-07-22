@@ -94,14 +94,22 @@ final class WorkspaceStore: ObservableObject {
 
   func generateCommitMessage() async -> String? {
     guard let worktree = selectedWorktree else { return nil }
-    return await performAI { try await ai.generateCommitMessage(worktreePath: worktree.path) }
+    return await performAI {
+      let context = try await ai.commitMessageContext(worktreePath: worktree.path)
+      guard confirmAIContext(context, title: "Send commit context to Codex?") else { return "" }
+      return try await ai.generateCommitMessage(worktreePath: worktree.path, context: context)
+    }.flatMap { $0.isEmpty ? nil : $0 }
   }
 
   func generatePullRequestBody(base: String) async -> String? {
     guard let worktree = selectedWorktree else { return nil }
     return await performAI {
-      try await ai.generatePullRequestDraft(worktreePath: worktree.path, base: base)
-    }
+      let context = try await ai.pullRequestContext(worktreePath: worktree.path, base: base)
+      guard confirmAIContext(context, title: "Send pull-request context to Codex?") else {
+        return ""
+      }
+      return try await ai.generatePullRequestDraft(worktreePath: worktree.path, context: context)
+    }.flatMap { $0.isEmpty ? nil : $0 }
   }
 
   func prepareCommit(message: String, stageAll: Bool, push: Bool) {
@@ -190,5 +198,26 @@ final class WorkspaceStore: ObservableObject {
       errorMessage = error.localizedDescription
       return nil
     }
+  }
+
+  private func confirmAIContext(_ context: String, title: String) -> Bool {
+    let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 640, height: 320))
+    textView.string = context
+    textView.isEditable = false
+    textView.isSelectable = true
+    textView.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+    let scrollView = NSScrollView(frame: textView.frame)
+    scrollView.hasVerticalScroller = true
+    scrollView.hasHorizontalScroller = true
+    scrollView.documentView = textView
+
+    let alert = NSAlert()
+    alert.messageText = title
+    alert.informativeText =
+      "Review the exact sanitized context below. Nothing is sent unless you confirm."
+    alert.accessoryView = scrollView
+    alert.addButton(withTitle: "Send to Codex")
+    alert.addButton(withTitle: "Cancel")
+    return alert.runModal() == .alertFirstButtonReturn
   }
 }

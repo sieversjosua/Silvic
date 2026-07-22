@@ -1,5 +1,10 @@
 import Foundation
 
+public enum UntrackedContentPurpose: Sendable {
+  case localInspection
+  case aiContext
+}
+
 public enum GitClientError: LocalizedError, Sendable {
   case commandFailed(String)
 
@@ -50,6 +55,7 @@ public struct GitClient: Sendable {
 
   public func untrackedFileContents(
     worktreePath: String,
+    purpose: UntrackedContentPurpose = .localInspection,
     maximumFileBytes: Int = 24_000,
     maximumTotalBytes: Int = 60_000
   ) async throws -> String {
@@ -60,7 +66,9 @@ public struct GitClient: Sendable {
       var previews: [String] = []
 
       for relativePath in files where remainingBytes > 0 {
-        guard AIContextSanitizer.allowsUntrackedFile(relativePath) else { continue }
+        if purpose == .aiContext && !AIContextSanitizer.allowsUntrackedFile(relativePath) {
+          continue
+        }
         let url = root.appendingPathComponent(relativePath).standardizedFileURL
           .resolvingSymlinksInPath()
         guard url.path.hasPrefix(root.path + "/"),
@@ -72,8 +80,8 @@ public struct GitClient: Sendable {
           String(data: data, encoding: .utf8) != nil
         else { continue }
         let allowedBytes = min(remainingBytes, data.count)
-        let bounded = AIContextSanitizer.redact(
-          String(decoding: data.prefix(allowedBytes), as: UTF8.self))
+        let text = String(decoding: data.prefix(allowedBytes), as: UTF8.self)
+        let bounded = purpose == .aiContext ? AIContextSanitizer.redact(text) : text
         previews.append("New file: \(relativePath)\n\(bounded)")
         remainingBytes -= allowedBytes
       }

@@ -35,7 +35,7 @@ struct AIServiceTests {
     let runner = UntrackedFilesRunner()
 
     let context = try await GitClient(runner: runner).untrackedFileContents(
-      worktreePath: directory.path)
+      worktreePath: directory.path, purpose: .aiContext)
 
     #expect(context.contains("New.swift"))
     #expect(context.contains("let answer = 42"))
@@ -43,6 +43,22 @@ struct AIServiceTests {
     #expect(context.contains("embedded-do-not-send") == false)
     #expect(context.contains("also-secret") == false)
     #expect(context.contains("[REDACTED SENSITIVE LINE]"))
+  }
+
+  @Test("local inspection is not limited by the AI source allowlist")
+  func localInspectionIncludesConfigurationFiles() async throws {
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    try Data("name: checkout\n".utf8).write(to: directory.appendingPathComponent("config.yaml"))
+
+    let context = try await GitClient(
+      runner: SingleUntrackedFileRunner(path: "config.yaml")
+    ).untrackedFileContents(worktreePath: directory.path)
+
+    #expect(context.contains("config.yaml"))
+    #expect(context.contains("name: checkout"))
   }
 }
 
@@ -72,5 +88,13 @@ private actor UntrackedFilesRunner: CommandRunning {
       standardOutput: "New.swift\n.env.local\nToken.swift\n.npmrc\n",
       standardError: ""
     )
+  }
+}
+
+private struct SingleUntrackedFileRunner: CommandRunning {
+  let path: String
+
+  func run(_ request: CommandRequest) async throws -> CommandResult {
+    CommandResult(exitCode: 0, standardOutput: "\(path)\n", standardError: "")
   }
 }

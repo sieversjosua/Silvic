@@ -24,7 +24,15 @@ public struct AIService: Sendable {
   }
 
   public func generateCommitMessage(worktreePath: String) async throws -> String {
-    let context = try await changeContext(worktreePath: worktreePath)
+    let context = try await commitMessageContext(worktreePath: worktreePath)
+    return try await generateCommitMessage(worktreePath: worktreePath, context: context)
+  }
+
+  public func commitMessageContext(worktreePath: String) async throws -> String {
+    try await changeContext(worktreePath: worktreePath)
+  }
+
+  public func generateCommitMessage(worktreePath: String, context: String) async throws -> String {
     let prompt = """
       Write one precise Conventional Commit subject for the changes below.
       Output exactly one line, without quotes, markdown, explanation, or a trailing period.
@@ -42,21 +50,35 @@ public struct AIService: Sendable {
   public func generatePullRequestDraft(worktreePath: String, base: String = "main") async throws
     -> String
   {
+    let context = try await pullRequestContext(worktreePath: worktreePath, base: base)
+    return try await generatePullRequestDraft(worktreePath: worktreePath, context: context)
+  }
+
+  public func pullRequestContext(worktreePath: String, base: String = "main") async throws
+    -> String
+  {
     let commits = (try? await git.log(worktreePath: worktreePath, base: base)) ?? ""
     let diff = (try? await git.diff(worktreePath: worktreePath, fromBase: base)) ?? ""
     guard
       !commits.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         || !diff.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     else { throw AIServiceError.noChanges }
+    return """
+      Commits:
+      \(AIContextSanitizer.redact(commits))
+
+      Changes:
+      \(AIContextSanitizer.redact(String(diff.prefix(80_000))))
+      """
+  }
+
+  public func generatePullRequestDraft(worktreePath: String, context: String) async throws -> String
+  {
     let prompt = """
       Draft a concise GitHub pull request in Markdown for the changes below.
       Use exactly these headings: Summary, Testing, Risks. Do not modify files or run commands.
 
-      Commits:
-      \(commits)
-
-      Changes:
-      \(AIContextSanitizer.redact(String(diff.prefix(80_000))))
+      \(context)
       """
     return try await generate(prompt: prompt, worktreePath: worktreePath)
   }
@@ -65,7 +87,8 @@ public struct AIService: Sendable {
     let staged = try await git.diff(worktreePath: worktreePath, staged: true)
     let unstaged = try await git.diff(worktreePath: worktreePath)
     let status = try await git.shortStatus(worktreePath: worktreePath)
-    let untracked = try await git.untrackedFileContents(worktreePath: worktreePath)
+    let untracked = try await git.untrackedFileContents(
+      worktreePath: worktreePath, purpose: .aiContext)
     let combined =
       "Status:\n\(status)\n\nStaged diff:\n\(staged)\n\nUnstaged diff:\n\(unstaged)\n\nUntracked files:\n\(untracked)"
     guard !status.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
