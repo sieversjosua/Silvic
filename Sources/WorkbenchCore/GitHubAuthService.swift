@@ -58,7 +58,7 @@ public struct GitHubAuthService: Sendable {
     clear
     echo "WorktreePilot — Sign in to GitHub"
     echo
-    gh auth login --hostname github.com --web --skip-ssh-key
+    gh auth login --hostname github.com --web
     result=$?
     echo
     if [[ $result -eq 0 ]]; then

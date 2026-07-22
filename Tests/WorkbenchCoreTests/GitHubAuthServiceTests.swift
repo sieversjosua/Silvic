@@ -55,7 +55,7 @@ struct GitHubAuthServiceTests {
     #expect(script.contains("gh auth login"))
     #expect(script.contains("--web"))
     #expect(script.contains("--hostname github.com"))
-    #expect(script.contains("--skip-ssh-key"))
+    #expect(script.contains("--skip-ssh-key") == false)
     #expect(script.contains("token") == false)
     #expect(script.contains("--git-protocol") == false)
     #expect(script.contains("export PATH=\"$PATH:"))
