@@ -51,7 +51,8 @@ public struct GitWorkflowService: Sendable {
     worktreePath: String,
     message: String,
     stageAll: Bool,
-    push: Bool
+    push: Bool,
+    setUpstreamFor branch: String? = nil
   ) -> GitWorkflowPlan {
     var steps: [WorkflowStep] = []
     if stageAll {
@@ -75,15 +76,7 @@ public struct GitWorkflowService: Sendable {
         )
       ))
     if push {
-      steps.append(
-        WorkflowStep(
-          summary: "Push current branch",
-          command: CommandRequest(
-            executable: "git",
-            arguments: ["push"],
-            currentDirectory: worktreePath
-          )
-        ))
+      steps.append(pushStep(worktreePath: worktreePath, setUpstreamFor: branch))
     }
     return GitWorkflowPlan(title: "Commit changes", steps: steps)
   }
@@ -91,16 +84,9 @@ public struct GitWorkflowService: Sendable {
   public func pushPlan(worktreePath: String, setUpstreamFor branch: String? = nil)
     -> GitWorkflowPlan
   {
-    let arguments = branch.map { ["push", "--set-upstream", "origin", $0] } ?? ["push"]
     return GitWorkflowPlan(
       title: "Push branch",
-      steps: [
-        WorkflowStep(
-          summary: "Push current branch",
-          command: CommandRequest(
-            executable: "git", arguments: arguments, currentDirectory: worktreePath)
-        )
-      ]
+      steps: [pushStep(worktreePath: worktreePath, setUpstreamFor: branch)]
     )
   }
 
@@ -115,13 +101,7 @@ public struct GitWorkflowService: Sendable {
   ) -> GitWorkflowPlan {
     var steps: [WorkflowStep] = []
     if pushFirst {
-      let pushArguments = branch.map { ["push", "--set-upstream", "origin", $0] } ?? ["push"]
-      steps.append(
-        WorkflowStep(
-          summary: "Push current branch",
-          command: CommandRequest(
-            executable: "git", arguments: pushArguments, currentDirectory: worktreePath)
-        ))
+      steps.append(pushStep(worktreePath: worktreePath, setUpstreamFor: branch))
     }
     var arguments = ["pr", "create", "--title", title, "--body", body, "--base", base]
     if draft { arguments.append("--draft") }
@@ -141,11 +121,22 @@ public struct GitWorkflowService: Sendable {
     for step in plan.steps {
       let result = try await runner.run(step.command)
       guard result.exitCode == 0 else {
-        let message = result.standardError.trimmingCharacters(in: .whitespacesAndNewlines)
+        let stderr = result.standardError.trimmingCharacters(in: .whitespacesAndNewlines)
+        let stdout = result.standardOutput.trimmingCharacters(in: .whitespacesAndNewlines)
+        let message = stderr.isEmpty ? stdout : stderr
         throw GitWorkflowError.commandFailed(step: step.summary, message: message)
       }
       results.append(result)
     }
     return results
+  }
+
+  private func pushStep(worktreePath: String, setUpstreamFor branch: String?) -> WorkflowStep {
+    let arguments = branch.map { ["push", "--set-upstream", "origin", $0] } ?? ["push"]
+    return WorkflowStep(
+      summary: "Push current branch",
+      command: CommandRequest(
+        executable: "git", arguments: arguments, currentDirectory: worktreePath)
+    )
   }
 }

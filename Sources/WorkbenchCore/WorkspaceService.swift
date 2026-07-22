@@ -10,7 +10,7 @@ public struct WorkspaceService: Sendable {
   private let github: GitHubService
 
   public init(runner: any CommandRunning = LocalCommandRunner()) {
-    self.discovery = RepositoryDiscovery()
+    self.discovery = RepositoryDiscovery(runner: runner)
     self.git = GitClient(runner: runner)
     self.workCLI = WorkCLIService(runner: runner)
     self.processes = ListeningProcessService(runner: runner)
@@ -41,7 +41,7 @@ public struct WorkspaceService: Sendable {
       return values
     }
 
-    await withTaskGroup(of: (String, [ConvexDeployment], PullRequestSummary?).self) { group in
+    await withTaskGroup(of: (String, [ConvexDeployment], GitHubPullRequestLookup).self) { group in
       for worktree in repositories.flatMap(\.worktrees) {
         group.addTask {
           async let deployments = convex.deployments(in: worktree.path)
@@ -49,21 +49,17 @@ public struct WorkspaceService: Sendable {
           return (worktree.path, await deployments, await pullRequest)
         }
       }
-      var integrations: [String: ([ConvexDeployment], PullRequestSummary?)] = [:]
+      var integrations: [String: ([ConvexDeployment], GitHubPullRequestLookup)] = [:]
       for await value in group { integrations[value.0] = (value.1, value.2) }
 
       for repositoryIndex in repositories.indices {
         for worktreeIndex in repositories[repositoryIndex].worktrees.indices {
           var worktree = repositories[repositoryIndex].worktrees[worktreeIndex]
           worktree.runtimes = runtimes(for: worktree, commands: commands, listeners: listeners)
-          worktree.codexThreads =
-            threads
-            .filter { path($0.cwd, belongsTo: worktree.path) }
-            .prefix(5)
-            .map { $0 }
+          worktree.codexThreads = threads.filter { path($0.cwd, belongsTo: worktree.path) }
           if let integration = integrations[worktree.path] {
             worktree.convexDeployments = integration.0
-            worktree.pullRequest = integration.1
+            worktree.github = integration.1
           }
           repositories[repositoryIndex].worktrees[worktreeIndex] = worktree
         }

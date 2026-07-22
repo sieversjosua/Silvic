@@ -73,7 +73,10 @@ public struct LocalCommandRunner: CommandRunning {
         "/usr/bin", "/bin", "/usr/sbin", "/sbin",
       ]
       let existingPaths = environment["PATH", default: ""].split(separator: ":").map(String.init)
-      environment["PATH"] = Array(Set(existingPaths + fallbackPaths)).joined(separator: ":")
+      var seenPaths = Set<String>()
+      environment["PATH"] = (existingPaths + fallbackPaths)
+        .filter { seenPaths.insert($0).inserted }
+        .joined(separator: ":")
       environment.merge(request.environment) { _, new in new }
       process.environment = environment
 

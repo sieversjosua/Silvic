@@ -39,6 +39,23 @@ struct GitWorkflowTests {
       ])
     #expect(requests.allSatisfy { $0.currentDirectory == "/repo/feature" })
   }
+
+  @Test("commit and push configures the upstream for a new branch")
+  func configuresUpstream() {
+    let service = GitWorkflowService(runner: RecordingCommandRunner())
+
+    let plan = service.commitAndPushPlan(
+      worktreePath: "/repo/feature",
+      message: "feat: add checkout",
+      stageAll: true,
+      push: true,
+      setUpstreamFor: "feature/checkout"
+    )
+
+    #expect(
+      plan.steps.last?.command.arguments
+        == ["push", "--set-upstream", "origin", "feature/checkout"])
+  }
 }
 
 private actor RecordingCommandRunner: CommandRunning {

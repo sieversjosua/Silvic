@@ -76,13 +76,18 @@ final class WorkspaceStore: ObservableObject {
       changes = ""
       return
     }
+    let requestedPath = worktree.path
     do {
       async let status = git.shortStatus(worktreePath: worktree.path)
       async let diff = git.diff(worktreePath: worktree.path)
       async let staged = git.diff(worktreePath: worktree.path, staged: true)
-      changes =
-        "Status\n\(try await status)\n\nStaged diff\n\(try await staged)\n\nUnstaged diff\n\(try await diff)"
+      async let untracked = git.untrackedFileContents(worktreePath: worktree.path)
+      let loadedChanges =
+        "Status\n\(try await status)\n\nStaged diff\n\(try await staged)\n\nUnstaged diff\n\(try await diff)\n\nUntracked files\n\(try await untracked)"
+      guard selection == requestedPath else { return }
+      changes = loadedChanges
     } catch {
+      guard selection == requestedPath else { return }
       errorMessage = error.localizedDescription
     }
   }
@@ -101,11 +106,16 @@ final class WorkspaceStore: ObservableObject {
 
   func prepareCommit(message: String, stageAll: Bool, push: Bool) {
     guard let worktree = selectedWorktree else { return }
+    guard !push || worktree.git.branch != "(detached)" else {
+      errorMessage = "A detached HEAD cannot be pushed without choosing a branch."
+      return
+    }
     pendingPlan = workflow.commitAndPushPlan(
       worktreePath: worktree.path,
       message: message,
       stageAll: stageAll,
-      push: push
+      push: push,
+      setUpstreamFor: push && worktree.git.upstream == nil ? worktree.git.branch : nil
     )
   }
 
@@ -145,6 +155,8 @@ final class WorkspaceStore: ObservableObject {
       self.pendingPlan = nil
       await refresh()
     } catch {
+      self.pendingPlan = nil
+      await refresh()
       errorMessage = error.localizedDescription
     }
   }

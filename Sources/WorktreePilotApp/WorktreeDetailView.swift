@@ -132,6 +132,12 @@ struct WorktreeDetailView: View {
             Spacer()
             Button("Open") { store.openInBrowser(pr.url) }
           }
+        } else if case .unavailable(let message) = worktree.github {
+          Label("GitHub unavailable", systemImage: "exclamationmark.triangle")
+            .foregroundStyle(.orange)
+          Text(message).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+          Text("PR creation is disabled until GitHub status can be verified.")
+            .font(.caption)
         } else {
           TextField("Title", text: $pullRequestTitle)
           TextField("Base branch", text: $baseBranch)

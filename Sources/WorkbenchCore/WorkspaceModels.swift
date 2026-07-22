@@ -40,7 +40,12 @@ public struct WorktreeSnapshot: Sendable, Identifiable {
   public var runtimes: [LocalRuntime]
   public var convexDeployments: [ConvexDeployment]
   public var codexThreads: [CodexThread]
-  public var pullRequest: PullRequestSummary?
+  public var github: GitHubPullRequestLookup
+
+  public var pullRequest: PullRequestSummary? {
+    guard case .found(let pullRequest) = github else { return nil }
+    return pullRequest
+  }
 
   public init(
     repositoryName: String,
@@ -50,7 +55,7 @@ public struct WorktreeSnapshot: Sendable, Identifiable {
     runtimes: [LocalRuntime] = [],
     convexDeployments: [ConvexDeployment] = [],
     codexThreads: [CodexThread] = [],
-    pullRequest: PullRequestSummary? = nil
+    github: GitHubPullRequestLookup = .none
   ) {
     self.repositoryName = repositoryName
     self.path = path
@@ -59,7 +64,7 @@ public struct WorktreeSnapshot: Sendable, Identifiable {
     self.runtimes = runtimes
     self.convexDeployments = convexDeployments
     self.codexThreads = codexThreads
-    self.pullRequest = pullRequest
+    self.github = github
   }
 }
 
@@ -154,4 +159,10 @@ public struct PullRequestSummary: Sendable, Equatable {
     self.url = url
     self.checks = checks
   }
+}
+
+public enum GitHubPullRequestLookup: Sendable, Equatable {
+  case found(PullRequestSummary)
+  case none
+  case unavailable(String)
 }

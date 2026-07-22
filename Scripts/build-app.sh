@@ -10,6 +10,7 @@ mkdir -p "${OUTPUT}/Contents/MacOS" "${OUTPUT}/Contents/Resources"
 cp "${BIN_PATH}/WorktreePilot" "${OUTPUT}/Contents/MacOS/WorktreePilot"
 cp "${ROOT}/Resources/Info.plist" "${OUTPUT}/Contents/Info.plist"
 xattr -cr "${OUTPUT}"
+xattr -d com.apple.FinderInfo "${OUTPUT}" 2>/dev/null || true
 codesign --force --deep --sign - "${OUTPUT}"
 
 echo "Built ${OUTPUT}"
