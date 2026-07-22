@@ -9,7 +9,10 @@ struct WorktreePilotApp: App {
       ContentView()
         .environmentObject(store)
         .frame(minWidth: 980, minHeight: 620)
-        .task { await store.refresh() }
+        .task {
+          await store.refreshGitHubAuth()
+          await store.refresh()
+        }
     }
     .commands {
       CommandGroup(after: .newItem) {

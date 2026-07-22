@@ -14,6 +14,7 @@ The current UI is intentionally plain. The core functionality lives in the indep
 - Convex deployment metadata from `.env.local` without reading or exposing deploy keys
 - Non-archived Codex tasks mapped to worktrees by CWD
 - GitHub PR metadata and check rollups via the authenticated `gh` CLI
+- Browser-based GitHub OAuth through `gh auth login --web`, with account status in the app
 - Diff/status inspection
 - AI commit messages and PR bodies through the authenticated local `codex` CLI
 - Confirm-before-execute plans for stage, commit, push, and PR creation

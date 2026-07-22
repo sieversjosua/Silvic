@@ -13,12 +13,16 @@ final class WorkspaceStore: ObservableObject {
   @Published var errorMessage: String?
   @Published var changes = ""
   @Published var pendingPlan: GitWorkflowPlan?
+  @Published var githubAuthStatus: GitHubAuthenticationStatus?
+  @Published var isGitHubLoginInProgress = false
 
   private let workspace = WorkspaceService()
   private let git = GitClient()
   private let ai = AIService()
   private let workflow = GitWorkflowService()
+  private let githubAuth = GitHubAuthService()
   private let defaultsKey = "repositoryRoots"
+  private var githubLoginPollingTask: Task<Void, Never>?
 
   init() {
     if let stored = UserDefaults.standard.stringArray(forKey: defaultsKey), !stored.isEmpty {
@@ -49,6 +53,41 @@ final class WorkspaceStore: ObservableObject {
     }
     isRefreshing = false
     await loadChanges()
+  }
+
+  func refreshGitHubAuth() async {
+    githubAuthStatus = await githubAuth.status()
+  }
+
+  func beginGitHubBrowserLogin() {
+    githubLoginPollingTask?.cancel()
+    do {
+      let applicationSupport = FileManager.default.urls(
+        for: .applicationSupportDirectory, in: .userDomainMask
+      ).first!.appendingPathComponent("WorktreePilot", isDirectory: true)
+      let commandURL = try githubAuth.createBrowserLoginCommand(in: applicationSupport)
+      guard NSWorkspace.shared.open(commandURL) else {
+        errorMessage = "Could not open the GitHub login in Terminal."
+        return
+      }
+      isGitHubLoginInProgress = true
+      githubLoginPollingTask = Task { [weak self] in
+        guard let self else { return }
+        for _ in 0..<120 {
+          if Task.isCancelled { return }
+          try? await Task.sleep(for: .seconds(2))
+          await refreshGitHubAuth()
+          if case .authenticated = githubAuthStatus {
+            isGitHubLoginInProgress = false
+            await refresh()
+            return
+          }
+        }
+        isGitHubLoginInProgress = false
+      }
+    } catch {
+      errorMessage = "Could not prepare GitHub login: \(error.localizedDescription)"
+    }
   }
 
   func chooseAndAddRoot() {

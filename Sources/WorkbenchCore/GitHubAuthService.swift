@@ -1,0 +1,79 @@
+import Foundation
+
+public enum GitHubAuthenticationStatus: Sendable, Equatable {
+  case authenticated(username: String)
+  case unauthenticated(message: String)
+  case unavailable(message: String)
+}
+
+public struct GitHubAuthService: Sendable {
+  private let runner: any CommandRunning
+
+  public init(runner: any CommandRunning = LocalCommandRunner()) {
+    self.runner = runner
+  }
+
+  public func status() async -> GitHubAuthenticationStatus {
+    let statusResult: CommandResult
+    do {
+      statusResult = try await runner.run(
+        CommandRequest(
+          executable: "gh",
+          arguments: ["auth", "status", "--active", "--hostname", "github.com"]
+        ))
+    } catch {
+      return .unavailable(message: "GitHub CLI is not available: \(error.localizedDescription)")
+    }
+
+    guard statusResult.exitCode == 0 else {
+      let output =
+        statusResult.standardError.isEmpty
+        ? statusResult.standardOutput : statusResult.standardError
+      let message = output.trimmingCharacters(in: .whitespacesAndNewlines)
+      return .unauthenticated(message: message.isEmpty ? "Not signed in to GitHub." : message)
+    }
+
+    guard
+      let userResult = try? await runner.run(
+        CommandRequest(
+          executable: "gh",
+          arguments: ["api", "user", "--jq", ".login"]
+        )),
+      userResult.exitCode == 0
+    else { return .authenticated(username: "GitHub") }
+    let username = userResult.standardOutput.trimmingCharacters(in: .whitespacesAndNewlines)
+    return .authenticated(username: username.isEmpty ? "GitHub" : username)
+  }
+
+  public func createBrowserLoginCommand(in directory: URL) throws -> URL {
+    try FileManager.default.createDirectory(
+      at: directory, withIntermediateDirectories: true,
+      attributes: [.posixPermissions: 0o700]
+    )
+    let commandURL = directory.appendingPathComponent("github-login.command")
+    try Data(Self.browserLoginScript().utf8).write(to: commandURL, options: .atomic)
+    try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: commandURL.path)
+    return commandURL
+  }
+
+  public static func browserLoginScript() -> String {
+    """
+    #!/bin/zsh
+    export PATH="$HOME/.local/bin:$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+    clear
+    echo "WorktreePilot — Sign in to GitHub"
+    echo
+    gh auth login --hostname github.com --git-protocol ssh --web --skip-ssh-key
+    result=$?
+    echo
+    if [[ $result -eq 0 ]]; then
+      echo "GitHub sign-in completed. You can close this window."
+    else
+      echo "GitHub sign-in did not complete. Exit code: $result"
+    fi
+    echo
+    read -k 1 "?Press any key to close…"
+    exit $result
+    """
+  }
+}

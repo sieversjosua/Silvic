@@ -14,6 +14,8 @@
 - Convex metadata from environment files; and
 - GitHub pull-request/check metadata through `gh`.
 
+`GitHubAuthService` delegates browser OAuth to `gh auth login --web`. The generated command opens visibly in Terminal, while `gh` stores credentials in the system credential store. WorktreePilot never reads or stores the token; it checks the active account through `gh auth status` and `gh api user`.
+
 It normalizes those inputs into `WorkspaceSnapshot -> RepositorySnapshot -> WorktreeSnapshot`. Integrations are attached using explicit local evidence such as CWD or matching repository/workspace slugs.
 
 ## Mutations

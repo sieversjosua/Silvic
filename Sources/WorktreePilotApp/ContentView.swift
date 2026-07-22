@@ -8,6 +8,9 @@ struct ContentView: View {
   var body: some View {
     NavigationSplitView {
       List {
+        Section("GitHub") {
+          githubAuthentication
+        }
         Section("Repository roots") {
           ForEach(store.roots, id: \.self) { root in
             Text(URL(fileURLWithPath: root).lastPathComponent)
@@ -43,8 +46,13 @@ struct ContentView: View {
     .toolbar {
       ToolbarItemGroup {
         if store.isRefreshing { ProgressView().controlSize(.small) }
-        Button("Refresh", systemImage: "arrow.clockwise") { Task { await store.refresh() } }
-          .disabled(store.isRefreshing)
+        Button("Refresh", systemImage: "arrow.clockwise") {
+          Task {
+            await store.refreshGitHubAuth()
+            await store.refresh()
+          }
+        }
+        .disabled(store.isRefreshing)
       }
     }
     .sheet(item: $store.pendingPlan) { plan in
@@ -60,6 +68,36 @@ struct ContentView: View {
       Button("OK") { store.errorMessage = nil }
     } message: {
       Text(store.errorMessage ?? "Unknown error")
+    }
+  }
+
+  @ViewBuilder private var githubAuthentication: some View {
+    if store.isGitHubLoginInProgress {
+      HStack {
+        ProgressView().controlSize(.small)
+        Text("Waiting for browser login…")
+      }
+      Button("Check again") { Task { await store.refreshGitHubAuth() } }
+    } else {
+      switch store.githubAuthStatus {
+      case .authenticated(let username):
+        Label("@\(username)", systemImage: "checkmark.circle.fill")
+          .foregroundStyle(.green)
+        Button("Refresh account") { Task { await store.refreshGitHubAuth() } }
+      case .unauthenticated(let message):
+        Label("Not signed in", systemImage: "person.crop.circle.badge.xmark")
+        Text(message).font(.caption).foregroundStyle(.secondary).lineLimit(3)
+        Button("Sign in with GitHub…") { store.beginGitHubBrowserLogin() }
+      case .unavailable(let message):
+        Label("GitHub CLI unavailable", systemImage: "exclamationmark.triangle")
+          .foregroundStyle(.orange)
+        Text(message).font(.caption).foregroundStyle(.secondary).lineLimit(3)
+      case nil:
+        HStack {
+          ProgressView().controlSize(.small)
+          Text("Checking…")
+        }
+      }
     }
   }
 
