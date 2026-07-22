@@ -2,16 +2,16 @@
 import PackageDescription
 
 let package = Package(
-  name: "WorktreePilot",
+  name: "Branchdeck",
   platforms: [.macOS(.v14)],
   products: [
     .library(name: "WorkbenchCore", targets: ["WorkbenchCore"]),
-    .executable(name: "WorktreePilot", targets: ["WorktreePilotApp"]),
+    .executable(name: "Branchdeck", targets: ["BranchdeckApp"]),
   ],
   targets: [
     .target(name: "WorkbenchCore"),
     .executableTarget(
-      name: "WorktreePilotApp",
+      name: "BranchdeckApp",
       dependencies: ["WorkbenchCore"]
     ),
     .testTarget(

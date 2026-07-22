@@ -59,7 +59,7 @@ struct ContentView: View {
       PlanConfirmationView(plan: plan)
     }
     .alert(
-      "WorktreePilot",
+      "Branchdeck",
       isPresented: Binding(
         get: { store.errorMessage != nil },
         set: { if !$0 { store.errorMessage = nil } }

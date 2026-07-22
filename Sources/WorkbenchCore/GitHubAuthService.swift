@@ -56,7 +56,7 @@ public struct GitHubAuthService: Sendable {
     #!/bin/zsh
     export PATH="$PATH:$HOME/.local/bin:$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
     clear
-    echo "WorktreePilot — Sign in to GitHub"
+    echo "Branchdeck — Sign in to GitHub"
     echo
     gh auth login --hostname github.com --web
     result=$?

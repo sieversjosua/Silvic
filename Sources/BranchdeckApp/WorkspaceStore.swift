@@ -25,8 +25,13 @@ final class WorkspaceStore: ObservableObject {
   private var githubLoginPollingTask: Task<Void, Never>?
 
   init() {
-    if let stored = UserDefaults.standard.stringArray(forKey: defaultsKey), !stored.isEmpty {
+    let stored =
+      UserDefaults.standard.stringArray(forKey: defaultsKey)
+      ?? UserDefaults(suiteName: "de.josuasievers.worktreepilot")?.stringArray(
+        forKey: defaultsKey)
+    if let stored, !stored.isEmpty {
       roots = stored
+      UserDefaults.standard.set(stored, forKey: defaultsKey)
     } else {
       let home = FileManager.default.homeDirectoryForCurrentUser
       let candidates = [
@@ -64,7 +69,7 @@ final class WorkspaceStore: ObservableObject {
     do {
       let applicationSupport = FileManager.default.urls(
         for: .applicationSupportDirectory, in: .userDomainMask
-      ).first!.appendingPathComponent("WorktreePilot", isDirectory: true)
+      ).first!.appendingPathComponent("Branchdeck", isDirectory: true)
       let commandURL = try githubAuth.createBrowserLoginCommand(in: applicationSupport)
       guard NSWorkspace.shared.open(commandURL) else {
         errorMessage = "Could not open the GitHub login in Terminal."

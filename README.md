@@ -1,6 +1,6 @@
-# WorktreePilot
+# Branchdeck
 
-WorktreePilot is a local-first, native macOS workbench that treats a Git worktree as the central unit connecting code, local processes, Codex tasks, Convex deployments, GitHub pull requests, and CI checks.
+Branchdeck is a local-first, native macOS workbench that treats a Git worktree as the central unit connecting code, local processes, Codex tasks, Convex deployments, GitHub pull requests, and CI checks.
 
 The current UI is intentionally plain. The core functionality lives in the independent `WorkbenchCore` Swift target.
 
@@ -23,17 +23,17 @@ The current UI is intentionally plain. The core functionality lives in the indep
 ## Run during development
 
 ```bash
-swift run WorktreePilot
+swift run Branchdeck
 ```
 
 ## Build the app bundle
 
 ```bash
 ./Scripts/build-app.sh
-open outputs/WorktreePilot.app
+open outputs/Branchdeck.app
 ```
 
-The app intentionally is not sandboxed: it needs read access to selected repositories, process information, and local CLI configuration. It uses the existing authentication of `git`, `gh`, and `codex`; no credentials are stored by WorktreePilot.
+The app intentionally is not sandboxed: it needs read access to selected repositories, process information, and local CLI configuration. It uses the existing authentication of `git`, `gh`, and `codex`; no credentials are stored by Branchdeck.
 
 ## Safety model
 

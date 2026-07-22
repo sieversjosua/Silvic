@@ -2,8 +2,8 @@
 set -euo pipefail
 
 ROOT="${0:A:h:h}"
-OUTPUT="${ROOT}/outputs/WorktreePilot.app"
-ZIP_OUTPUT="${ROOT}/outputs/WorktreePilot.zip"
+OUTPUT="${ROOT}/outputs/Branchdeck.app"
+ZIP_OUTPUT="${ROOT}/outputs/Branchdeck.zip"
 
 cd "${ROOT}"
 swift build -c release -j 1
@@ -11,9 +11,9 @@ BIN_PATH="$(swift build -c release --show-bin-path)"
 
 rm -rf "${OUTPUT}"
 mkdir -p "${OUTPUT}/Contents/MacOS" "${OUTPUT}/Contents/Resources"
-cp "${BIN_PATH}/WorktreePilot" "${OUTPUT}/Contents/MacOS/WorktreePilot"
+cp "${BIN_PATH}/Branchdeck" "${OUTPUT}/Contents/MacOS/Branchdeck"
 cp "${ROOT}/Resources/Info.plist" "${OUTPUT}/Contents/Info.plist"
-cp "${ROOT}/Resources/WorktreePilot.icns" "${OUTPUT}/Contents/Resources/WorktreePilot.icns"
+cp "${ROOT}/Resources/Branchdeck.icns" "${OUTPUT}/Contents/Resources/Branchdeck.icns"
 
 for attempt in 1 2 3; do
   xattr -cr "${OUTPUT}"
@@ -34,7 +34,7 @@ xattr -cr "${OUTPUT}"
 codesign --verify --deep --strict "${OUTPUT}"
 (
   cd "${ROOT}/outputs"
-  COPYFILE_DISABLE=1 /usr/bin/zip -qry "${ZIP_OUTPUT}" "WorktreePilot.app"
+  COPYFILE_DISABLE=1 /usr/bin/zip -qry "${ZIP_OUTPUT}" "Branchdeck.app"
 )
 
 echo "Built ${OUTPUT} and ${ZIP_OUTPUT}"

@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct WorktreePilotApp: App {
+struct BranchdeckApp: App {
   @StateObject private var store = WorkspaceStore()
 
   var body: some Scene {

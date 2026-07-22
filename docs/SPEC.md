@@ -1,4 +1,4 @@
-# WorktreePilot MVP specification
+# Branchdeck MVP specification
 
 ## Goal
 
@@ -15,7 +15,7 @@ Build a fast native macOS application for managing local Git/GitHub work across 
 7. Generate commit messages and pull-request descriptions with AI.
 8. Never run state-changing Git/GitHub actions without explicit user confirmation.
 9. Keep the functional core independent from the initial, deliberately minimal UI.
-10. Allow browser-based GitHub sign-in without storing credentials in WorktreePilot.
+10. Allow browser-based GitHub sign-in without storing credentials in Branchdeck.
 
 ## Out of scope for this first implementation
 
