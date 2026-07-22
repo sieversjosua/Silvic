@@ -56,7 +56,7 @@ public struct AIService: Sendable {
       \(commits)
 
       Changes:
-      \(String(diff.prefix(80_000)))
+      \(AIContextSanitizer.redact(String(diff.prefix(80_000))))
       """
     return try await generate(prompt: prompt, worktreePath: worktreePath)
   }
@@ -71,7 +71,7 @@ public struct AIService: Sendable {
     guard !status.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
       throw AIServiceError.noChanges
     }
-    return String(combined.prefix(80_000))
+    return AIContextSanitizer.redact(String(combined.prefix(80_000)))
   }
 
   private func generate(prompt: String, worktreePath: String) async throws -> String {

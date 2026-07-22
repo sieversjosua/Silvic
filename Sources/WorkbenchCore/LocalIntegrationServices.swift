@@ -2,9 +2,16 @@ import Foundation
 
 public struct WorkCLIService: Sendable {
   private let runner: any CommandRunning
+  private let stateRoot: URL
 
-  public init(runner: any CommandRunning = LocalCommandRunner()) {
+  public init(runner: any CommandRunning = LocalCommandRunner(), stateRoot: URL? = nil) {
     self.runner = runner
+    let configuredRoot = ProcessInfo.processInfo.environment["WORK_STATE_ROOT"].map {
+      URL(fileURLWithPath: $0)
+    }
+    self.stateRoot =
+      stateRoot ?? configuredRoot
+      ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".work-cli")
   }
 
   public func commands() async -> [WorkCLICommand] {
@@ -13,8 +20,40 @@ public struct WorkCLIService: Sendable {
         CommandRequest(executable: "work", arguments: ["status", "-a"])),
       result.exitCode == 0
     else { return [] }
-    return WorkCLIParser.parseStatus(result.standardOutput)
+    let commands = WorkCLIParser.parseStatus(result.standardOutput)
+    return await Task.detached(priority: .utility) {
+      commands.map { command in
+        command.resolvingWorkspace(
+          to: workspacePath(
+            project: command.project,
+            workspace: command.workspace,
+            stateRoot: stateRoot
+          ))
+      }
+    }.value
   }
+}
+
+private struct WorkCLIStateMetadata: Decodable {
+  let root: String
+}
+
+private func workspacePath(project: String, workspace: String, stateRoot: URL) -> String? {
+  let isSafe: (String) -> Bool = { value in
+    !value.isEmpty && value.allSatisfy { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" }
+  }
+  guard isSafe(project), isSafe(workspace) else { return nil }
+  let stateFile =
+    stateRoot
+    .appendingPathComponent("projects")
+    .appendingPathComponent(project)
+    .appendingPathComponent("workspaces")
+    .appendingPathComponent(workspace)
+    .appendingPathComponent("state.json")
+  guard let data = try? Data(contentsOf: stateFile),
+    let metadata = try? JSONDecoder().decode(WorkCLIStateMetadata.self, from: data)
+  else { return nil }
+  return metadata.root
 }
 
 public struct ConvexDiscovery: Sendable {

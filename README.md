@@ -36,4 +36,4 @@ The app intentionally is not sandboxed: it needs read access to selected reposit
 
 ## Safety model
 
-Discovery and AI generation are read-only. Commit, push, and pull-request creation are represented as visible command plans and only run after explicit confirmation. Arguments are passed directly to `Process`, not interpolated through a shell.
+Discovery and AI generation are read-only. Before diff context is sent to Codex, likely credential assignments and private-key blocks are redacted; untracked content is restricted to a source/text allowlist and common secret files are excluded. Commit, push, and pull-request creation are represented as visible command plans and only run after explicit confirmation. Arguments are passed directly to `Process`, not interpolated through a shell.

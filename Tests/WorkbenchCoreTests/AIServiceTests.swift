@@ -28,6 +28,10 @@ struct AIServiceTests {
     try Data("let answer = 42\n".utf8).write(to: directory.appendingPathComponent("New.swift"))
     try Data("API_SECRET=do-not-send\n".utf8).write(
       to: directory.appendingPathComponent(".env.local"))
+    try Data("// token = embedded-do-not-send\n".utf8).write(
+      to: directory.appendingPathComponent("Token.swift"))
+    try Data("registry_token=also-secret\n".utf8).write(
+      to: directory.appendingPathComponent(".npmrc"))
     let runner = UntrackedFilesRunner()
 
     let context = try await GitClient(runner: runner).untrackedFileContents(
@@ -36,6 +40,9 @@ struct AIServiceTests {
     #expect(context.contains("New.swift"))
     #expect(context.contains("let answer = 42"))
     #expect(context.contains("do-not-send") == false)
+    #expect(context.contains("embedded-do-not-send") == false)
+    #expect(context.contains("also-secret") == false)
+    #expect(context.contains("[REDACTED SENSITIVE LINE]"))
   }
 }
 
@@ -62,7 +69,7 @@ private actor UntrackedFilesRunner: CommandRunning {
   func run(_ request: CommandRequest) async throws -> CommandResult {
     CommandResult(
       exitCode: 0,
-      standardOutput: "New.swift\n.env.local\n",
+      standardOutput: "New.swift\n.env.local\nToken.swift\n.npmrc\n",
       standardError: ""
     )
   }

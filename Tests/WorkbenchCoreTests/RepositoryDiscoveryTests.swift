@@ -29,6 +29,21 @@ struct RepositoryDiscoveryTests {
     #expect(repositories == [main.path])
   }
 
+  @Test("repositories beneath a hidden folder are still discovered")
+  func discoversHiddenFolderRepositories() async throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let repository = root.appendingPathComponent(".clients/acme", isDirectory: true)
+    try FileManager.default.createDirectory(at: repository, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let runner = LocalCommandRunner()
+    try await runGit(["init", "-b", "main", repository.path], at: root.path, runner: runner)
+
+    let repositories = await RepositoryDiscovery(runner: runner).findRepositories(in: [root.path])
+
+    #expect(repositories == [repository.path])
+  }
+
   private func runGit(_ arguments: [String], at path: String, runner: LocalCommandRunner)
     async throws
   {

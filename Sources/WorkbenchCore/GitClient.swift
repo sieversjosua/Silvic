@@ -58,11 +58,9 @@ public struct GitClient: Sendable {
       let root = URL(fileURLWithPath: worktreePath).standardizedFileURL.resolvingSymlinksInPath()
       var remainingBytes = maximumTotalBytes
       var previews: [String] = []
-      let sensitiveFragments = [".env", "credential", "secret", "private-key", "private_key"]
 
       for relativePath in files where remainingBytes > 0 {
-        let lowercasedPath = relativePath.lowercased()
-        guard !sensitiveFragments.contains(where: lowercasedPath.contains) else { continue }
+        guard AIContextSanitizer.allowsUntrackedFile(relativePath) else { continue }
         let url = root.appendingPathComponent(relativePath).standardizedFileURL
           .resolvingSymlinksInPath()
         guard url.path.hasPrefix(root.path + "/"),
@@ -74,7 +72,8 @@ public struct GitClient: Sendable {
           String(data: data, encoding: .utf8) != nil
         else { continue }
         let allowedBytes = min(remainingBytes, data.count)
-        let bounded = String(decoding: data.prefix(allowedBytes), as: UTF8.self)
+        let bounded = AIContextSanitizer.redact(
+          String(decoding: data.prefix(allowedBytes), as: UTF8.self))
         previews.append("New file: \(relativePath)\n\(bounded)")
         remainingBytes -= allowedBytes
       }

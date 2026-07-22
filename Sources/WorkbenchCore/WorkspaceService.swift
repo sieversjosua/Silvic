@@ -103,11 +103,12 @@ public struct WorkspaceService: Sendable {
     commands: [WorkCLICommand],
     listeners: [ListeningProcess]
   ) -> [LocalRuntime] {
-    let branchSlug = slug(worktree.git.branch)
-    let repositorySlug = slug(worktree.repositoryName)
     var runtimes =
       commands
-      .filter { slug($0.project) == repositorySlug && slug($0.workspace) == branchSlug }
+      .filter { command in
+        guard let workspacePath = command.workspacePath else { return false }
+        return path(workspacePath, belongsTo: worktree.path)
+      }
       .map {
         LocalRuntime(name: $0.command, url: $0.url, status: $0.status, source: .workCLI)
       }
@@ -129,11 +130,4 @@ private func path(_ candidate: String, belongsTo root: String) -> Bool {
   let candidateURL = URL(fileURLWithPath: candidate).standardizedFileURL.path
   let rootURL = URL(fileURLWithPath: root).standardizedFileURL.path
   return candidateURL == rootURL || candidateURL.hasPrefix(rootURL + "/")
-}
-
-private func slug(_ value: String) -> String {
-  value.lowercased()
-    .replacingOccurrences(of: "/", with: "-")
-    .replacingOccurrences(of: "_", with: "-")
-    .filter { $0.isLetter || $0.isNumber || $0 == "-" }
 }

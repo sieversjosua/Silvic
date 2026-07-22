@@ -97,10 +97,11 @@ public struct WorkCLICommand: Sendable, Equatable {
   public let runner: String
   public let handle: String
   public let url: String?
+  public let workspacePath: String?
 
   public init(
     status: String, project: String, workspace: String, command: String, runner: String,
-    handle: String, url: String?
+    handle: String, url: String?, workspacePath: String? = nil
   ) {
     self.status = status
     self.project = project
@@ -109,6 +110,20 @@ public struct WorkCLICommand: Sendable, Equatable {
     self.runner = runner
     self.handle = handle
     self.url = url
+    self.workspacePath = workspacePath
+  }
+
+  public func resolvingWorkspace(to path: String?) -> WorkCLICommand {
+    WorkCLICommand(
+      status: status,
+      project: project,
+      workspace: workspace,
+      command: command,
+      runner: runner,
+      handle: handle,
+      url: url,
+      workspacePath: path
+    )
   }
 }
 

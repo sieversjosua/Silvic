@@ -12,7 +12,8 @@ public struct RepositoryDiscovery: Sendable {
       var repositories = Set<String>()
       let manager = FileManager.default
       let ignored = Set([
-        ".git", ".build", "node_modules", "DerivedData", "Pods", "vendor", ".next",
+        ".git", ".build", ".bun", ".cache", ".gradle", ".next", ".npm", ".swiftpm",
+        "node_modules", "DerivedData", "Pods", "vendor",
       ])
 
       for root in roots {
@@ -31,7 +32,7 @@ public struct RepositoryDiscovery: Sendable {
           let enumerator = manager.enumerator(
             at: rootURL,
             includingPropertiesForKeys: [.isDirectoryKey],
-            options: [.skipsHiddenFiles, .skipsPackageDescendants]
+            options: [.skipsPackageDescendants]
           )
         else { continue }
 
