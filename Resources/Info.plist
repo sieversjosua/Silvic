@@ -8,6 +8,8 @@
     <string>WorktreePilot</string>
     <key>CFBundleExecutable</key>
     <string>WorktreePilot</string>
+    <key>CFBundleIconFile</key>
+    <string>WorktreePilot</string>
     <key>CFBundleIdentifier</key>
     <string>de.josuasievers.worktreepilot</string>
     <key>CFBundleInfoDictionaryVersion</key>
