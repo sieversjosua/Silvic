@@ -14,34 +14,29 @@ public struct GitHubAuthService: Sendable {
   }
 
   public func status() async -> GitHubAuthenticationStatus {
-    let statusResult: CommandResult
+    let result: CommandResult
     do {
-      statusResult = try await runner.run(
+      result = try await runner.run(
         CommandRequest(
           executable: "gh",
-          arguments: ["auth", "status", "--active", "--hostname", "github.com"]
+          arguments: ["api", "--hostname", "github.com", "user", "--jq", ".login"]
         ))
     } catch {
       return .unavailable(message: "GitHub CLI is not available: \(error.localizedDescription)")
     }
 
-    guard statusResult.exitCode == 0 else {
+    guard result.exitCode == 0 else {
       let output =
-        statusResult.standardError.isEmpty
-        ? statusResult.standardOutput : statusResult.standardError
+        result.standardError.isEmpty
+        ? result.standardOutput : result.standardError
       let message = output.trimmingCharacters(in: .whitespacesAndNewlines)
+      if result.exitCode == 127 || message.localizedCaseInsensitiveContains("no such file") {
+        return .unavailable(message: "GitHub CLI is not available. Install `gh` to sign in.")
+      }
       return .unauthenticated(message: message.isEmpty ? "Not signed in to GitHub." : message)
     }
 
-    guard
-      let userResult = try? await runner.run(
-        CommandRequest(
-          executable: "gh",
-          arguments: ["api", "user", "--jq", ".login"]
-        )),
-      userResult.exitCode == 0
-    else { return .authenticated(username: "GitHub") }
-    let username = userResult.standardOutput.trimmingCharacters(in: .whitespacesAndNewlines)
+    let username = result.standardOutput.trimmingCharacters(in: .whitespacesAndNewlines)
     return .authenticated(username: username.isEmpty ? "GitHub" : username)
   }
 
@@ -59,11 +54,11 @@ public struct GitHubAuthService: Sendable {
   public static func browserLoginScript() -> String {
     """
     #!/bin/zsh
-    export PATH="$HOME/.local/bin:$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+    export PATH="$PATH:$HOME/.local/bin:$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
     clear
     echo "WorktreePilot — Sign in to GitHub"
     echo
-    gh auth login --hostname github.com --git-protocol ssh --web --skip-ssh-key
+    gh auth login --hostname github.com --web --skip-ssh-key
     result=$?
     echo
     if [[ $result -eq 0 ]]; then

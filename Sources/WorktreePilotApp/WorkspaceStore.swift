@@ -90,6 +90,12 @@ final class WorkspaceStore: ObservableObject {
     }
   }
 
+  func cancelGitHubLoginWait() {
+    githubLoginPollingTask?.cancel()
+    githubLoginPollingTask = nil
+    isGitHubLoginInProgress = false
+  }
+
   func chooseAndAddRoot() {
     let panel = NSOpenPanel()
     panel.title = "Choose a repository or a folder containing repositories"

@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT="${0:A:h:h}"
 OUTPUT="${ROOT}/outputs/WorktreePilot.app"
+ZIP_OUTPUT="${ROOT}/outputs/WorktreePilot.zip"
 BIN_PATH="$(cd "${ROOT}" && swift build -c release --show-bin-path)"
 
 rm -rf "${OUTPUT}"
@@ -24,4 +25,7 @@ done
 
 codesign --verify --deep --strict "${OUTPUT}"
 
-echo "Built ${OUTPUT}"
+rm -f "${ZIP_OUTPUT}"
+ditto -c -k --sequesterRsrc --keepParent "${OUTPUT}" "${ZIP_OUTPUT}"
+
+echo "Built ${OUTPUT} and ${ZIP_OUTPUT}"

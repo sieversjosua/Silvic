@@ -78,6 +78,7 @@ struct ContentView: View {
         Text("Waiting for browser login…")
       }
       Button("Check again") { Task { await store.refreshGitHubAuth() } }
+      Button("Stop waiting") { store.cancelGitHubLoginWait() }
     } else {
       switch store.githubAuthStatus {
       case .authenticated(let username):
