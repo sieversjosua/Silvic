@@ -1,0 +1,24 @@
+# WorktreePilot MVP specification
+
+## Goal
+
+Build a fast native macOS application for managing local Git/GitHub work across multiple worktrees, with local runtime and AI context attached to each worktree.
+
+## Required capabilities
+
+1. Show which repositories and registered worktrees exist under configured local roots.
+2. Show the Git status of each worktree, including changes and ahead/behind state.
+3. Show which localhost process or `work` command belongs to which worktree.
+4. Associate Convex deployments and Codex tasks with their worktree when local evidence permits it.
+5. Show GitHub pull requests and CI/check state.
+6. Inspect changes, create commits, push branches, and create pull requests.
+7. Generate commit messages and pull-request descriptions with AI.
+8. Never run state-changing Git/GitHub actions without explicit user confirmation.
+9. Keep the functional core independent from the initial, deliberately minimal UI.
+
+## Out of scope for this first implementation
+
+- Polished visual design
+- Autonomous merge, reset, rebase, discard, or worktree deletion
+- Storing GitHub or AI credentials
+- A cloud backend
