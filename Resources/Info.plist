@@ -5,17 +5,17 @@
     <key>CFBundleDevelopmentRegion</key>
     <string>en</string>
     <key>CFBundleDisplayName</key>
-    <string>Branchdeck</string>
+    <string>Silvic</string>
     <key>CFBundleExecutable</key>
-    <string>Branchdeck</string>
+    <string>Silvic</string>
     <key>CFBundleIconFile</key>
-    <string>Branchdeck</string>
+    <string>Silvic</string>
     <key>CFBundleIdentifier</key>
-    <string>de.josuasievers.branchdeck</string>
+    <string>de.josuasievers.silvic</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
-    <string>Branchdeck</string>
+    <string>Silvic</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>

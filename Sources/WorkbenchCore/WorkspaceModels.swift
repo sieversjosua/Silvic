@@ -1,6 +1,6 @@
 import Foundation
 
-public struct WorkspaceSnapshot: Sendable {
+public struct WorkspaceOverview: Sendable {
   public let repositories: [RepositorySnapshot]
   public let refreshedAt: Date
   public let warnings: [String]
@@ -13,7 +13,7 @@ public struct WorkspaceSnapshot: Sendable {
     self.warnings = warnings
   }
 
-  public var worktrees: [WorktreeSnapshot] { repositories.flatMap(\.worktrees) }
+  public var workspaces: [WorkspaceSnapshot] { repositories.flatMap(\.workspaces) }
 }
 
 public struct RepositorySnapshot: Sendable, Identifiable {
@@ -21,26 +21,28 @@ public struct RepositorySnapshot: Sendable, Identifiable {
   public let name: String
   public let rootPath: String
   public let origin: String?
-  public var worktrees: [WorktreeSnapshot]
+  public var workspaces: [WorkspaceSnapshot]
 
-  public init(name: String, rootPath: String, origin: String?, worktrees: [WorktreeSnapshot]) {
+  public init(name: String, rootPath: String, origin: String?, workspaces: [WorkspaceSnapshot]) {
     self.name = name
     self.rootPath = rootPath
     self.origin = origin
-    self.worktrees = worktrees
+    self.workspaces = workspaces
   }
 }
 
-public struct WorktreeSnapshot: Sendable, Identifiable {
-  public var id: String { path }
+public struct WorkspaceSnapshot: Sendable, Identifiable {
+  public var id: WorkspaceID { record.id }
+  public var record: WorkspaceRecord
   public let repositoryName: String
-  public let path: String
-  public let registration: WorktreeRegistration
   public let git: GitStatus
   public var runtimes: [LocalRuntime]
   public var convexDeployments: [ConvexDeployment]
   public var codexThreads: [CodexThread]
   public var github: GitHubPullRequestLookup
+
+  public var path: String { record.location.path }
+  public var location: WorkspaceLocation { record.location }
 
   public var pullRequest: PullRequestSummary? {
     guard case .found(let pullRequest) = github else { return nil }
@@ -48,18 +50,16 @@ public struct WorktreeSnapshot: Sendable, Identifiable {
   }
 
   public init(
+    record: WorkspaceRecord,
     repositoryName: String,
-    path: String,
-    registration: WorktreeRegistration,
     git: GitStatus,
     runtimes: [LocalRuntime] = [],
     convexDeployments: [ConvexDeployment] = [],
     codexThreads: [CodexThread] = [],
     github: GitHubPullRequestLookup = .none
   ) {
+    self.record = record
     self.repositoryName = repositoryName
-    self.path = path
-    self.registration = registration
     self.git = git
     self.runtimes = runtimes
     self.convexDeployments = convexDeployments

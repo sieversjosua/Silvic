@@ -8,6 +8,14 @@ struct ContentView: View {
   var body: some View {
     NavigationSplitView {
       List {
+        if !store.snapshot.warnings.isEmpty {
+          Section("Needs attention") {
+            ForEach(store.snapshot.warnings, id: \.self) { warning in
+              Label(warning, systemImage: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+            }
+          }
+        }
         Section("GitHub") {
           githubAuthentication
         }
@@ -26,20 +34,20 @@ struct ContentView: View {
       }
       .navigationSplitViewColumnWidth(min: 180, ideal: 220)
     } content: {
-      worktreeList
+      workspaceList
         .navigationSplitViewColumnWidth(min: 360, ideal: 450)
     } detail: {
-      if let worktree = store.selectedWorktree {
-        WorktreeDetailView(worktree: worktree)
-          .id(worktree.id)
+      if let workspace = store.selectedWorkspace {
+        WorkspaceDetailView(workspace: workspace)
+          .id(workspace.id)
       } else {
         ContentUnavailableView(
-          "No Worktree Selected",
+          "No Workspace Selected",
           systemImage: "arrow.triangle.branch",
           description: Text(
             store.roots.isEmpty
               ? "Add a repository root to begin."
-              : "No Git worktrees were found in the selected roots.")
+              : "No Git workspaces were found in the selected roots.")
         )
       }
     }
@@ -59,7 +67,7 @@ struct ContentView: View {
       PlanConfirmationView(plan: plan)
     }
     .alert(
-      "Branchdeck",
+      "Silvic",
       isPresented: Binding(
         get: { store.errorMessage != nil },
         set: { if !$0 { store.errorMessage = nil } }
@@ -102,19 +110,19 @@ struct ContentView: View {
     }
   }
 
-  private var worktreeList: some View {
+  private var workspaceList: some View {
     List(selection: $store.selection) {
       ForEach(store.snapshot.repositories) { repository in
         Section {
-          ForEach(repository.worktrees) { worktree in
-            WorktreeRow(worktree: worktree)
-              .tag(worktree.path)
+          ForEach(repository.workspaces) { workspace in
+            WorkspaceRow(workspace: workspace)
+              .tag(workspace.id)
           }
         } header: {
           HStack {
             Text(repository.name)
             Spacer()
-            Text("\(repository.worktrees.count)")
+            Text("\(repository.workspaces.count)")
           }
         }
       }
@@ -123,7 +131,7 @@ struct ContentView: View {
     .overlay {
       if store.roots.isEmpty {
         ContentUnavailableView("Add a repository root", systemImage: "folder.badge.plus")
-      } else if store.snapshot.worktrees.isEmpty && !store.isRefreshing {
+      } else if store.snapshot.workspaces.isEmpty && !store.isRefreshing {
         ContentUnavailableView(
           "No repositories found", systemImage: "externaldrive.badge.questionmark")
       }
@@ -131,31 +139,35 @@ struct ContentView: View {
   }
 }
 
-private struct WorktreeRow: View {
-  let worktree: WorktreeSnapshot
+private struct WorkspaceRow: View {
+  let workspace: WorkspaceSnapshot
 
   var body: some View {
     VStack(alignment: .leading, spacing: 5) {
       HStack {
-        Image(systemName: worktree.runtimes.isEmpty ? "circle" : "play.circle.fill")
-          .foregroundStyle(worktree.runtimes.isEmpty ? Color.secondary : Color.green)
-        Text(worktree.git.branch).fontWeight(.medium)
+        Image(systemName: workspace.runtimes.isEmpty ? "circle" : "play.circle.fill")
+          .foregroundStyle(workspace.runtimes.isEmpty ? Color.secondary : Color.green)
+        Text(workspace.record.displayName).fontWeight(.medium)
         Spacer()
-        if !worktree.git.isClean {
-          Text("\(worktree.git.changeCount) changes").foregroundStyle(.orange)
+        if !workspace.git.isClean {
+          Text("\(workspace.git.changeCount) changes").foregroundStyle(.orange)
         }
-        if let pullRequest = worktree.pullRequest {
+        if let pullRequest = workspace.pullRequest {
           Text("PR #\(pullRequest.number)").foregroundStyle(color(for: pullRequest.checks))
         }
       }
       HStack(spacing: 10) {
-        if let runtime = worktree.runtimes.first {
+        Text(workspace.location.kind.displayName)
+        if workspace.record.displayName != workspace.git.branch {
+          Text(workspace.git.branch)
+        }
+        if let runtime = workspace.runtimes.first {
           Text(runtime.url ?? runtime.name)
         }
-        if worktree.git.ahead > 0 { Text("↑\(worktree.git.ahead)") }
-        if worktree.git.behind > 0 { Text("↓\(worktree.git.behind)") }
-        if !worktree.codexThreads.isEmpty { Text("Codex \(worktree.codexThreads.count)") }
-        if !worktree.convexDeployments.isEmpty { Text("Convex") }
+        if workspace.git.ahead > 0 { Text("↑\(workspace.git.ahead)") }
+        if workspace.git.behind > 0 { Text("↓\(workspace.git.behind)") }
+        if !workspace.codexThreads.isEmpty { Text("Codex \(workspace.codexThreads.count)") }
+        if !workspace.convexDeployments.isEmpty { Text("Convex") }
       }
       .font(.caption)
       .foregroundStyle(.secondary)

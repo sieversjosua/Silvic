@@ -5,9 +5,9 @@ import WorkbenchCore
 
 @MainActor
 final class WorkspaceStore: ObservableObject {
-  @Published var snapshot = WorkspaceSnapshot(repositories: [])
+  @Published var snapshot = WorkspaceOverview(repositories: [])
   @Published var roots: [String]
-  @Published var selection: String?
+  @Published var selection: WorkspaceID?
   @Published var isRefreshing = false
   @Published var isWorking = false
   @Published var errorMessage: String?
@@ -16,7 +16,7 @@ final class WorkspaceStore: ObservableObject {
   @Published var githubAuthStatus: GitHubAuthenticationStatus?
   @Published var isGitHubLoginInProgress = false
 
-  private let workspace = WorkspaceService()
+  private let workspace: WorkspaceService
   private let git = GitClient()
   private let ai = AIService()
   private let workflow = GitWorkflowService()
@@ -25,8 +25,19 @@ final class WorkspaceStore: ObservableObject {
   private var githubLoginPollingTask: Task<Void, Never>?
 
   init() {
+    let applicationSupport = FileManager.default.urls(
+      for: .applicationSupportDirectory,
+      in: .userDomainMask
+    ).first!.appendingPathComponent("Silvic", isDirectory: true)
+    workspace = WorkspaceService(
+      registry: WorkspaceRegistry(
+        fileURL: applicationSupport.appendingPathComponent("workspaces.json")
+      )
+    )
     let stored =
       UserDefaults.standard.stringArray(forKey: defaultsKey)
+      ?? UserDefaults(suiteName: "de.josuasievers.branchdeck")?.stringArray(
+        forKey: defaultsKey)
       ?? UserDefaults(suiteName: "de.josuasievers.worktreepilot")?.stringArray(
         forKey: defaultsKey)
     if let stored, !stored.isEmpty {
@@ -43,9 +54,9 @@ final class WorkspaceStore: ObservableObject {
     }
   }
 
-  var selectedWorktree: WorktreeSnapshot? {
+  var selectedWorkspace: WorkspaceSnapshot? {
     guard let selection else { return nil }
-    return snapshot.worktrees.first { $0.path == selection }
+    return snapshot.workspaces.first { $0.id == selection }
   }
 
   func refresh() async {
@@ -53,8 +64,8 @@ final class WorkspaceStore: ObservableObject {
     isRefreshing = true
     let updated = await workspace.refresh(roots: roots)
     snapshot = updated
-    if selection == nil || !updated.worktrees.contains(where: { $0.path == selection }) {
-      selection = updated.worktrees.first?.path
+    if selection == nil || !updated.workspaces.contains(where: { $0.id == selection }) {
+      selection = updated.workspaces.first?.id
     }
     isRefreshing = false
     await loadChanges()
@@ -69,7 +80,7 @@ final class WorkspaceStore: ObservableObject {
     do {
       let applicationSupport = FileManager.default.urls(
         for: .applicationSupportDirectory, in: .userDomainMask
-      ).first!.appendingPathComponent("Branchdeck", isDirectory: true)
+      ).first!.appendingPathComponent("Silvic", isDirectory: true)
       let commandURL = try githubAuth.createBrowserLoginCommand(in: applicationSupport)
       guard NSWorkspace.shared.open(commandURL) else {
         errorMessage = "Could not open the GitHub login in Terminal."
@@ -122,85 +133,85 @@ final class WorkspaceStore: ObservableObject {
   }
 
   func loadChanges() async {
-    guard let worktree = selectedWorktree else {
+    guard let workspace = selectedWorkspace else {
       changes = ""
       return
     }
-    let requestedPath = worktree.path
+    let requestedID = workspace.id
     do {
-      async let status = git.shortStatus(worktreePath: worktree.path)
-      async let diff = git.diff(worktreePath: worktree.path)
-      async let staged = git.diff(worktreePath: worktree.path, staged: true)
-      async let untracked = git.untrackedFileContents(worktreePath: worktree.path)
+      async let status = git.shortStatus(worktreePath: workspace.path)
+      async let diff = git.diff(worktreePath: workspace.path)
+      async let staged = git.diff(worktreePath: workspace.path, staged: true)
+      async let untracked = git.untrackedFileContents(worktreePath: workspace.path)
       let loadedChanges =
         "Status\n\(try await status)\n\nStaged diff\n\(try await staged)\n\nUnstaged diff\n\(try await diff)\n\nUntracked files\n\(try await untracked)"
-      guard selection == requestedPath else { return }
+      guard selection == requestedID else { return }
       changes = loadedChanges
     } catch {
-      guard selection == requestedPath else { return }
+      guard selection == requestedID else { return }
       errorMessage = error.localizedDescription
     }
   }
 
   func generateCommitMessage() async -> String? {
-    guard let worktree = selectedWorktree else { return nil }
+    guard let workspace = selectedWorkspace else { return nil }
     return await performAI {
-      let context = try await ai.commitMessageContext(worktreePath: worktree.path)
+      let context = try await ai.commitMessageContext(worktreePath: workspace.path)
       guard confirmAIContext(context, title: "Send commit context to Codex?") else { return "" }
-      return try await ai.generateCommitMessage(worktreePath: worktree.path, context: context)
+      return try await ai.generateCommitMessage(worktreePath: workspace.path, context: context)
     }.flatMap { $0.isEmpty ? nil : $0 }
   }
 
   func generatePullRequestBody(base: String) async -> String? {
-    guard let worktree = selectedWorktree else { return nil }
+    guard let workspace = selectedWorkspace else { return nil }
     return await performAI {
-      let context = try await ai.pullRequestContext(worktreePath: worktree.path, base: base)
+      let context = try await ai.pullRequestContext(worktreePath: workspace.path, base: base)
       guard confirmAIContext(context, title: "Send pull-request context to Codex?") else {
         return ""
       }
-      return try await ai.generatePullRequestDraft(worktreePath: worktree.path, context: context)
+      return try await ai.generatePullRequestDraft(worktreePath: workspace.path, context: context)
     }.flatMap { $0.isEmpty ? nil : $0 }
   }
 
   func prepareCommit(message: String, stageAll: Bool, push: Bool) {
-    guard let worktree = selectedWorktree else { return }
-    guard !push || worktree.git.branch != "(detached)" else {
+    guard let workspace = selectedWorkspace else { return }
+    guard !push || workspace.git.branch != "(detached)" else {
       errorMessage = "A detached HEAD cannot be pushed without choosing a branch."
       return
     }
     pendingPlan = workflow.commitAndPushPlan(
-      worktreePath: worktree.path,
+      worktreePath: workspace.path,
       message: message,
       stageAll: stageAll,
       push: push,
-      setUpstreamFor: push && worktree.git.upstream == nil ? worktree.git.branch : nil
+      setUpstreamFor: push && workspace.git.upstream == nil ? workspace.git.branch : nil
     )
   }
 
   func preparePush() {
-    guard let worktree = selectedWorktree else { return }
-    guard worktree.git.branch != "(detached)" else {
+    guard let workspace = selectedWorkspace else { return }
+    guard workspace.git.branch != "(detached)" else {
       errorMessage = "A detached HEAD cannot be pushed without choosing a branch."
       return
     }
-    let branch = worktree.git.upstream == nil ? worktree.git.branch : nil
-    pendingPlan = workflow.pushPlan(worktreePath: worktree.path, setUpstreamFor: branch)
+    let branch = workspace.git.upstream == nil ? workspace.git.branch : nil
+    pendingPlan = workflow.pushPlan(worktreePath: workspace.path, setUpstreamFor: branch)
   }
 
   func preparePullRequest(title: String, body: String, base: String, draft: Bool) {
-    guard let worktree = selectedWorktree else { return }
-    guard worktree.git.branch != "(detached)" else {
+    guard let workspace = selectedWorkspace else { return }
+    guard workspace.git.branch != "(detached)" else {
       errorMessage = "Create a branch before opening a pull request."
       return
     }
     pendingPlan = workflow.pullRequestPlan(
-      worktreePath: worktree.path,
+      worktreePath: workspace.path,
       title: title,
       body: body,
       base: base,
       draft: draft,
-      pushFirst: worktree.git.upstream == nil || worktree.git.ahead > 0,
-      branch: worktree.git.upstream == nil ? worktree.git.branch : nil
+      pushFirst: workspace.git.upstream == nil || workspace.git.ahead > 0,
+      branch: workspace.git.upstream == nil ? workspace.git.branch : nil
     )
   }
 

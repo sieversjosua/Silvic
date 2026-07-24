@@ -1,18 +1,20 @@
-# Branchdeck
+# Silvic
 
-Branchdeck is a local-first, native macOS workbench that treats a Git worktree as the central unit connecting code, local processes, Codex tasks, Convex deployments, GitHub pull requests, and CI checks.
+Silvic is a local-first, native macOS workbench for parallel development environments. A durable Workspace connects an existing checkout, clone, or Git worktree with local processes, coding-agent sessions, Convex deployments, GitHub pull requests, and CI checks.
 
 The current UI is intentionally plain. The core functionality lives in the independent `WorkbenchCore` Swift target.
 
 ## Implemented
 
 - Recursive repository discovery for user-selected roots
-- Registered worktrees via `git worktree list --porcelain`
+- Durable Workspace identities persisted independently from checkout paths
+- Primary checkouts and linked worktrees represented as interchangeable locations
+- Registered Git checkouts via `git worktree list --porcelain`
 - Git branch, upstream, revision, ahead/behind, and change categories
-- Listening localhost processes mapped to worktrees through process CWD
+- Listening localhost processes mapped to Workspaces through process CWD
 - `work status -a` processes and URLs mapped by project/workspace
 - Convex deployment metadata from `.env.local` without reading or exposing deploy keys
-- Non-archived Codex tasks mapped to worktrees by CWD
+- Non-archived Codex tasks mapped to Workspaces by CWD
 - GitHub PR metadata and check rollups via the authenticated `gh` CLI
 - Browser-based GitHub OAuth through `gh auth login --web`, with account status in the app
 - Diff/status inspection
@@ -23,17 +25,17 @@ The current UI is intentionally plain. The core functionality lives in the indep
 ## Run during development
 
 ```bash
-swift run Branchdeck
+swift run Silvic
 ```
 
 ## Build the app bundle
 
 ```bash
 ./Scripts/build-app.sh
-open outputs/Branchdeck.app
+open outputs/Silvic.app
 ```
 
-The app intentionally is not sandboxed: it needs read access to selected repositories, process information, and local CLI configuration. It uses the existing authentication of `git`, `gh`, and `codex`; no credentials are stored by Branchdeck.
+The app intentionally is not sandboxed: it needs read access to selected repositories, process information, and local CLI configuration. It uses the existing authentication of `git`, `gh`, and `codex`; no credentials are stored by Silvic.
 
 ## Safety model
 

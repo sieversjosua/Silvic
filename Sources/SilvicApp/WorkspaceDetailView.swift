@@ -1,9 +1,9 @@
 import SwiftUI
 import WorkbenchCore
 
-struct WorktreeDetailView: View {
+struct WorkspaceDetailView: View {
   @EnvironmentObject private var store: WorkspaceStore
-  let worktree: WorktreeSnapshot
+  let workspace: WorkspaceSnapshot
 
   @State private var commitMessage = ""
   @State private var stageAll = true
@@ -30,19 +30,26 @@ struct WorktreeDetailView: View {
     .overlay { if store.isWorking { ProgressView().controlSize(.large) } }
     .onAppear {
       if pullRequestTitle.isEmpty {
-        pullRequestTitle = worktree.git.branch.replacingOccurrences(of: "-", with: " ").capitalized
+        pullRequestTitle = workspace.git.branch.replacingOccurrences(of: "-", with: " ").capitalized
       }
     }
   }
 
   private var header: some View {
     VStack(alignment: .leading, spacing: 5) {
-      Text(worktree.git.branch).font(.largeTitle).fontWeight(.semibold)
-      Text(worktree.path).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
+      Text(workspace.record.displayName).font(.largeTitle).fontWeight(.semibold)
       HStack {
-        Button("Finder") { store.openInFinder(worktree.path) }
-        Button("Terminal") { store.openTerminal(worktree.path) }
-        if let url = worktree.runtimes.compactMap(\.url).first {
+        Text(workspace.git.branch)
+        Text("·")
+        Text(workspace.location.kind.displayName)
+      }
+      .font(.callout)
+      .foregroundStyle(.secondary)
+      Text(workspace.path).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
+      HStack {
+        Button("Finder") { store.openInFinder(workspace.path) }
+        Button("Terminal") { store.openTerminal(workspace.path) }
+        if let url = workspace.runtimes.compactMap(\.url).first {
           Button("Open \(url)") { store.openInBrowser(url) }
         }
       }
@@ -52,11 +59,11 @@ struct WorktreeDetailView: View {
   private var statusGrid: some View {
     GroupBox("Git") {
       Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 7) {
-        gridRow("Revision", String(worktree.git.revision?.prefix(10) ?? "—"))
-        gridRow("Upstream", worktree.git.upstream ?? "Not configured")
-        gridRow("Changes", worktree.git.isClean ? "Clean" : "\(worktree.git.changeCount)")
-        gridRow("Sync", "↑ \(worktree.git.ahead)  ↓ \(worktree.git.behind)")
-        if let pr = worktree.pullRequest {
+        gridRow("Revision", String(workspace.git.revision?.prefix(10) ?? "—"))
+        gridRow("Upstream", workspace.git.upstream ?? "Not configured")
+        gridRow("Changes", workspace.git.isClean ? "Clean" : "\(workspace.git.changeCount)")
+        gridRow("Sync", "↑ \(workspace.git.ahead)  ↓ \(workspace.git.behind)")
+        if let pr = workspace.pullRequest {
           gridRow("GitHub", "PR #\(pr.number) · \(pr.state) · checks \(pr.checks.rawValue)")
         }
       }
@@ -66,10 +73,10 @@ struct WorktreeDetailView: View {
   }
 
   @ViewBuilder private var runtimes: some View {
-    if !worktree.runtimes.isEmpty {
+    if !workspace.runtimes.isEmpty {
       GroupBox("Local runtimes") {
         VStack(alignment: .leading) {
-          ForEach(worktree.runtimes) { runtime in
+          ForEach(workspace.runtimes) { runtime in
             HStack {
               Text(runtime.name).fontWeight(.medium)
               Text(runtime.status).foregroundStyle(.secondary)
@@ -107,7 +114,7 @@ struct WorktreeDetailView: View {
               if let generated = await store.generateCommitMessage() { commitMessage = generated }
             }
           }
-          .disabled(worktree.git.isClean || store.isWorking)
+          .disabled(workspace.git.isClean || store.isWorking)
         }
         Toggle("Stage all changes", isOn: $stageAll)
         Toggle("Push after commit", isOn: $pushAfterCommit)
@@ -117,7 +124,7 @@ struct WorktreeDetailView: View {
           }
           .disabled(commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
           Button("Push…") { store.preparePush() }
-            .disabled(worktree.git.ahead == 0 && worktree.git.upstream != nil)
+            .disabled(workspace.git.ahead == 0 && workspace.git.upstream != nil)
         }
       }.padding(6)
     }
@@ -126,13 +133,13 @@ struct WorktreeDetailView: View {
   private var pullRequest: some View {
     GroupBox("GitHub pull request") {
       VStack(alignment: .leading, spacing: 10) {
-        if let pr = worktree.pullRequest {
+        if let pr = workspace.pullRequest {
           HStack {
             Text("#\(pr.number) \(pr.title)")
             Spacer()
             Button("Open") { store.openInBrowser(pr.url) }
           }
-        } else if case .unavailable(let message) = worktree.github {
+        } else if case .unavailable(let message) = workspace.github {
           Label("GitHub unavailable", systemImage: "exclamationmark.triangle")
             .foregroundStyle(.orange)
           Text(message).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
@@ -171,17 +178,17 @@ struct WorktreeDetailView: View {
   }
 
   @ViewBuilder private var integrations: some View {
-    if !worktree.convexDeployments.isEmpty || !worktree.codexThreads.isEmpty {
+    if !workspace.convexDeployments.isEmpty || !workspace.codexThreads.isEmpty {
       GroupBox("Integrations") {
         VStack(alignment: .leading, spacing: 10) {
-          ForEach(worktree.convexDeployments) { deployment in
+          ForEach(workspace.convexDeployments) { deployment in
             HStack {
               Text("Convex \(deployment.kind):\(deployment.name)")
               Spacer()
               if let url = deployment.url { Button("Open") { store.openInBrowser(url) } }
             }
           }
-          ForEach(worktree.codexThreads) { thread in
+          ForEach(workspace.codexThreads) { thread in
             VStack(alignment: .leading) {
               Text(thread.title)
               Text(thread.id).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)

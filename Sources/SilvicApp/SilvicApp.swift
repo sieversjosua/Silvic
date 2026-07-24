@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct BranchdeckApp: App {
+struct SilvicApp: App {
   @StateObject private var store = WorkspaceStore()
 
   var body: some Scene {
