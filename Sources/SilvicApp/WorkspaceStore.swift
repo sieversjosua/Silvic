@@ -8,6 +8,7 @@ final class WorkspaceStore: ObservableObject {
   @Published var snapshot = WorkspaceOverview(repositories: [])
   @Published var roots: [String]
   @Published var selection: WorkspaceID?
+  @Published var inspectorTab: InspectorTab = .overview
   @Published var isRefreshing = false
   @Published var isWorking = false
   @Published var errorMessage: String?
@@ -57,6 +58,42 @@ final class WorkspaceStore: ObservableObject {
   var selectedWorkspace: WorkspaceSnapshot? {
     guard let selection else { return nil }
     return snapshot.workspaces.first { $0.id == selection }
+  }
+
+  func selectWorkspace(_ workspace: WorkspaceSnapshot) {
+    if selection != workspace.id {
+      inspectorTab = .overview
+    }
+    selection = workspace.id
+  }
+
+  func performPrimaryAction(for workspace: WorkspaceSnapshot) {
+    let wasSelected = selection == workspace.id
+    selection = workspace.id
+    switch workspace.operationalSummary.action {
+    case .inspect, .reviewChanges:
+      inspectorTab = .changes
+      if wasSelected {
+        Task { await loadChanges() }
+      }
+    case .openRuntime:
+      if let url = workspace.runtimes.first(where: { $0.isActive && $0.url != nil })?.url {
+        openInBrowser(url)
+      } else {
+        openTerminal(workspace.path)
+      }
+    case .reviewStatus:
+      inspectorTab = .ship
+    case .push:
+      inspectorTab = .ship
+      preparePush()
+    case .openPullRequest:
+      if let url = workspace.pullRequest?.url {
+        openInBrowser(url)
+      }
+    case .resume:
+      openTerminal(workspace.path)
+    }
   }
 
   func refresh() async {

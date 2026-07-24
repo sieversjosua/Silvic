@@ -87,6 +87,11 @@ public struct LocalRuntime: Sendable, Hashable, Identifiable {
     self.status = status
     self.source = source
   }
+
+  public var isActive: Bool {
+    if source == .process { return true }
+    return ["active", "healthy", "listening", "running", "up"].contains(status.lowercased())
+  }
 }
 
 public struct WorkCLICommand: Sendable, Equatable {

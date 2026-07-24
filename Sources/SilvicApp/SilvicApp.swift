@@ -8,12 +8,13 @@ struct SilvicApp: App {
     WindowGroup {
       ContentView()
         .environmentObject(store)
-        .frame(minWidth: 980, minHeight: 620)
+        .frame(minWidth: 1100, minHeight: 700)
         .task {
           await store.refreshGitHubAuth()
           await store.refresh()
         }
     }
+    .defaultSize(width: 1380, height: 840)
     .commands {
       CommandGroup(after: .newItem) {
         Button("Add Repository Root…") { store.chooseAndAddRoot() }
