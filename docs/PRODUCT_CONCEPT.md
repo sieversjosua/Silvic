@@ -18,6 +18,16 @@ the Workspace.
 
 ## Core model
 
+### Project
+
+The top-level object in Silvic. A Project represents one software product or
+repository identity and gathers every local checkout, independent clone, and
+linked worktree that belongs to it. Repositories with the same normalized remote
+origin are presented as one Project.
+
+The Project is the stable context users enter before reasoning about parallel
+work. Its primary checkout forms the trunk of the Project Grove.
+
 ### Workspace
 
 A durable identity for one stream of development work. It can use an ordinary
@@ -85,19 +95,27 @@ must be useful immediately after Silvic discovers it.
 
 ## Recommended interaction concept
 
-Combine a status-first Operations Board with an action-first Environment
-Dispatcher.
+Use a project-first **Project Grove**. The user enters one Project and sees its
+primary checkout and parallel task environments as a deterministic tree canvas.
+This matches the way coding agents work: each Harness enters a directory, while
+Silvic preserves the relationship between those directories.
 
-The default screen answers:
+The canvas is not a freeform whiteboard or a decorative Git graph:
 
-1. What needs me?
-2. What is active?
-3. What can I continue?
-4. What is ready to ship?
-5. What can be cleaned up?
+- the Project and primary checkout stay anchored;
+- recorded parentage uses solid connections;
+- imported locations with unknown ancestry use dashed connections and are
+  labelled honestly;
+- task nodes expose Git, runtime, provider, PR/CI, and Harness evidence;
+- selecting a node opens the persistent Workspace inspector;
+- zoom, search, quiet-environment folding, and keyboard navigation keep large
+  Projects usable; and
+- a task environment can be created from any selected node using either a linked
+  worktree or an independent clone.
 
-Each Workspace has one derived operational state and one recommended primary
-action.
+Each Workspace still has one derived operational state and recommended primary
+action, but those states annotate the Project tree instead of reorganizing the
+entire product into a global queue.
 
 | State | Meaning | Primary action |
 | --- | --- | --- |
@@ -115,27 +133,20 @@ Ambiguous evidence must produce `Unknown`, never a confident guess.
 
 ## Main window
 
-Use a dense native ledger rather than a card grid. Keep many parallel
-environments visible.
+Use a narrow Project switcher, a large Project Grove, and a persistent inspector.
 
 ```text
-┌──────────────────────────────────────────────────────────────────────────────┐
-│ Silvic     All Workspaces     Search…                         + New Workspace │
-│             3 need attention · 4 active · 2 ready                           │
-├──────────────────────────────────────────────────────────────────────────────┤
-│ NEEDS ATTENTION                                                             │
-│ Checkout race    shop · fix/checkout   CI failed: typecheck       Inspect → │
-│ Pricing test     web · pricing-v2      Port 4312 is occupied       Repair  → │
-├──────────────────────────────────────────────────────────────────────────────┤
-│ ACTIVE                                                                      │
-│ Auth refactor    api · auth-cleanup     :4314 · Codex · Convex      Focus   → │
-├──────────────────────────────────────────────────────────────────────────────┤
-│ READY TO RESUME                                                             │
-│ Invoice export   admin · export-csv     Clean · PR #182            Resume  → │
-└──────────────────────────────────────────────────────────────────────────────┘
+┌──────────────┬───────────────────────────────────────┬───────────────────────┐
+│ PROJECTS     │ shop                         + New env │ Auth refactor         │
+│ shop         │                                       │ Code · Runtime        │
+│ api          │ PROJECT ─ PRIMARY ─ ─ Auth refactor  │ Environment · Review │
+│ website      │                  └ ─ Pricing test     │ Sessions              │
+│              │                                       │                       │
+│ + Add        │          Search · Zoom · Hide quiet   │ Review changes        │
+└──────────────┴───────────────────────────────────────┴───────────────────────┘
 ```
 
-A row should expose:
+A task-environment node should expose:
 
 - Workspace purpose, repository, and branch;
 - local Git state;
@@ -145,7 +156,9 @@ A row should expose:
 - active or resumable Harness Sessions; and
 - the recommended next action.
 
-Selecting a row opens a persistent inspector without losing fleet awareness.
+Selecting a node opens a persistent inspector without losing Project context.
+Cross-project attention and quick switching can later be layered on top; it is
+not the primary information architecture.
 
 ## Workspace inspector
 
@@ -180,7 +193,7 @@ as evidence behind every summary.
 ### Create and open a Workspace
 
 1. Ask what the user is working on.
-2. Select repository, location strategy, optional base branch, Recipe, and
+2. Select Project, parent environment, location strategy, optional base branch, Recipe, and
    preferred Harness.
 3. Preview the directory, optional branch/worktree/clone, ports, commands, and
    service attachments.
@@ -236,6 +249,10 @@ Before cleanup, Silvic shows:
 - Derive operational state and recommended next action.
 - Fast event-driven local refresh with slower remote refresh.
 - Search by purpose, repository, branch, path, PR, or URL.
+- Group independent clones and linked worktrees into a Project by repository
+  identity.
+- Deterministic Project Grove layout with persisted recorded lineage and honest
+  imported lineage.
 
 ### Environment lifecycle
 

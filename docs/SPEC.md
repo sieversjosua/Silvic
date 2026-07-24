@@ -4,7 +4,9 @@
 
 Build a fast native macOS application for managing local Git/GitHub Workspaces,
 with local runtime and AI context attached to each Workspace. A Workspace may use
-an ordinary Git checkout or a linked worktree; linked worktrees are optional.
+an ordinary Git checkout, independent clone, or linked worktree; linked
+worktrees are optional. Workspaces are grouped into a Project before they are
+shown to the user.
 
 ## Required capabilities
 
@@ -19,6 +21,10 @@ an ordinary Git checkout or a linked worktree; linked worktrees are optional.
 8. Never run state-changing Git/GitHub actions without explicit user confirmation.
 9. Keep the functional core independent from the initial, deliberately minimal UI.
 10. Allow browser-based GitHub sign-in without storing credentials in Silvic.
+11. Present one selected Project as a deterministic tree canvas rooted in its
+    primary checkout, with recorded and imported lineage distinguished.
+12. Create confirmed task environments as either linked worktrees or independent
+    clones and record their parent Workspace.
 
 ## Out of scope for this first implementation
 

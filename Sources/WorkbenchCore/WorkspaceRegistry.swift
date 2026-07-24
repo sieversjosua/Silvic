@@ -78,7 +78,7 @@ public struct WorkspaceLocation: Codable, Equatable, Sendable {
     )
   }
 
-  static func normalize(_ path: String) -> String {
+  public static func normalize(_ path: String) -> String {
     URL(fileURLWithPath: path).standardizedFileURL.path
   }
 
@@ -98,6 +98,7 @@ public struct WorkspaceRecord: Codable, Equatable, Identifiable, Sendable {
   public let id: WorkspaceID
   public var displayName: String
   public var purpose: String?
+  public var parentWorkspaceID: WorkspaceID?
   public var repositoryRoot: String?
   public var location: WorkspaceLocation
   public let createdAt: Date
@@ -107,6 +108,7 @@ public struct WorkspaceRecord: Codable, Equatable, Identifiable, Sendable {
     id: WorkspaceID = WorkspaceID(),
     displayName: String,
     purpose: String? = nil,
+    parentWorkspaceID: WorkspaceID? = nil,
     repositoryRoot: String? = nil,
     location: WorkspaceLocation,
     createdAt: Date = Date(),
@@ -115,6 +117,7 @@ public struct WorkspaceRecord: Codable, Equatable, Identifiable, Sendable {
     self.id = id
     self.displayName = displayName
     self.purpose = purpose
+    self.parentWorkspaceID = parentWorkspaceID
     self.repositoryRoot = repositoryRoot.map(WorkspaceLocation.normalize)
     self.location = location
     self.createdAt = createdAt
@@ -201,6 +204,62 @@ public actor WorkspaceRegistry {
 
   public func allRecords() throws -> [WorkspaceRecord] {
     try loadStorage().workspaces
+  }
+
+  public func updateMetadata(
+    atPath path: String,
+    displayName: String? = nil,
+    purpose: String? = nil,
+    parentWorkspaceID: WorkspaceID? = nil
+  ) throws {
+    var storage = try loadStorage()
+    let normalizedPath = WorkspaceLocation.normalize(path)
+    guard
+      let index = storage.workspaces.firstIndex(where: {
+        WorkspaceLocation.normalize($0.location.path) == normalizedPath
+      })
+    else { return }
+    if let displayName { storage.workspaces[index].displayName = displayName }
+    if let purpose { storage.workspaces[index].purpose = purpose }
+    storage.workspaces[index].parentWorkspaceID = parentWorkspaceID
+    try save(storage)
+  }
+
+  public func upsertMetadata(
+    atPath path: String,
+    locationKind: WorkspaceLocationKind,
+    repositoryRoot: String,
+    displayName: String,
+    purpose: String?,
+    parentWorkspaceID: WorkspaceID?
+  ) throws {
+    var storage = try loadStorage()
+    let location = WorkspaceLocation(path: path, kind: locationKind)
+    let normalizedPath = location.path
+    if let index = storage.workspaces.firstIndex(where: {
+      WorkspaceLocation.normalize($0.location.path) == normalizedPath
+        && identifiersReferToSameFile(
+          $0.location.fileSystemIdentifier,
+          location.fileSystemIdentifier
+        )
+    }) {
+      storage.workspaces[index].displayName = displayName
+      storage.workspaces[index].purpose = purpose
+      storage.workspaces[index].parentWorkspaceID = parentWorkspaceID
+      storage.workspaces[index].repositoryRoot = WorkspaceLocation.normalize(repositoryRoot)
+      storage.workspaces[index].location = location
+    } else {
+      storage.workspaces.append(
+        WorkspaceRecord(
+          displayName: displayName,
+          purpose: purpose,
+          parentWorkspaceID: parentWorkspaceID,
+          repositoryRoot: repositoryRoot,
+          location: location
+        )
+      )
+    }
+    try save(storage)
   }
 
   func consumeWarnings() -> [String] {

@@ -17,7 +17,7 @@ public struct WorkspaceOverview: Sendable {
 }
 
 public struct RepositorySnapshot: Sendable, Identifiable {
-  public var id: String { rootPath }
+  public var id: String { ProjectGrouping.identity(origin: origin, rootPath: rootPath) }
   public let name: String
   public let rootPath: String
   public let origin: String?

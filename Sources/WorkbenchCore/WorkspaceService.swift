@@ -102,7 +102,7 @@ public struct WorkspaceService: Sendable {
       }
     }
 
-    repositories.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    repositories = ProjectGrouping.merge(repositories)
     return WorkspaceOverview(repositories: repositories, warnings: warnings)
   }
 

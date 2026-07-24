@@ -103,6 +103,22 @@ struct WorkspaceDetailView: View {
         Spacer()
 
         Menu {
+          Button("Open in Codex", systemImage: "sparkles") {
+            store.openInApplication(named: "Codex", path: workspace.path)
+          }
+          Button(
+            "Open in T3 Code",
+            systemImage: "chevron.left.forwardslash.chevron.right"
+          ) {
+            store.openInApplication(named: "T3 Code", path: workspace.path)
+          }
+          Button("Open in Claude Code", systemImage: "terminal") {
+            store.openCommandLineHarness(.claude, path: workspace.path)
+          }
+          Button("Open in OpenCode", systemImage: "terminal") {
+            store.openCommandLineHarness(.opencode, path: workspace.path)
+          }
+          Divider()
           Button("Show in Finder", systemImage: "folder") {
             store.openInFinder(workspace.path)
           }

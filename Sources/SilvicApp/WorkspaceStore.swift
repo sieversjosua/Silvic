@@ -18,23 +18,27 @@ final class WorkspaceStore: ObservableObject {
   @Published var isGitHubLoginInProgress = false
 
   private let workspace: WorkspaceService
+  private let registry: WorkspaceRegistry
   private let git = GitClient()
   private let ai = AIService()
   private let workflow = GitWorkflowService()
   private let githubAuth = GitHubAuthService()
   private let defaultsKey = "repositoryRoots"
   private var githubLoginPollingTask: Task<Void, Never>?
+  private var pendingEnvironmentCreation: PendingEnvironmentCreation?
+  private var refreshAgain = false
+  private var refreshWaiters: [CheckedContinuation<Void, Never>] = []
 
   init() {
     let applicationSupport = FileManager.default.urls(
       for: .applicationSupportDirectory,
       in: .userDomainMask
     ).first!.appendingPathComponent("Silvic", isDirectory: true)
-    workspace = WorkspaceService(
-      registry: WorkspaceRegistry(
-        fileURL: applicationSupport.appendingPathComponent("workspaces.json")
-      )
+    let registry = WorkspaceRegistry(
+      fileURL: applicationSupport.appendingPathComponent("workspaces.json")
     )
+    self.registry = registry
+    workspace = WorkspaceService(registry: registry)
     let stored =
       UserDefaults.standard.stringArray(forKey: defaultsKey)
       ?? UserDefaults(suiteName: "de.josuasievers.branchdeck")?.stringArray(
@@ -97,15 +101,27 @@ final class WorkspaceStore: ObservableObject {
   }
 
   func refresh() async {
-    guard !isRefreshing else { return }
-    isRefreshing = true
-    let updated = await workspace.refresh(roots: roots)
-    snapshot = updated
-    if selection == nil || !updated.workspaces.contains(where: { $0.id == selection }) {
-      selection = updated.workspaces.first?.id
+    if isRefreshing {
+      refreshAgain = true
+      await withCheckedContinuation { continuation in
+        refreshWaiters.append(continuation)
+      }
+      return
     }
+    isRefreshing = true
+    repeat {
+      refreshAgain = false
+      let updated = await workspace.refresh(roots: roots)
+      snapshot = updated
+      if selection == nil || !updated.workspaces.contains(where: { $0.id == selection }) {
+        selection = updated.workspaces.first?.id
+      }
+    } while refreshAgain
     isRefreshing = false
     await loadChanges()
+    let waiters = refreshWaiters
+    refreshWaiters.removeAll()
+    waiters.forEach { $0.resume() }
   }
 
   func refreshGitHubAuth() async {
@@ -211,6 +227,7 @@ final class WorkspaceStore: ObservableObject {
   }
 
   func prepareCommit(message: String, stageAll: Bool, push: Bool) {
+    pendingEnvironmentCreation = nil
     guard let workspace = selectedWorkspace else { return }
     guard !push || workspace.git.branch != "(detached)" else {
       errorMessage = "A detached HEAD cannot be pushed without choosing a branch."
@@ -226,6 +243,7 @@ final class WorkspaceStore: ObservableObject {
   }
 
   func preparePush() {
+    pendingEnvironmentCreation = nil
     guard let workspace = selectedWorkspace else { return }
     guard workspace.git.branch != "(detached)" else {
       errorMessage = "A detached HEAD cannot be pushed without choosing a branch."
@@ -236,6 +254,7 @@ final class WorkspaceStore: ObservableObject {
   }
 
   func preparePullRequest(title: String, body: String, base: String, draft: Bool) {
+    pendingEnvironmentCreation = nil
     guard let workspace = selectedWorkspace else { return }
     guard workspace.git.branch != "(detached)" else {
       errorMessage = "Create a branch before opening a pull request."
@@ -252,19 +271,128 @@ final class WorkspaceStore: ObservableObject {
     )
   }
 
-  func executePendingPlan() async {
-    guard let pendingPlan else { return }
+  func executePendingPlan(expectedID: UUID) async {
+    guard !isWorking, let pendingPlan, pendingPlan.id == expectedID else { return }
+    let environmentCreation =
+      pendingEnvironmentCreation?.planID == expectedID
+      ? pendingEnvironmentCreation : nil
+    self.pendingPlan = nil
+    pendingEnvironmentCreation = nil
     isWorking = true
     defer { isWorking = false }
     do {
       _ = try await workflow.execute(pendingPlan, confirmed: true)
-      self.pendingPlan = nil
-      await refresh()
+      if let environmentCreation {
+        try await registry.upsertMetadata(
+          atPath: environmentCreation.destinationPath,
+          locationKind: environmentCreation.locationKind,
+          repositoryRoot: environmentCreation.repositoryRoot,
+          displayName: environmentCreation.displayName,
+          purpose: environmentCreation.purpose,
+          parentWorkspaceID: environmentCreation.parentWorkspaceID
+        )
+        if environmentCreation.locationKind == .gitCheckout {
+          addManagedRootIfNeeded(environmentCreation.destinationPath)
+        }
+        await refresh()
+        if let created = snapshot.workspaces.first(where: {
+          WorkspaceLocation.normalize($0.path)
+            == WorkspaceLocation.normalize(environmentCreation.destinationPath)
+        }) {
+          selectWorkspace(created)
+        }
+      } else {
+        await refresh()
+      }
     } catch {
-      self.pendingPlan = nil
       await refresh()
       errorMessage = error.localizedDescription
     }
+  }
+
+  func cancelPendingPlan(expectedID: UUID) {
+    guard pendingPlan?.id == expectedID else { return }
+    pendingEnvironmentCreation = nil
+    pendingPlan = nil
+  }
+
+  func prepareEnvironmentCreation(
+    in repository: RepositorySnapshot,
+    from parent: WorkspaceSnapshot,
+    displayName: String,
+    purpose: String,
+    branch: String,
+    destinationPath: String,
+    strategy: WorkspaceCreationStrategy
+  ) async {
+    let trimmedName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+    let trimmedPurpose = purpose.trimmingCharacters(in: .whitespacesAndNewlines)
+    let trimmedBranch = branch.trimmingCharacters(in: .whitespacesAndNewlines)
+    let expandedDestination = NSString(
+      string: destinationPath.trimmingCharacters(in: .whitespacesAndNewlines)
+    ).expandingTildeInPath
+    let normalizedDestination = WorkspaceLocation.normalize(expandedDestination)
+    guard !trimmedName.isEmpty else {
+      errorMessage = "Give the task environment a name."
+      return
+    }
+    guard GitReference.isValidBranchName(trimmedBranch) else {
+      errorMessage = "Choose a valid Git branch name."
+      return
+    }
+    guard parent.git.branch == "(detached)" || trimmedBranch != parent.git.branch else {
+      errorMessage = "Choose a new branch name for this task environment."
+      return
+    }
+    do {
+      if try await git.localBranchExists(
+        worktreePath: parent.path,
+        branch: trimmedBranch
+      ) {
+        errorMessage = "That branch already exists in this Git repository."
+        return
+      }
+    } catch {
+      errorMessage = "Could not validate the branch: \(error.localizedDescription)"
+      return
+    }
+    guard !FileManager.default.fileExists(atPath: normalizedDestination) else {
+      errorMessage = "The destination already exists."
+      return
+    }
+    let base =
+      parent.git.branch == "(detached)"
+      ? (parent.git.revision ?? "HEAD")
+      : parent.git.branch
+    let parentRepositoryRoot = parent.record.repositoryRoot ?? parent.path
+    let plan: GitWorkflowPlan
+    switch strategy {
+    case .linkedWorktree:
+      plan = workflow.createWorktreePlan(
+        repositoryPath: parent.path,
+        destinationPath: normalizedDestination,
+        branch: trimmedBranch,
+        base: base
+      )
+    case .independentClone:
+      plan = workflow.createClonePlan(
+        sourceRepositoryPath: parent.path,
+        origin: repository.origin,
+        destinationPath: normalizedDestination,
+        branch: trimmedBranch,
+        base: base
+      )
+    }
+    pendingPlan = plan
+    pendingEnvironmentCreation = PendingEnvironmentCreation(
+      planID: plan.id,
+      destinationPath: normalizedDestination,
+      locationKind: strategy == .linkedWorktree ? .gitWorktree : .gitCheckout,
+      repositoryRoot: strategy == .linkedWorktree ? parentRepositoryRoot : normalizedDestination,
+      displayName: trimmedName,
+      purpose: trimmedPurpose.isEmpty ? nil : trimmedPurpose,
+      parentWorkspaceID: parent.id
+    )
   }
 
   func openInBrowser(_ value: String) {
@@ -283,6 +411,56 @@ final class WorkspaceStore: ObservableObject {
           executable: "open",
           arguments: ["-a", "Terminal", path]
         ))
+    }
+  }
+
+  func openInApplication(named applicationName: String, path: String) {
+    Task {
+      do {
+        let result = try await LocalCommandRunner().run(
+          CommandRequest(
+            executable: "open",
+            arguments: ["-a", applicationName, path]
+          ))
+        if result.exitCode != 0 {
+          errorMessage = "\(applicationName) could not be opened."
+        }
+      } catch {
+        errorMessage = "\(applicationName) could not be opened."
+      }
+    }
+  }
+
+  func openCommandLineHarness(_ harness: CommandLineHarness, path: String) {
+    do {
+      let applicationSupport = FileManager.default.urls(
+        for: .applicationSupportDirectory,
+        in: .userDomainMask
+      ).first!.appendingPathComponent("Silvic/Launchers", isDirectory: true)
+      try FileManager.default.createDirectory(
+        at: applicationSupport,
+        withIntermediateDirectories: true
+      )
+      let launcher = applicationSupport.appendingPathComponent(
+        "open-\(harness.rawValue)-\(UUID().uuidString).command"
+      )
+      let script = """
+        #!/bin/zsh
+        rm -- "$0"
+        cd -- \(shellQuote(path)) || exit
+        exec \(harness.executable)
+        """
+      try Data(script.utf8).write(to: launcher, options: .atomic)
+      try FileManager.default.setAttributes(
+        [.posixPermissions: 0o700],
+        ofItemAtPath: launcher.path
+      )
+      guard NSWorkspace.shared.open(launcher) else {
+        errorMessage = "\(harness.title) could not be opened."
+        return
+      }
+    } catch {
+      errorMessage = "\(harness.title) could not be opened."
     }
   }
 
@@ -318,4 +496,42 @@ final class WorkspaceStore: ObservableObject {
     alert.addButton(withTitle: "Cancel")
     return alert.runModal() == .alertFirstButtonReturn
   }
+
+  private func shellQuote(_ value: String) -> String {
+    "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
+  }
+
+  private func addManagedRootIfNeeded(_ path: String) {
+    let normalizedPath = WorkspaceLocation.normalize(path)
+    guard !roots.contains(where: { WorkspaceLocation.normalize($0) == normalizedPath }) else {
+      return
+    }
+    roots.append(normalizedPath)
+    roots.sort()
+    UserDefaults.standard.set(roots, forKey: defaultsKey)
+  }
+}
+
+private struct PendingEnvironmentCreation {
+  let planID: UUID
+  let destinationPath: String
+  let locationKind: WorkspaceLocationKind
+  let repositoryRoot: String
+  let displayName: String
+  let purpose: String?
+  let parentWorkspaceID: WorkspaceID
+}
+
+enum CommandLineHarness: String {
+  case claude
+  case opencode
+
+  var title: String {
+    switch self {
+    case .claude: "Claude Code"
+    case .opencode: "OpenCode"
+    }
+  }
+
+  var executable: String { rawValue }
 }

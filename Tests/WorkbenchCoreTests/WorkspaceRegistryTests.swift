@@ -71,6 +71,93 @@ struct WorkspaceRegistryTests {
     #expect(records[0].location.kind == .gitCheckout)
   }
 
+  @Test("created environment metadata records purpose and parent lineage")
+  func recordsCreatedEnvironmentMetadata() async throws {
+    let fixture = try Fixture()
+    defer { fixture.remove() }
+    let childPath = fixture.root.appendingPathComponent("feature").path
+    let registry = WorkspaceRegistry(fileURL: fixture.registryURL)
+    _ = try await registry.reconcile(
+      discovered: [
+        DiscoveredWorkspace(
+          displayName: "agent/auth",
+          repositoryRoot: fixture.root.path,
+          location: WorkspaceLocation(path: childPath, kind: .gitWorktree)
+        )
+      ])
+    let parentID = WorkspaceID(rawValue: "parent")
+
+    try await registry.updateMetadata(
+      atPath: childPath,
+      displayName: "Authentication",
+      purpose: "Fix the sign-in race",
+      parentWorkspaceID: parentID
+    )
+    let record = try #require(try await registry.allRecords().first)
+
+    #expect(record.displayName == "Authentication")
+    #expect(record.purpose == "Fix the sign-in race")
+    #expect(record.parentWorkspaceID == parentID)
+  }
+
+  @Test("creation metadata is upserted before discovery can race")
+  func upsertsCreationMetadata() async throws {
+    let fixture = try Fixture()
+    defer { fixture.remove() }
+    let childPath = fixture.root.appendingPathComponent("new-worktree").path
+    try FileManager.default.createDirectory(
+      atPath: childPath,
+      withIntermediateDirectories: true
+    )
+    let registry = WorkspaceRegistry(fileURL: fixture.registryURL)
+    let parentID = WorkspaceID(rawValue: "parent")
+
+    try await registry.upsertMetadata(
+      atPath: childPath,
+      locationKind: .gitWorktree,
+      repositoryRoot: fixture.root.path,
+      displayName: "Payments",
+      purpose: "Fix payments",
+      parentWorkspaceID: parentID
+    )
+    let record = try #require(try await registry.allRecords().first)
+
+    #expect(record.displayName == "Payments")
+    #expect(record.location.kind == .gitWorktree)
+    #expect(record.parentWorkspaceID == parentID)
+  }
+
+  @Test("creation at a reused path receives a fresh workspace identity")
+  func upsertRejectsStalePathIdentity() async throws {
+    let fixture = try Fixture()
+    defer { fixture.remove() }
+    let child = fixture.root.appendingPathComponent("task", isDirectory: true)
+    try FileManager.default.createDirectory(at: child, withIntermediateDirectories: true)
+    let registry = WorkspaceRegistry(fileURL: fixture.registryURL)
+    let discovered = DiscoveredWorkspace(
+      displayName: "old",
+      repositoryRoot: fixture.root.path,
+      location: WorkspaceLocation(path: child.path, kind: .gitWorktree)
+    )
+    let first = try await registry.reconcile(discovered: [discovered])
+    let oldID = try #require(first[child.path]?.id)
+
+    try FileManager.default.removeItem(at: child)
+    try FileManager.default.createDirectory(at: child, withIntermediateDirectories: true)
+    try await registry.upsertMetadata(
+      atPath: child.path,
+      locationKind: .gitWorktree,
+      repositoryRoot: fixture.root.path,
+      displayName: "new",
+      purpose: nil,
+      parentWorkspaceID: nil
+    )
+
+    let records = try await registry.allRecords()
+    let replacement = try #require(records.last { $0.displayName == "new" })
+    #expect(replacement.id != oldID)
+  }
+
   @Test("filesystem identity follows a moved checkout without reusing its old path")
   func followsMovesAndRejectsPathReuse() async throws {
     let fixture = try Fixture()

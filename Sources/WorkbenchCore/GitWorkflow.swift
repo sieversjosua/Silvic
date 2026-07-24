@@ -1,5 +1,35 @@
 import Foundation
 
+public enum WorkspaceCreationStrategy: String, CaseIterable, Sendable, Identifiable {
+  case linkedWorktree
+  case independentClone
+
+  public var id: String { rawValue }
+
+  public var title: String {
+    switch self {
+    case .linkedWorktree: "Linked worktree"
+    case .independentClone: "Independent clone"
+    }
+  }
+}
+
+public enum GitReference {
+  public static func isValidBranchName(_ value: String) -> Bool {
+    guard !value.isEmpty, value != "@",
+      !value.hasPrefix("."), !value.hasPrefix("/"), !value.hasPrefix("-"),
+      !value.hasSuffix("."), !value.hasSuffix("/"), !value.hasSuffix(".lock"),
+      !value.contains(".."), !value.contains("//"), !value.contains("@{")
+    else { return false }
+    guard value.split(separator: "/", omittingEmptySubsequences: false).allSatisfy({
+      !$0.hasPrefix(".") && !$0.hasSuffix(".lock")
+    }) else { return false }
+    let invalid = CharacterSet(charactersIn: " ~^:?*[\\")
+      .union(.controlCharacters)
+    return value.unicodeScalars.allSatisfy { !invalid.contains($0) }
+  }
+}
+
 public struct WorkflowStep: Sendable, Equatable, Identifiable {
   public let id: UUID
   public let summary: String
@@ -112,6 +142,75 @@ public struct GitWorkflowService: Sendable {
           executable: "gh", arguments: arguments, currentDirectory: worktreePath)
       ))
     return GitWorkflowPlan(title: "Create GitHub pull request", steps: steps)
+  }
+
+  public func createWorktreePlan(
+    repositoryPath: String,
+    destinationPath: String,
+    branch: String,
+    base: String
+  ) -> GitWorkflowPlan {
+    GitWorkflowPlan(
+      title: "Create task environment",
+      steps: [
+        WorkflowStep(
+          summary: "Create \(branch) from \(base)",
+          command: CommandRequest(
+            executable: "git",
+            arguments: ["worktree", "add", "-b", branch, destinationPath, base],
+            currentDirectory: repositoryPath
+          )
+        )
+      ],
+      warnings: [
+        "This creates a new branch and linked worktree on disk."
+      ]
+    )
+  }
+
+  public func createClonePlan(
+    sourceRepositoryPath: String,
+    origin: String?,
+    destinationPath: String,
+    branch: String,
+    base: String
+  ) -> GitWorkflowPlan {
+    var steps = [
+      WorkflowStep(
+        summary: "Clone the project at \(base)",
+        command: CommandRequest(
+          executable: "git",
+          arguments: ["clone", "--no-checkout", sourceRepositoryPath, destinationPath]
+        )
+      )
+    ]
+    if let origin {
+      steps.append(
+        WorkflowStep(
+          summary: "Preserve the project remote",
+          command: CommandRequest(
+            executable: "git",
+            arguments: ["remote", "set-url", "origin", origin],
+            currentDirectory: destinationPath
+          )
+        )
+      )
+    }
+    steps.append(
+      WorkflowStep(
+        summary: "Create \(branch)",
+        command: CommandRequest(
+          executable: "git",
+          arguments: ["switch", "-c", branch, base],
+          currentDirectory: destinationPath
+        )
+      )
+    )
+    return GitWorkflowPlan(
+      title: "Create independent task environment",
+      steps: steps,
+      warnings: ["This creates a separate Git clone and a new local branch."]
+    )
   }
 
   @discardableResult

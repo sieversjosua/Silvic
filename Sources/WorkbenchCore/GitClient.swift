@@ -37,6 +37,24 @@ public struct GitClient: Sendable {
       .trimmingCharacters(in: .whitespacesAndNewlines)
   }
 
+  public func localBranchExists(worktreePath: String, branch: String) async throws -> Bool {
+    let result = try await runner.run(
+      CommandRequest(
+        executable: "git",
+        arguments: ["show-ref", "--verify", "--quiet", "refs/heads/\(branch)"],
+        currentDirectory: worktreePath,
+        environment: ["GIT_OPTIONAL_LOCKS": "0"]
+      ))
+    switch result.exitCode {
+    case 0: return true
+    case 1: return false
+    default:
+      let message = result.standardError.trimmingCharacters(in: .whitespacesAndNewlines)
+      throw GitClientError.commandFailed(
+        message.isEmpty ? "git exited with \(result.exitCode)" : message)
+    }
+  }
+
   public func diff(worktreePath: String, staged: Bool = false) async throws -> String {
     var arguments = ["diff"]
     if staged { arguments.append("--cached") }

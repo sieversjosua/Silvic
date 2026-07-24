@@ -32,12 +32,12 @@ struct PlanConfirmationView: View {
       HStack {
         Spacer()
         Button("Cancel") {
-          store.pendingPlan = nil
+          store.cancelPendingPlan(expectedID: plan.id)
           dismiss()
         }
         Button("Execute") {
           Task {
-            await store.executePendingPlan()
+            await store.executePendingPlan(expectedID: plan.id)
             dismiss()
           }
         }
