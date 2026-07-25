@@ -4,4 +4,5 @@ export * from "./delivery-service";
 export * from "./environment-service";
 export * from "./git";
 export * from "./project-service";
+export * from "./work-cli-names";
 export * from "./workspace-registry";

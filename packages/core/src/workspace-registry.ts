@@ -3,6 +3,8 @@ import { normalize } from "node:path";
 
 import type { SilvicSnapshot, WorkspaceSnapshot } from "@silvic/contracts";
 
+import { resolveDisplayName } from "./work-cli-names";
+
 export interface WorkspaceRecord {
   workspaceId: string;
   projectId: string;
@@ -19,9 +21,16 @@ export interface ReconciledWorkspaces {
 }
 
 export class WorkspaceRegistry {
+  /**
+   * `suggestedNames` maps a normalised path to a name discovered elsewhere,
+   * such as work-cli's slug for a harness-created worktree. It is applied at
+   * read time rather than stored, so it never masquerades as a name the user
+   * chose and never goes stale.
+   */
   reconcile(
     snapshot: SilvicSnapshot,
     existingRecords: readonly WorkspaceRecord[],
+    suggestedNames: ReadonlyMap<string, string> = new Map(),
   ): ReconciledWorkspaces {
     const records = existingRecords.map((record) => ({ ...record }));
     const claimed = new Set<string>();
@@ -67,7 +76,13 @@ export class WorkspaceRegistry {
       const primaryId = matched.find(({ workspace }) => workspace.isPrimary)
         ?.record.workspaceId;
       const workspaces = matched.map(({ workspace, record }) =>
-        stableWorkspace(workspace, record, transientToStable, primaryId),
+        stableWorkspace(
+          workspace,
+          record,
+          transientToStable,
+          primaryId,
+          suggestedNames.get(normalize(workspace.path)),
+        ),
       );
       return { ...project, workspaces };
     });
@@ -98,6 +113,7 @@ function stableWorkspace(
   record: WorkspaceRecord,
   transientToStable: ReadonlyMap<string, string>,
   primaryId: string | undefined,
+  suggestedName: string | undefined,
 ): WorkspaceSnapshot {
   const stableId = record.workspaceId;
   const parentWorkspaceId =
@@ -105,7 +121,12 @@ function stableWorkspace(
   return {
     ...workspace,
     workspaceId: stableId,
-    name: record.displayName ?? workspace.name,
+    name: resolveDisplayName({
+      path: workspace.path,
+      recorded: record.displayName,
+      workCliName: suggestedName,
+      gitName: workspace.name,
+    }),
     ...(record.purpose ? { purpose: record.purpose } : {}),
     observations: workspace.observations.map((observation) => ({
       ...observation,
