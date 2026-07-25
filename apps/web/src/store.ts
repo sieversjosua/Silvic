@@ -8,6 +8,8 @@ import type {
 interface SilvicState {
   snapshot: SilvicSnapshot;
   roots: readonly string[];
+  activeProjectIds: readonly string[];
+  harnessIcons: Readonly<Record<string, string>>;
   selectedProjectId: string | undefined;
   selectedWorkspaceId: string | undefined;
   loading: boolean;
@@ -15,6 +17,7 @@ interface SilvicState {
   initialize(): Promise<() => void>;
   refresh(): Promise<void>;
   addRoot(): Promise<void>;
+  setProjectActive(projectId: string, active: boolean): Promise<void>;
   createEnvironment(request: CreateEnvironmentRequest): Promise<void>;
   selectProject(id: string): void;
   selectWorkspace(id: string): void;
@@ -29,16 +32,22 @@ const emptySnapshot: SilvicSnapshot = {
 export const useSilvic = create<SilvicState>((set, get) => ({
   snapshot: emptySnapshot,
   roots: [],
+  activeProjectIds: [],
+  harnessIcons: {},
   selectedProjectId: undefined,
   selectedWorkspaceId: undefined,
   loading: true,
   error: undefined,
   initialize: async () => {
     try {
-      const [snapshot, roots] = await Promise.all([
-        window.silvic.getSnapshot(),
-        window.silvic.getRoots(),
-      ]);
+      const [snapshot, roots, activeProjectIds, harnessIcons] =
+        await Promise.all([
+          window.silvic.getSnapshot(),
+          window.silvic.getRoots(),
+          window.silvic.getActiveProjects(),
+          window.silvic.getHarnessIcons(),
+        ]);
+      set({ activeProjectIds, harnessIcons });
       setSelectionForSnapshot(set, get, snapshot);
       set({ snapshot, roots, loading: false });
       return window.silvic.onSnapshot((nextSnapshot) => {
@@ -63,7 +72,23 @@ export const useSilvic = create<SilvicState>((set, get) => ({
   addRoot: async () => {
     try {
       const roots = await window.silvic.addRoot();
-      set({ roots });
+      // Choosing a repository directly adopts it, so the activation set and the
+      // selection both have to catch up once the picker closes.
+      const activeProjectIds = await window.silvic.getActiveProjects();
+      set({ roots, activeProjectIds });
+      setSelectionForSnapshot(set, get, get().snapshot);
+    } catch (error) {
+      set({ error: message(error) });
+    }
+  },
+  setProjectActive: async (projectId, active) => {
+    try {
+      const activeProjectIds = await window.silvic.setProjectActive({
+        projectId,
+        active,
+      });
+      set({ activeProjectIds });
+      setSelectionForSnapshot(set, get, get().snapshot);
     } catch (error) {
       set({ error: message(error) });
     }
@@ -104,10 +129,14 @@ function setSelectionForSnapshot(
   snapshot: SilvicSnapshot,
 ): void {
   const state = get();
+  // Only projects the user has added are selectable; suggestions stay inert
+  // until they are accepted into the rail.
+  const available = snapshot.projects.filter((project) =>
+    state.activeProjectIds.includes(project.id),
+  );
   const selectedProject =
-    snapshot.projects.find(
-      (project) => project.id === state.selectedProjectId,
-    ) ?? snapshot.projects[0];
+    available.find((project) => project.id === state.selectedProjectId) ??
+    available[0];
   const selectedWorkspace =
     selectedProject?.workspaces.find(
       (workspace) => workspace.workspaceId === state.selectedWorkspaceId,

@@ -3,31 +3,59 @@ import {
   Bot,
   ChevronDown,
   Cloud,
-  FolderGit2,
+  ExternalLink,
+  FolderOpen,
   GitBranch,
   GitPullRequest,
+  Monitor,
+  Moon,
+  MoreHorizontal,
   Plus,
   RefreshCw,
   Search,
+  SquareTerminal,
+  Sun,
   Terminal,
-  TreePine,
   X,
 } from "lucide-react";
 
 import type {
+  AppearancePreference,
+  ConnectorFailure,
+  ConnectorObservation,
   DeliveryDraft,
   HarnessDefinition,
+  ProjectSnapshot,
   WorkspaceChanges,
   WorkspaceSnapshot,
 } from "@silvic/contracts";
 
+import { useAppearance } from "./appearance";
 import { Grove } from "./Grove";
+import { Mark } from "./Mark";
+import {
+  localChangeCount,
+  locationLabel,
+  projectTone,
+  workingTreeLabel,
+  workspaceState,
+} from "./state";
 import { useSilvic } from "./store";
+
+const harnessMenu = [
+  ["claude", "Claude Code", <Bot size={15} key="claude" />],
+  ["t3-code", "T3 Code", <SquareTerminal size={15} key="t3" />],
+  ["opencode", "OpenCode", <SquareTerminal size={15} key="opencode" />],
+  ["terminal", "Terminal", <Terminal size={15} key="terminal" />],
+  ["finder", "Finder", <FolderOpen size={15} key="finder" />],
+] as const;
 
 export function App() {
   const {
     snapshot,
     roots,
+    activeProjectIds,
+    harnessIcons,
     selectedProjectId,
     selectedWorkspaceId,
     loading,
@@ -35,12 +63,14 @@ export function App() {
     initialize,
     refresh,
     addRoot,
+    setProjectActive,
     createEnvironment,
     selectProject,
     selectWorkspace,
   } = useSilvic();
+  const { appearance, preference, setPreference } = useAppearance();
   const [query, setQuery] = useState("");
-  const [openMenu, setOpenMenu] = useState(false);
+  const [menuProjectId, setMenuProjectId] = useState<string>();
   const [showEnvironment, setShowEnvironment] = useState(false);
   const [deliveryWorkspace, setDeliveryWorkspace] =
     useState<WorkspaceSnapshot>();
@@ -58,9 +88,15 @@ export function App() {
     return () => window.clearInterval(interval);
   }, [refresh]);
 
+  const activeProjects = snapshot.projects.filter((candidate) =>
+    activeProjectIds.includes(candidate.id),
+  );
+  const suggestedProjects = snapshot.projects.filter(
+    (candidate) => !activeProjectIds.includes(candidate.id),
+  );
   const project =
-    snapshot.projects.find((candidate) => candidate.id === selectedProjectId) ??
-    snapshot.projects[0];
+    activeProjects.find((candidate) => candidate.id === selectedProjectId) ??
+    activeProjects[0];
   const workspace = project?.workspaces.find(
     (candidate) => candidate.workspaceId === selectedWorkspaceId,
   );
@@ -72,128 +108,134 @@ export function App() {
   );
 
   return (
-    <main className="app-shell">
-      <aside className="sidebar">
+    <main className="shell">
+      <aside className="rail">
         <div className="drag-region" />
         <div className="brand">
-          <div className="brand-mark">
-            <TreePine size={17} />
-          </div>
-          <div>
+          <span className="brand-tile">
+            <Mark size={20} />
+          </span>
+          <span className="brand-text">
             <strong>Silvic</strong>
-            <span>Parallel work, grounded.</span>
-          </div>
+            <span className="micro">Parallel work, grounded</span>
+          </span>
         </div>
-        <div className="section-label">
-          <span>Projects</span>
-          <button
-            type="button"
-            aria-label="Add project"
-            onClick={() => void addRoot()}
-          >
-            <Plus size={14} />
-          </button>
-        </div>
-        <nav className="project-list">
-          {snapshot.projects.map((candidate) => (
+
+        <div className="rail-scroll">
+          <div className="rail-label">
+            <span className="micro">Projects</span>
             <button
               type="button"
-              key={candidate.id}
-              className={candidate.id === project?.id ? "active" : ""}
-              onClick={() => selectProject(candidate.id)}
+              aria-label="Add a location to scan"
+              onClick={() => void addRoot()}
             >
-              <FolderGit2 size={15} />
-              <span>{candidate.name}</span>
-              <small>{candidate.workspaces.length}</small>
+              <Plus size={13} />
             </button>
-          ))}
-        </nav>
-        <div className="sidebar-bottom">
-          <button
-            type="button"
-            className="location-button"
-            onClick={() => void addRoot()}
-          >
-            <Plus size={14} />
+          </div>
+          <nav className="project-list">
+            {activeProjects.map((candidate) => (
+              <ProjectButton
+                key={candidate.id}
+                project={candidate}
+                active={candidate.id === project?.id}
+                menuOpen={menuProjectId === candidate.id}
+                onSelect={() => selectProject(candidate.id)}
+                onOpenMenu={() => setMenuProjectId(candidate.id)}
+                onCloseMenu={() => setMenuProjectId(undefined)}
+                onRemove={() => void setProjectActive(candidate.id, false)}
+              />
+            ))}
+            {activeProjects.length === 0 && !loading && (
+              <p className="rail-empty">
+                Nothing added yet. Pick from the suggestions below.
+              </p>
+            )}
+          </nav>
+
+          {suggestedProjects.length > 0 && (
+            <SuggestionList
+              projects={suggestedProjects}
+              onAdd={(id) => void setProjectActive(id, true)}
+            />
+          )}
+        </div>
+
+        <div className="rail-foot">
+          <AppearanceControl value={preference} onChange={setPreference} />
+          <button type="button" className="rail-action" onClick={() => void addRoot()}>
+            <Plus size={13} />
             Add location
           </button>
-          <span>
+          <p className="micro rail-count">
             {roots.length} watched location{roots.length === 1 ? "" : "s"}
-          </span>
+          </p>
+          {snapshot.connectorFailures.length > 0 && (
+            <ConnectorHealth failures={snapshot.connectorFailures} />
+          )}
         </div>
       </aside>
 
-      <section className="project-room">
+      <section className="stage">
         {project ? (
           <>
-            <header className="project-header">
-              <div>
-                <p className="eyebrow">Project</p>
+            <header className="stage-head">
+              <div className="stage-title">
+                <p className="micro">Project</p>
                 <h1>{project.name}</h1>
-                <p className="project-meta">
-                  {project.workspaces.length} environment
-                  {project.workspaces.length === 1 ? "" : "s"}
-                  <span />
-                  {project.origin ?? project.rootPath}
+                <p className="stage-meta">
+                  <span>
+                    {project.workspaces.length} plot
+                    {project.workspaces.length === 1 ? "" : "s"}
+                  </span>
+                  <i />
+                  <span className="mono truncate">
+                    {project.origin ?? project.rootPath}
+                  </span>
                 </p>
               </div>
-              <div className="header-actions">
-                <label className="search-field">
-                  <Search size={14} />
+              <div className="stage-actions">
+                <label className="search">
+                  <Search size={13} />
                   <input
                     value={query}
                     onChange={(event) => setQuery(event.target.value)}
                     placeholder="Find in project"
                   />
                   {query && (
-                    <button type="button" onClick={() => setQuery("")}>
-                      <X size={12} />
+                    <button type="button" aria-label="Clear search" onClick={() => setQuery("")}>
+                      <X size={11} />
                     </button>
                   )}
                 </label>
                 <button
                   type="button"
-                  className="refresh-button"
+                  className="ghost-button"
+                  aria-label="Refresh"
                   onClick={() => void refresh()}
                   disabled={loading}
                 >
-                  <RefreshCw size={14} className={loading ? "spinning" : ""} />
+                  <RefreshCw size={13} className={loading ? "spinning" : ""} />
                 </button>
                 <button
                   type="button"
                   className="primary-button"
                   onClick={() => setShowEnvironment(true)}
                 >
-                  <Plus size={14} /> New environment
+                  <Plus size={13} /> New plot
                 </button>
               </div>
             </header>
+
             <Grove
               project={project}
               query={query}
+              appearance={appearance}
+              harnessIcons={harnessIcons}
               selectedWorkspaceId={workspace?.workspaceId}
               onSelect={selectWorkspace}
               onOpen={openWorkspace}
             />
-            {snapshot.connectorFailures.length > 0 && (
-              <div className="connector-notice">
-                <span>
-                  {snapshot.connectorFailures.length} optional connector
-                  {snapshot.connectorFailures.length === 1 ? "" : "s"}{" "}
-                  unavailable
-                </span>
-                {snapshot.connectorFailures.some(
-                  (failure) => failure.connectorId === "github",
-                ) && (
-                  <button
-                    type="button"
-                    onClick={() => void window.silvic.connectGitHub()}
-                  >
-                    Connect GitHub in browser
-                  </button>
-                )}
-              </div>
-            )}
+
           </>
         ) : (
           <EmptyState onAdd={() => void addRoot()} loading={loading} />
@@ -203,14 +245,17 @@ export function App() {
       <aside className="inspector">
         {workspace ? (
           <WorkspaceInspector
+            key={workspace.workspaceId}
             workspace={workspace}
-            openMenu={openMenu}
-            setOpenMenu={setOpenMenu}
+            harnessIcons={harnessIcons}
             onOpen={openWorkspace}
             onShip={() => setDeliveryWorkspace(workspace)}
           />
         ) : (
-          <div className="inspector-empty">Select a Workspace</div>
+          <div className="inspector-empty">
+            <p className="micro">Inspector</p>
+            <p>Select a plot on the canvas.</p>
+          </div>
         )}
       </aside>
 
@@ -239,6 +284,471 @@ export function App() {
         />
       )}
     </main>
+  );
+}
+
+function ProjectButton({
+  project,
+  active,
+  menuOpen,
+  onSelect,
+  onOpenMenu,
+  onCloseMenu,
+  onRemove,
+}: {
+  project: ProjectSnapshot;
+  active: boolean;
+  menuOpen: boolean;
+  onSelect(): void;
+  onOpenMenu(): void;
+  onCloseMenu(): void;
+  onRemove(): void;
+}) {
+  const tone = projectTone(project.workspaces);
+  return (
+    <div
+      className="project-row"
+      data-menu-open={menuOpen || undefined}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        onOpenMenu();
+      }}
+    >
+      <button
+        type="button"
+        className="project"
+        data-active={active || undefined}
+        onClick={onSelect}
+      >
+        <i className="project-tone" data-tone={tone ?? "quiet"} />
+        <span className="project-name">{project.name}</span>
+      </button>
+      <div className="project-trailing">
+        <span className="project-count mono">{project.workspaces.length}</span>
+        <button
+          type="button"
+          className="project-overflow"
+          aria-label={`Actions for ${project.name}`}
+          aria-haspopup="menu"
+          aria-expanded={menuOpen}
+          onClick={(event) => {
+            event.stopPropagation();
+            onOpenMenu();
+          }}
+        >
+          <MoreHorizontal size={14} />
+        </button>
+      </div>
+      {menuOpen && (
+        <>
+          <div
+            className="menu-scrim"
+            onClick={onCloseMenu}
+            onContextMenu={(event) => {
+              event.preventDefault();
+              onCloseMenu();
+            }}
+          />
+          <div className="menu project-menu" role="menu">
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                onCloseMenu();
+                void window.silvic.openWorkspace({
+                  path: project.rootPath,
+                  target: "finder",
+                });
+              }}
+            >
+              <FolderOpen size={14} />
+              Reveal in Finder
+            </button>
+            <div className="menu-rule" />
+            <button
+              type="button"
+              role="menuitem"
+              className="danger"
+              onClick={() => {
+                onCloseMenu();
+                onRemove();
+              }}
+            >
+              <X size={14} />
+              Remove from Projects
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+const suggestionPreviewCount = 5;
+
+function SuggestionList({
+  projects,
+  onAdd,
+}: {
+  projects: readonly ProjectSnapshot[];
+  onAdd(id: string): void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const visible = expanded
+    ? projects
+    : projects.slice(0, suggestionPreviewCount);
+  const hidden = projects.length - visible.length;
+
+  return (
+    <>
+      <div className="rail-label suggested">
+        <span className="micro">Suggested</span>
+        <span className="micro">{projects.length}</span>
+      </div>
+      <nav className="project-list">
+        {visible.map((candidate) => (
+          <button
+            key={candidate.id}
+            type="button"
+            className="suggestion"
+            title={candidate.rootPath}
+            onClick={() => onAdd(candidate.id)}
+          >
+            <Plus size={12} />
+            <span className="project-name">{candidate.name}</span>
+            <span className="project-count mono">
+              {candidate.workspaces.length}
+            </span>
+          </button>
+        ))}
+        {(hidden > 0 || expanded) && (
+          <button
+            type="button"
+            className="suggestion-more micro"
+            onClick={() => setExpanded(!expanded)}
+          >
+            {expanded ? "Show fewer" : `Show ${hidden} more`}
+          </button>
+        )}
+      </nav>
+    </>
+  );
+}
+
+/** The installed application's own icon, falling back to a drawn glyph. */
+function HarnessIcon({
+  id,
+  icons,
+  fallback,
+  size = 14,
+}: {
+  id: string;
+  icons: Readonly<Record<string, string>>;
+  fallback: React.ReactNode;
+  size?: number;
+}) {
+  const source = icons[id];
+  if (!source) return <>{fallback}</>;
+  return (
+    <img
+      className="harness-icon"
+      src={source}
+      alt=""
+      width={size}
+      height={size}
+    />
+  );
+}
+
+/**
+ * Connector health is app-level and rarely actionable, so it sits quietly in the
+ * rail instead of covering the canvas. Naming each connector and its error keeps
+ * the summary honest — "4 unavailable" on its own explains nothing.
+ */
+function ConnectorHealth({
+  failures,
+}: {
+  failures: readonly ConnectorFailure[];
+}) {
+  const [open, setOpen] = useState(false);
+  const gitHubUnavailable = failures.some(
+    (failure) => failure.connectorId === "github",
+  );
+
+  return (
+    <div className="connector-health">
+      {open && (
+        <div className="connector-detail">
+          {failures.map((failure) => (
+            <p key={failure.connectorId}>
+              <strong>{failure.connectorId}</strong>
+              <span>{failure.message}</span>
+            </p>
+          ))}
+          {gitHubUnavailable && (
+            <button
+              type="button"
+              onClick={() => void window.silvic.connectGitHub()}
+            >
+              Sign in to GitHub
+            </button>
+          )}
+        </div>
+      )}
+      <button
+        type="button"
+        className="connector-toggle micro"
+        aria-expanded={open}
+        onClick={() => setOpen(!open)}
+      >
+        {failures.length} connector{failures.length === 1 ? "" : "s"} idle
+      </button>
+    </div>
+  );
+}
+
+function AppearanceControl({
+  value,
+  onChange,
+}: {
+  value: AppearancePreference;
+  onChange(next: AppearancePreference): void;
+}) {
+  const options = [
+    ["system", "Match system", <Monitor size={12} key="s" />],
+    ["light", "Light", <Sun size={12} key="l" />],
+    ["dark", "Dark", <Moon size={12} key="d" />],
+  ] as const;
+  return (
+    <div className="segmented" role="group" aria-label="Appearance">
+      {options.map(([id, label, icon]) => (
+        <button
+          key={id}
+          type="button"
+          title={label}
+          aria-label={label}
+          aria-pressed={value === id}
+          data-active={value === id || undefined}
+          onClick={() => onChange(id)}
+        >
+          {icon}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function WorkspaceInspector({
+  workspace,
+  harnessIcons,
+  onOpen,
+  onShip,
+}: {
+  workspace: WorkspaceSnapshot;
+  harnessIcons: Readonly<Record<string, string>>;
+  onOpen(path: string, target: HarnessDefinition["id"]): void;
+  onShip(): void;
+}) {
+  const [openMenu, setOpenMenu] = useState(false);
+  const state = workspaceState(workspace);
+  const changes = localChangeCount(workspace);
+  const grouped = useMemo(
+    () => Map.groupBy(workspace.observations, (observation) => observation.kind),
+    [workspace.observations],
+  );
+
+  return (
+    <>
+      <div className="inspector-head">
+        <div className="inspector-eyebrow">
+          <span className="micro">{locationLabel(workspace)}</span>
+          <span className="state-pill" data-tone={state.tone}>
+            <i className="dot" />
+            {state.label}
+          </span>
+        </div>
+        <h2 title={workspace.name}>{workspace.name}</h2>
+        {workspace.branch !== workspace.name && (
+          <p className="inspector-branch mono">
+            <GitBranch size={12} />
+            {workspace.branch || "Detached"}
+          </p>
+        )}
+
+        <div className="split-button">
+          <button type="button" onClick={() => void onOpen(workspace.path, "codex")}>
+            <HarnessIcon
+              id="codex"
+              icons={harnessIcons}
+              fallback={<Bot size={13} />}
+            />
+            Open in Codex
+          </button>
+          <button
+            type="button"
+            className="split-toggle"
+            aria-label="Choose another harness"
+            aria-expanded={openMenu}
+            onClick={() => setOpenMenu(!openMenu)}
+          >
+            <ChevronDown size={13} />
+          </button>
+          {openMenu && (
+            <>
+              <div className="menu-scrim" onClick={() => setOpenMenu(false)} />
+              <div className="menu">
+                {harnessMenu.map(([id, label, glyph]) => (
+                  <button
+                    type="button"
+                    key={id}
+                    onClick={() => {
+                      setOpenMenu(false);
+                      void onOpen(workspace.path, id);
+                    }}
+                  >
+                    <HarnessIcon
+                      id={id}
+                      icons={harnessIcons}
+                      fallback={glyph}
+                      size={15}
+                    />
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+
+      <div className="inspector-body">
+        <Section icon={<GitBranch size={12} />} title="Code">
+          <Field label="Working tree" value={workingTreeLabel(workspace)} />
+          <Field label="Upstream" value={workspace.git.upstream ?? "Not configured"} />
+          <Field label="Ahead / behind" value={`${workspace.git.ahead} / ${workspace.git.behind}`} />
+          <Field label="Revision" value={workspace.git.revision?.slice(0, 9) ?? "Unknown"} />
+          {(changes > 0 || workspace.git.ahead > 0) && (
+            <button type="button" className="section-action" onClick={onShip}>
+              Review &amp; ship
+            </button>
+          )}
+        </Section>
+        <Observations
+          icon={<Terminal size={12} />}
+          title="Runtime"
+          observations={grouped.get("runtime") ?? []}
+          empty="No local runtime detected"
+        />
+        <Observations
+          icon={<Cloud size={12} />}
+          title="Deployment"
+          observations={grouped.get("deployment") ?? []}
+          empty="No deployment attached"
+        />
+        <Observations
+          icon={<GitPullRequest size={12} />}
+          title="Review"
+          observations={grouped.get("review") ?? []}
+          empty="No pull request"
+        />
+        <Observations
+          icon={<Bot size={12} />}
+          title="Sessions"
+          observations={grouped.get("session") ?? []}
+          empty="No active agent session"
+        />
+        <p className="inspector-path mono">{workspace.path}</p>
+      </div>
+    </>
+  );
+}
+
+function Section({
+  icon,
+  title,
+  children,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="section">
+      <h3 className="micro">
+        {icon}
+        {title}
+      </h3>
+      {children}
+    </section>
+  );
+}
+
+function Observations({
+  icon,
+  title,
+  observations,
+  empty,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  observations: WorkspaceSnapshot["observations"];
+  empty: string;
+}) {
+  return (
+    <Section icon={icon} title={title}>
+      {observations.length === 0 ? (
+        <p className="section-empty">{empty}</p>
+      ) : (
+        observations.map((observation) => (
+          <Observation
+            key={`${observation.connectorId}:${observation.kind}`}
+            observation={observation}
+          />
+        ))
+      )}
+    </Section>
+  );
+}
+
+/**
+ * Anything a connector gave a URL for — a pull request, a deployment, a running
+ * dev server — opens in the default browser rather than being read-only text.
+ */
+function Observation({ observation }: { observation: ConnectorObservation }) {
+  const body = (
+    <>
+      <i className="dot" data-tone={observation.state} />
+      <div>
+        <strong>{observation.label}</strong>
+        {observation.detail && <span>{observation.detail}</span>}
+      </div>
+    </>
+  );
+
+  const { url } = observation;
+  if (!url) {
+    return <div className="observation">{body}</div>;
+  }
+  return (
+    <button
+      type="button"
+      className="observation linked"
+      title={url}
+      onClick={() => void window.silvic.openLink({ url })}
+    >
+      {body}
+      <ExternalLink size={12} className="observation-open" />
+    </button>
+  );
+}
+
+function Field({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="field">
+      <span className="field-label">{label}</span>
+      <i className="field-leader" />
+      <span className="field-value mono">{value}</span>
+    </div>
   );
 }
 
@@ -273,9 +783,9 @@ function NewEnvironmentDialog({
 
   if (!source) return null;
   return (
-    <div className="modal-backdrop" onMouseDown={onCancel}>
+    <div className="scrim" onMouseDown={onCancel}>
       <form
-        className="environment-dialog"
+        className="dialog"
         onMouseDown={(event) => event.stopPropagation()}
         onSubmit={(event) => {
           event.preventDefault();
@@ -288,13 +798,13 @@ function NewEnvironmentDialog({
           });
         }}
       >
-        <p className="eyebrow">New environment</p>
+        <p className="micro">New plot</p>
         <h2>Branch from {source.name}</h2>
         <p className="dialog-copy">
-          Create a ready-to-open workspace next to the primary checkout.
+          Create a ready-to-open workspace beside the primary checkout.
         </p>
         <label className="dialog-field">
-          <span>Branch</span>
+          <span className="micro">Branch</span>
           <input
             autoFocus
             value={branch}
@@ -302,9 +812,9 @@ function NewEnvironmentDialog({
             placeholder="feature/agent-task"
           />
         </label>
-        <fieldset className="mode-picker">
-          <legend>Storage</legend>
-          <label className={mode === "worktree" ? "selected" : ""}>
+        <fieldset className="choices">
+          <legend className="micro">Location</legend>
+          <label data-selected={mode === "worktree" || undefined}>
             <input
               type="radio"
               name="mode"
@@ -314,7 +824,7 @@ function NewEnvironmentDialog({
             <strong>Linked worktree</strong>
             <span>Fast and space-efficient</span>
           </label>
-          <label className={mode === "clone" ? "selected" : ""}>
+          <label data-selected={mode === "clone" || undefined}>
             <input
               type="radio"
               name="mode"
@@ -325,17 +835,13 @@ function NewEnvironmentDialog({
             <span>Fully isolated Git directory</span>
           </label>
         </fieldset>
-        {safeBranch && <p className="destination-preview">{destinationPath}</p>}
+        {safeBranch && <p className="destination mono">{destinationPath}</p>}
         <div className="dialog-actions">
-          <button type="button" onClick={onCancel}>
+          <button type="button" className="ghost-button" onClick={onCancel}>
             Cancel
           </button>
-          <button
-            type="submit"
-            className="primary-button"
-            disabled={loading || !safeBranch}
-          >
-            {loading ? "Creating…" : "Create environment"}
+          <button type="submit" className="primary-button" disabled={loading || !safeBranch}>
+            {loading ? "Creating…" : "Create plot"}
           </button>
         </div>
       </form>
@@ -414,26 +920,26 @@ function DeliveryDialog({
   };
 
   return (
-    <div className="modal-backdrop" onMouseDown={onClose}>
+    <div className="scrim" onMouseDown={onClose}>
       <section
-        className="environment-dialog delivery-dialog"
+        className="dialog delivery"
         onMouseDown={(event) => event.stopPropagation()}
       >
-        <p className="eyebrow">Confirmed delivery</p>
+        <p className="micro">Confirmed delivery</p>
         <h2>Review &amp; ship {workspace.name}</h2>
-        <pre className="change-preview">
+        <pre className="patch mono">
           {changes
             ? changes.patch ||
               "No uncommitted changes; existing commits can be pushed."
             : "Loading changes…"}
         </pre>
         {changes?.warnings.map((warning) => (
-          <p className="review-warning" key={warning}>
+          <p className="warning" key={warning}>
             {warning}
           </p>
         ))}
         <label className="dialog-field">
-          <span>Commit message</span>
+          <span className="micro">Commit message</span>
           <input
             value={draft.commitMessage}
             onChange={(event) =>
@@ -444,13 +950,13 @@ function DeliveryDialog({
         </label>
         <button
           type="button"
-          className="ai-draft-button"
+          className="ghost-button draft-button"
           onClick={() => void generate()}
           disabled={working || !changes?.status.trim()}
         >
-          <Bot size={13} /> Draft with Codex
+          <Bot size={12} /> Draft with Codex
         </button>
-        <div className="delivery-options">
+        <div className="checks">
           <label>
             <input
               type="checkbox"
@@ -475,7 +981,7 @@ function DeliveryDialog({
         {createPullRequest && (
           <>
             <label className="dialog-field">
-              <span>Pull request title</span>
+              <span className="micro">Pull request title</span>
               <input
                 value={draft.pullRequestTitle}
                 onChange={(event) =>
@@ -484,7 +990,7 @@ function DeliveryDialog({
               />
             </label>
             <label className="dialog-field">
-              <span>Pull request body</span>
+              <span className="micro">Pull request body</span>
               <textarea
                 value={draft.pullRequestBody}
                 onChange={(event) =>
@@ -496,7 +1002,7 @@ function DeliveryDialog({
         )}
         {failure && <p className="dialog-error">{failure}</p>}
         <div className="dialog-actions">
-          <button type="button" onClick={onClose}>
+          <button type="button" className="ghost-button" onClick={onClose}>
             Cancel
           </button>
           <button
@@ -519,213 +1025,18 @@ function DeliveryDialog({
   );
 }
 
-function WorkspaceInspector({
-  workspace,
-  openMenu,
-  setOpenMenu,
-  onOpen,
-  onShip,
-}: {
-  workspace: WorkspaceSnapshot;
-  openMenu: boolean;
-  setOpenMenu(value: boolean): void;
-  onOpen(path: string, target: HarnessDefinition["id"]): void;
-  onShip(): void;
-}) {
-  const changes =
-    workspace.git.staged +
-    workspace.git.unstaged +
-    workspace.git.untracked +
-    workspace.git.conflicted;
-  const grouped = useMemo(
-    () =>
-      Map.groupBy(workspace.observations, (observation) => observation.kind),
-    [workspace.observations],
-  );
-
-  return (
-    <>
-      <div className="inspector-heading">
-        <p className="eyebrow">
-          {workspace.isPrimary ? "Primary checkout" : "Workspace"}
-        </p>
-        <h2>{workspace.name}</h2>
-        <p>
-          <GitBranch size={13} /> {workspace.branch}
-        </p>
-        <div className="open-control">
-          <button
-            type="button"
-            onClick={() => void onOpen(workspace.path, "codex")}
-          >
-            <Bot size={14} /> Open in Codex
-          </button>
-          <button type="button" onClick={() => setOpenMenu(!openMenu)}>
-            <ChevronDown size={14} />
-          </button>
-          {openMenu && (
-            <div className="open-menu">
-              {(
-                [
-                  ["claude", "Claude Code"],
-                  ["t3-code", "T3 Code"],
-                  ["opencode", "OpenCode"],
-                  ["terminal", "Terminal"],
-                  ["finder", "Finder"],
-                ] as const
-              ).map(([id, label]) => (
-                <button
-                  type="button"
-                  key={id}
-                  onClick={() => {
-                    setOpenMenu(false);
-                    void onOpen(workspace.path, id);
-                  }}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-      <div className="inspector-scroll">
-        <InspectorSection icon={<GitBranch />} title="Code">
-          <Fact
-            label="Working tree"
-            value={changes === 0 ? "Clean" : `${changes} changes`}
-          />
-          <Fact
-            label="Upstream"
-            value={workspace.git.upstream ?? "Not configured"}
-          />
-          <Fact
-            label="Sync"
-            value={`↑ ${workspace.git.ahead}  ↓ ${workspace.git.behind}`}
-          />
-          <Fact
-            label="Revision"
-            value={workspace.git.revision?.slice(0, 9) ?? "Unknown"}
-            mono
-          />
-          {(changes > 0 || workspace.git.ahead > 0) && (
-            <button type="button" className="ship-button" onClick={onShip}>
-              Review &amp; ship
-            </button>
-          )}
-        </InspectorSection>
-        <ObservationSection
-          icon={<Terminal />}
-          title="Runtime"
-          observations={grouped.get("runtime") ?? []}
-          empty="No local runtime detected"
-        />
-        <ObservationSection
-          icon={<Cloud />}
-          title="Environment"
-          observations={grouped.get("deployment") ?? []}
-          empty="No environment attached"
-        />
-        <ObservationSection
-          icon={<GitPullRequest />}
-          title="Review"
-          observations={grouped.get("review") ?? []}
-          empty="No pull request"
-        />
-        <ObservationSection
-          icon={<Bot />}
-          title="Sessions"
-          observations={grouped.get("session") ?? []}
-          empty="No active agent session"
-        />
-        <p className="workspace-path">{workspace.path}</p>
-      </div>
-    </>
-  );
-}
-
-function InspectorSection({
-  icon,
-  title,
-  children,
-}: {
-  icon: React.ReactNode;
-  title: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <section className="inspector-section">
-      <h3>
-        {icon} {title}
-      </h3>
-      {children}
-    </section>
-  );
-}
-
-function ObservationSection({
-  icon,
-  title,
-  observations,
-  empty,
-}: {
-  icon: React.ReactNode;
-  title: string;
-  observations: WorkspaceSnapshot["observations"];
-  empty: string;
-}) {
-  return (
-    <InspectorSection icon={icon} title={title}>
-      {observations.length === 0 ? (
-        <p className="empty-copy">{empty}</p>
-      ) : (
-        observations.map((observation) => (
-          <div
-            className="observation"
-            key={`${observation.connectorId}:${observation.kind}`}
-          >
-            <span className={`state-dot ${observation.state}`} />
-            <div>
-              <strong>{observation.label}</strong>
-              {observation.detail && <span>{observation.detail}</span>}
-            </div>
-          </div>
-        ))
-      )}
-    </InspectorSection>
-  );
-}
-
-function Fact({
-  label,
-  value,
-  mono = false,
-}: {
-  label: string;
-  value: string;
-  mono?: boolean;
-}) {
-  return (
-    <div className="fact">
-      <span>{label}</span>
-      <strong className={mono ? "mono" : ""}>{value}</strong>
-    </div>
-  );
-}
-
 function EmptyState({ onAdd, loading }: { onAdd(): void; loading: boolean }) {
   return (
     <div className="empty-state">
-      <div className="empty-icon">
-        <TreePine size={26} />
-      </div>
-      <h1>{loading ? "Finding your projects…" : "Start with a project"}</h1>
-      <p>
-        Choose a repository or a folder containing the projects you work on.
-      </p>
+      <div className="drag-region" />
+      <span className="empty-mark">
+        <Mark size={30} />
+      </span>
+      <h1>{loading ? "Surveying your projects…" : "Start with a project"}</h1>
+      <p>Choose a repository, or a folder containing the projects you work on.</p>
       {!loading && (
         <button type="button" className="primary-button" onClick={onAdd}>
-          <Plus size={14} /> Add projects
+          <Plus size={13} /> Add projects
         </button>
       )}
     </div>
