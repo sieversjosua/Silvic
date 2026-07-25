@@ -101,6 +101,41 @@ describe("ProjectService.snapshot", () => {
       )?.path,
     ).toBe(await realpath(repository));
   });
+
+  it("keeps a project discoverable when a registered worktree directory is gone", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "silvic-pruned-worktree-"));
+    temporaryDirectories.push(directory);
+    const repository = join(directory, "syntwin");
+    const worktree = join(directory, "syntwin-agent");
+    await git(directory, ["init", "--initial-branch=main", repository]);
+    await git(repository, ["config", "user.email", "silvic@example.com"]);
+    await git(repository, ["config", "user.name", "Silvic"]);
+    await writeFile(join(repository, "README.md"), "# SynTwin\n");
+    await git(repository, ["add", "README.md"]);
+    await git(repository, ["commit", "-m", "Initial"]);
+    await git(repository, [
+      "remote",
+      "add",
+      "origin",
+      "git@github.com:Example/SynTwin.git",
+    ]);
+    await git(repository, ["worktree", "add", "-b", "agent/task", worktree]);
+    // Git keeps reporting this worktree as prunable after the directory goes.
+    await rm(worktree, { recursive: true, force: true });
+
+    const service = new ProjectService({
+      runner: new LocalCommandRunner(),
+      connectors: new ConnectorRegistry([]),
+    });
+
+    const snapshot = await service.snapshot([repository]);
+
+    expect(snapshot.projects).toHaveLength(1);
+    expect(snapshot.projects[0]?.rootPath).toBe(await realpath(repository));
+    expect(
+      snapshot.projects[0]?.workspaces.map((workspace) => workspace.branch),
+    ).toEqual(["main"]);
+  });
 });
 
 async function git(cwd: string, arguments_: readonly string[]): Promise<void> {

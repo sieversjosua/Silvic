@@ -52,17 +52,25 @@ export async function readRepository(
   );
   const rootPath = normalize(registrations[0]?.path ?? discoveryPath);
   const projectId = projectIdentity(origin, rootPath);
-  const workspaces = await mapWithConcurrency(
+  const readWorkspaces = await mapWithConcurrency(
     registrations,
     6,
     async (registration) => {
-      const statusOutput = await requireSuccess(runner, {
-        executable: "git",
-        arguments: ["status", "--porcelain=v2", "--branch"],
-        cwd: registration.path,
-        environment: { GIT_OPTIONAL_LOCKS: "0" },
-        ...(signal ? { signal } : {}),
-      });
+      let statusOutput: string;
+      try {
+        statusOutput = await requireSuccess(runner, {
+          executable: "git",
+          arguments: ["status", "--porcelain=v2", "--branch"],
+          cwd: registration.path,
+          environment: { GIT_OPTIONAL_LOCKS: "0" },
+          ...(signal ? { signal } : {}),
+        });
+      } catch {
+        // `git worktree list` still reports prunable worktrees whose directory
+        // is gone. Dropping that one registration keeps the rest of the
+        // Project visible instead of losing the repository entirely.
+        return undefined;
+      }
       const git = parseGitStatus(statusOutput);
       const path = normalize(registration.path);
       const branch =
@@ -82,6 +90,9 @@ export async function readRepository(
         observations: [],
       } satisfies WorkspaceSnapshot;
     },
+  );
+  const workspaces = readWorkspaces.filter(
+    (workspace) => workspace !== undefined,
   );
 
   return {
