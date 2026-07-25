@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Bot,
   ChevronDown,
@@ -305,13 +305,42 @@ function ProjectButton({
   onRemove(): void;
 }) {
   const tone = projectTone(project.workspaces);
+  const row = useRef<HTMLDivElement>(null);
+  const [anchor, setAnchor] = useState<{
+    top: number;
+    left: number;
+    width: number;
+  }>();
+
+  const open = () => {
+    const rect = row.current?.getBoundingClientRect();
+    if (rect) {
+      setAnchor({ top: rect.bottom + 4, left: rect.left, width: rect.width });
+    }
+    onOpenMenu();
+  };
+
+  // The menu is positioned against the viewport, so it has to close rather than
+  // drift when the rail scrolls beneath it.
+  useEffect(() => {
+    if (!menuOpen) return;
+    const close = () => onCloseMenu();
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    return () => {
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
+    };
+  }, [menuOpen, onCloseMenu]);
+
   return (
     <div
       className="project-row"
+      ref={row}
       data-menu-open={menuOpen || undefined}
       onContextMenu={(event) => {
         event.preventDefault();
-        onOpenMenu();
+        open();
       }}
     >
       <button
@@ -333,13 +362,13 @@ function ProjectButton({
           aria-expanded={menuOpen}
           onClick={(event) => {
             event.stopPropagation();
-            onOpenMenu();
+            open();
           }}
         >
           <MoreHorizontal size={14} />
         </button>
       </div>
-      {menuOpen && (
+      {menuOpen && anchor && (
         <>
           <div
             className="menu-scrim"
@@ -349,7 +378,15 @@ function ProjectButton({
               onCloseMenu();
             }}
           />
-          <div className="menu project-menu" role="menu">
+          <div
+            className="menu project-menu"
+            role="menu"
+            style={{
+              top: anchor.top,
+              left: anchor.left,
+              width: anchor.width,
+            }}
+          >
             <button
               type="button"
               role="menuitem"

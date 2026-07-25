@@ -451,10 +451,17 @@ button {
   background: var(--surface-active);
 }
 
-.project-menu {
-  top: calc(100% + 2px);
-  right: 4px;
-  left: 4px;
+/*
+ * Fixed to the viewport rather than the row: an absolutely positioned menu is
+ * clipped by the rail's scroll container and grows its scrollable area, which
+ * makes the sidebar jump when the menu opens.
+ *
+ * Both classes are needed. `.menu` is declared later in this file, so a single
+ * class here would lose the cascade and silently fall back to `absolute`.
+ */
+.menu.project-menu {
+  position: fixed;
+  right: auto;
   min-width: 0;
 }
 
