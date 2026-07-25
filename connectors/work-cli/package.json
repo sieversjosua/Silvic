@@ -1,0 +1,11 @@
+{
+  "name": "@silvic/connector-work-cli",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@silvic/contracts": "workspace:*",
+    "@silvic/core": "workspace:*"
+  }
+}

@@ -80,7 +80,7 @@ adapters report their honest capability level:
 4. Generate a context handoff
 
 Community integrations should use a small external manifest/command contract
-rather than requiring contributors to modify the Swift app.
+rather than requiring contributors to modify the renderer.
 
 ### Task and Attempt
 
@@ -117,17 +117,17 @@ Each Workspace still has one derived operational state and recommended primary
 action, but those states annotate the Project tree instead of reorganizing the
 entire product into a global queue.
 
-| State | Meaning | Primary action |
-| --- | --- | --- |
+| State           | Meaning                                                 | Primary action   |
+| --------------- | ------------------------------------------------------- | ---------------- |
 | Needs attention | conflict, failed CI, crashed runtime, broken attachment | Repair / Inspect |
-| Active | a Harness Session or runtime is live | Focus |
-| Changed | local work is waiting for review | Review changes |
-| Waiting | CI, review, deployment, or agent activity is pending | Inspect |
-| Ready to resume | inactive but healthy | Resume |
-| Ready to land | pushed, PR open, required checks green | Open PR / Merge |
-| Quiet | clean and inactive | Resume |
-| Stale | inactive resources remain without recent work | Archive |
-| Shipped | work landed and resources can be retired | Clean up |
+| Active          | a Harness Session or runtime is live                    | Focus            |
+| Changed         | local work is waiting for review                        | Review changes   |
+| Waiting         | CI, review, deployment, or agent activity is pending    | Inspect          |
+| Ready to resume | inactive but healthy                                    | Resume           |
+| Ready to land   | pushed, PR open, required checks green                  | Open PR / Merge  |
+| Quiet           | clean and inactive                                      | Resume           |
+| Stale           | inactive resources remain without recent work           | Archive          |
+| Shipped         | work landed and resources can be retired                | Clean up         |
 
 Ambiguous evidence must produce `Unknown`, never a confident guess.
 

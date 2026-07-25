@@ -1,42 +1,80 @@
 # Silvic
 
-Silvic is a local-first, native macOS workbench for parallel development environments. A durable Workspace connects an existing checkout, clone, or Git worktree with local processes, coding-agent sessions, Convex deployments, GitHub pull requests, and CI checks.
+Silvic is a local-first macOS control plane for parallel development environments.
+It groups checkouts, clones, and Git worktrees into projects, then attaches the
+runtime, deployment, review, and coding-agent context that belongs to each one.
 
-The current UI is intentionally plain. The core functionality lives in the independent `WorkbenchCore` Swift target.
+The app is built with Electron, React, and TypeScript. Git and connector work runs
+outside the renderer in a narrow, typed desktop API.
 
-## Implemented
+## What works
 
-- Recursive repository discovery for user-selected roots
-- Durable Workspace identities persisted independently from checkout paths
-- Primary checkouts and linked worktrees represented as interchangeable locations
-- Registered Git checkouts via `git worktree list --porcelain`
-- Git branch, upstream, revision, ahead/behind, and change categories
-- Listening localhost processes mapped to Workspaces through process CWD
-- `work status -a` processes and URLs mapped by project/workspace
-- Convex deployment metadata from `.env.local` without reading or exposing deploy keys
-- Non-archived Codex tasks mapped to Workspaces by CWD
-- GitHub PR metadata and check rollups via the authenticated `gh` CLI
-- Browser-based GitHub OAuth through `gh auth login --web`, with account status in the app
-- Diff/status inspection
-- AI commit messages and PR bodies through the authenticated local `codex` CLI
-- Confirm-before-execute plans for stage, commit, push, and PR creation
-- A minimal native SwiftUI shell for all of the above
+- Recursive local repository discovery
+- Project grouping by normalized Git remote
+- Primary checkouts and linked worktrees on a project canvas
+- Git branch, revision, upstream, ahead/behind, and change state
+- New environments as linked worktrees or independent clones
+- Durable Workspace identity with recorded and inferred parent lineage
+- GitHub pull request and check state through the authenticated `gh` CLI
+- Convex deployment discovery from local environment metadata
+- `work-cli`, general localhost runtime, and Codex task discovery
+- Open any Workspace in Codex, Claude Code, T3 Code, OpenCode, Terminal, or Finder
+- Diff inspection, Codex-assisted delivery drafts, and confirmed commit/push/PR flows
+- Connector failures isolated from the rest of the snapshot
 
-## Run during development
+Silvic never reads or stores GitHub or Convex credentials. GitHub uses the existing
+`gh` authentication, so `gh auth login --web` provides browser OAuth when needed.
+
+## Development
+
+Requirements:
+
+- macOS
+- Node.js 22 or newer
+- pnpm 11
+- Git
 
 ```bash
-swift run Silvic
+pnpm install
+pnpm dev
 ```
 
-## Build the app bundle
+Useful checks:
 
 ```bash
-./Scripts/build-app.sh
-open outputs/Silvic.app
+pnpm typecheck
+pnpm test
+pnpm build
+pnpm package:mac
 ```
 
-The app intentionally is not sandboxed: it needs read access to selected repositories, process information, and local CLI configuration. It uses the existing authentication of `git`, `gh`, and `codex`; no credentials are stored by Silvic.
+The verified app archive is written to `release/Silvic-mac-arm64.zip`.
+Local directory builds receive an ad-hoc signature when no valid Apple signing
+identity is available; release distribution still requires Developer ID signing
+and notarization.
 
-## Safety model
+## Repository layout
 
-Discovery and AI generation are read-only. Before diff context is sent to Codex, likely credential assignments and private-key blocks are redacted; untracked AI content is restricted to a source/text allowlist and common secret files are excluded. The app then shows the exact sanitized payload and requires explicit confirmation before sending it. Local change inspection remains independent and shows any bounded UTF-8 file. Commit, push, and pull-request creation are represented as visible command plans and only run after explicit confirmation. Arguments are passed directly to `Process`, not interpolated through a shell.
+```text
+apps/desktop        Electron main process, secure preload, packaging
+apps/web            React renderer and project-grove interface
+packages/contracts  Shared connector, snapshot, and IPC types
+packages/core       Git discovery and environment lifecycle
+connectors/*        GitHub, Convex, work-cli, and Harness integrations
+```
+
+See [the connector guide](docs/CONNECTORS.md) to add a Harness or service without
+coupling it to the UI. Architecture and product intent live in
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and
+[docs/PRODUCT_CONCEPT.md](docs/PRODUCT_CONCEPT.md).
+
+## Status
+
+Silvic is an early open-source project. Discovery, connector enrichment, environment
+creation, Harness launching, and the confirmed delivery path form the current
+foundation. Recipes, provider provisioning, and environment teardown remain on the
+roadmap.
+
+## License
+
+MIT

@@ -1,0 +1,19 @@
+{
+  "name": "@silvic/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@base-ui/react": "^1.6.0",
+    "@silvic/contracts": "workspace:*",
+    "@xyflow/react": "^12.11.2",
+    "lucide-react": "^1.26.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "zustand": "^5.0.14"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0"
+  }
+}

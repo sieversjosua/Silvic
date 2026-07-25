@@ -1,32 +1,66 @@
 # Architecture
 
-`WorkbenchCore` is a dependency-free Swift library. The SwiftUI executable is a replaceable presentation layer.
+Silvic is a pnpm TypeScript monorepo with an Electron desktop shell and a React
+renderer. The renderer is replaceable: it only sees serializable snapshots and
+commands exposed by `@silvic/contracts`.
+
+## Process boundary
+
+```text
+React renderer
+    │ window.silvic (context bridge)
+    ▼
+Electron preload
+    │ typed IPC
+    ▼
+Electron main ── ProjectService ── Git
+              └─ ConnectorRegistry ── GitHub / Convex / work-cli
+```
+
+The BrowserWindow uses context isolation, sandboxing, and no Node integration.
+Filesystem access, process execution, persistence, and external applications stay
+in the main process. IPC mutation handlers validate renderer inputs against the
+latest discovered snapshot.
 
 ## Snapshot pipeline
 
-`WorkspaceService` concurrently loads:
+`ProjectService.snapshot()` recursively discovers repositories under configured
+roots, asks Git for registered worktrees and porcelain-v2 status, and groups local
+locations by normalized remote identity. It then calls `ConnectorRegistry.observe()`
+for every Workspace.
 
-- repository candidates from `RepositoryDiscovery`;
-- registered worktrees and status from `GitClient`;
-- listeners from `ListeningProcessService`;
-- tracked local commands from `WorkCLIService`;
-- Codex task metadata from the local read-only SQLite database;
-- Convex metadata from environment files; and
-- GitHub pull-request/check metadata through `gh`.
+`WorkspaceRegistry` reconciles those transient Git locations with records persisted
+by the main process. Exact-path matches are preferred, unique project/branch matches
+survive moves, and environments created in Silvic record their selected parent.
 
-`GitHubAuthService` delegates browser OAuth to `gh auth login --web`. The generated command opens visibly in Terminal, while `gh` normally stores credentials in the system credential store and may use its documented fallback when no credential store is available. Silvic never reads or stores the token; it checks the active account through the backward-compatible `gh api user` probe.
+Connector execution is failure-isolated. An unavailable optional CLI or malformed
+provider file becomes a visible connector failure; it cannot prevent Git state or
+other connectors from loading.
 
-It normalizes those inputs into `WorkspaceOverview -> RepositorySnapshot -> WorkspaceSnapshot`. Each Workspace has a durable `WorkspaceRecord` and a `WorkspaceLocation`; the current location is either an ordinary Git checkout (including an independent clone) or a linked Git worktree. Integrations are attached using explicit local evidence such as CWD or matching repository/workspace slugs.
+## Connector contract
 
-`WorkspaceRegistry` persists stable Workspace identifiers in Application Support.
-Git worktree discovery remains an internal implementation detail that can reveal
-both the repository's primary checkout and any linked worktrees. The public
-Workspace model does not require linked worktrees.
+An observation connector exports a validated manifest and one asynchronous
+`observe(target)` function. It returns small, serializable observations such as a
+runtime, deployment, review, or Session. Connectors do not import renderer code.
 
-## Mutations
+Harness integrations use a capability list consumed by the main process. GUI
+Harnesses open a validated Workspace directory. CLI Harnesses launch through a
+short-lived, self-deleting Terminal command file.
 
-`GitWorkflowService` does not expose ad-hoc shell strings. It produces typed `GitWorkflowPlan` values containing exact `CommandRequest` arguments. A plan is inert until `execute(_:confirmed:)` receives `true`.
+## Environment lifecycle
 
-## AI
+`EnvironmentService` supports both linked worktrees and independent clones. The
+desktop handler derives and validates the destination from the selected project
+and branch before delegating to Git. Environment creation is initiated through an
+explicit confirmation dialog and followed by a complete snapshot refresh.
 
-`AIService` gives the local Codex CLI a bounded diff/status context in read-only, ephemeral mode. It cannot execute repository changes. Generated text must still pass through the normal confirmed workflow.
+`DeliveryService` produces bounded, secret-redacted change context for the local
+Codex CLI. Commit, push, and pull-request creation are separate confirmed requests;
+their Workspace path and payload are validated again in the main process.
+
+## Persistence and credentials
+
+Only configured discovery roots are stored through `electron-store`. Silvic
+delegates authentication to installed CLIs such as `gh`; it does not persist
+provider tokens. The Convex connector reads public deployment metadata from local
+environment files and explicitly excludes deploy keys.

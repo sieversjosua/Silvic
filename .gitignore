@@ -1,5 +1,11 @@
+node_modules/
+dist/
+out/
+release/
 .build/
-.swiftpm/
-.DS_Store
 outputs/
 work/
+.vite/
+.DS_Store
+*.log
+coverage/

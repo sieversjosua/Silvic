@@ -1,0 +1,27 @@
+{
+  "name": "silvic",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.13.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @silvic/desktop dev",
+    "build": "pnpm --filter @silvic/desktop build",
+    "package:mac": "pnpm --filter @silvic/desktop package:mac",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "check": "pnpm typecheck && pnpm test && pnpm build",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "prettier": "^3.6.2",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
+  }
+}
