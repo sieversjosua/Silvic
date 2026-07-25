@@ -166,6 +166,16 @@ export const openWorkspaceRequestSchema = z
   .strict();
 export type OpenWorkspaceRequest = z.infer<typeof openWorkspaceRequestSchema>;
 
+export const openLinkRequestSchema = z
+  .object({
+    url: z
+      .url()
+      .max(4_000)
+      .refine((value) => ["http:", "https:"].includes(new URL(value).protocol)),
+  })
+  .strict();
+export type OpenLinkRequest = z.infer<typeof openLinkRequestSchema>;
+
 export const createEnvironmentRequestSchema = z
   .object({
     sourcePath: z.string().min(1),
@@ -221,6 +231,22 @@ export interface DeliveryResult {
   pullRequestUrl?: string;
 }
 
+export const appearancePreferenceSchema = z.enum(["system", "light", "dark"]);
+export type AppearancePreference = z.infer<typeof appearancePreferenceSchema>;
+
+export const projectActivationRequestSchema = z
+  .object({
+    projectId: z.string().min(1).max(400),
+    active: z.boolean(),
+  })
+  .strict();
+export type ProjectActivationRequest = z.infer<
+  typeof projectActivationRequestSchema
+>;
+
+/** Harness id to a data URL of the installed application's real macOS icon. */
+export type HarnessIcons = Readonly<Record<string, string>>;
+
 export interface SilvicDesktopApi {
   getSnapshot(): Promise<SilvicSnapshot>;
   getRoots(): Promise<readonly string[]>;
@@ -233,6 +259,14 @@ export interface SilvicDesktopApi {
   executeDelivery(request: DeliveryExecuteRequest): Promise<DeliveryResult>;
   connectGitHub(): Promise<void>;
   openWorkspace(request: OpenWorkspaceRequest): Promise<void>;
+  openLink(request: OpenLinkRequest): Promise<void>;
+  getAppearance(): Promise<AppearancePreference>;
+  setAppearance(preference: AppearancePreference): Promise<AppearancePreference>;
+  getActiveProjects(): Promise<readonly string[]>;
+  setProjectActive(
+    request: ProjectActivationRequest,
+  ): Promise<readonly string[]>;
+  getHarnessIcons(): Promise<HarnessIcons>;
   onSnapshot(listener: (snapshot: SilvicSnapshot) => void): () => void;
 }
 
@@ -249,6 +283,12 @@ export const ipcChannels = {
   deliveryExecute: "silvic:delivery:execute",
   githubConnect: "silvic:github:connect",
   workspaceOpen: "silvic:workspace:open",
+  linkOpen: "silvic:link:open",
+  appearanceGet: "silvic:appearance:get",
+  appearanceSet: "silvic:appearance:set",
+  projectsActiveGet: "silvic:projects:active:get",
+  projectsActiveSet: "silvic:projects:active:set",
+  harnessIconsGet: "silvic:harness:icons:get",
 } as const;
 
 declare global {

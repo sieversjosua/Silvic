@@ -10,6 +10,7 @@ import {
   BrowserWindow,
   dialog,
   ipcMain,
+  nativeTheme,
   shell,
   type IpcMainInvokeEvent,
 } from "electron";
@@ -17,16 +18,21 @@ import Store from "electron-store";
 
 import { convexConnector } from "@silvic/connector-convex";
 import { createGitHubConnector } from "@silvic/connector-github";
-import { harnessById } from "@silvic/connector-harnesses";
+import { harnessById, harnesses } from "@silvic/connector-harnesses";
 import { createLocalContextConnector } from "@silvic/connector-local";
 import { createWorkCliConnector } from "@silvic/connector-work-cli";
 import {
+  appearancePreferenceSchema,
   createEnvironmentRequestSchema,
   deliveryExecuteRequestSchema,
   ipcChannels,
+  openLinkRequestSchema,
   openWorkspaceRequestSchema,
+  projectActivationRequestSchema,
   workspacePathRequestSchema,
+  type AppearancePreference,
   type CreateEnvironmentRequest,
+  type HarnessIcons,
   type OpenWorkspaceRequest,
   type SilvicSnapshot,
 } from "@silvic/contracts";
@@ -37,6 +43,7 @@ import {
   LocalCommandRunner,
   ProjectService,
   WorkspaceRegistry,
+  readWorkCliNames,
   resolvedCommandPath,
   type WorkspaceRecord,
 } from "@silvic/core";
@@ -45,7 +52,12 @@ interface Settings {
   roots: string[];
   workspaceRecords: WorkspaceRecord[];
   legacyMigrationCompleted: boolean;
+  appearance: AppearancePreference;
+  activeProjects: string[];
 }
+
+/** Matches `--surface-sunk` in the renderer so the first frame never flashes. */
+const windowBackground = { light: "#f4f4f1", dark: "#0f1210" } as const;
 
 const runner = new LocalCommandRunner();
 const connectors = new ConnectorRegistry([
@@ -64,6 +76,8 @@ const settings = new Store<Settings>({
     roots: defaultRoots(),
     workspaceRecords: [],
     legacyMigrationCompleted: false,
+    appearance: "system",
+    activeProjects: [],
   },
 });
 
@@ -75,6 +89,7 @@ let latestSnapshot: SilvicSnapshot = {
 };
 let activeRefresh: Promise<SilvicSnapshot> | undefined;
 let queuedFreshRefresh: Promise<SilvicSnapshot> | undefined;
+let harnessIconCache: HarnessIcons | undefined;
 
 app.setName("Silvic");
 
@@ -90,6 +105,10 @@ if (!app.requestSingleInstanceLock()) {
 
   app.whenReady().then(async () => {
     await migrateLegacySettings();
+    nativeTheme.themeSource = settings.get("appearance");
+    nativeTheme.on("updated", () => {
+      mainWindow?.setBackgroundColor(currentWindowBackground());
+    });
     registerIpc();
     createWindow();
     await refreshSnapshot();
@@ -111,8 +130,8 @@ function createWindow(): void {
     minWidth: 1040,
     minHeight: 680,
     titleBarStyle: "hiddenInset",
-    trafficLightPosition: { x: 18, y: 18 },
-    backgroundColor: "#10110f",
+    trafficLightPosition: { x: 18, y: 20 },
+    backgroundColor: currentWindowBackground(),
     show: false,
     webPreferences: {
       preload: join(import.meta.dirname, "../preload/preload.cjs"),
@@ -164,6 +183,7 @@ function registerIpc(): void {
     const roots = uniquePaths([...settings.get("roots"), ...result.filePaths]);
     settings.set("roots", roots);
     await refreshSnapshot();
+    adoptChosenProjects(result.filePaths);
     return roots;
   });
   ipcMain.handle(ipcChannels.rootsRemove, async (event, root: unknown) => {
@@ -214,6 +234,113 @@ function registerIpc(): void {
     assertTrustedSender(event);
     return openWorkspace(openWorkspaceRequestSchema.parse(request));
   });
+  ipcMain.handle(ipcChannels.linkOpen, async (event, request: unknown) => {
+    assertTrustedSender(event);
+    const { url } = openLinkRequestSchema.parse(request);
+    await shell.openExternal(knownObservationUrl(url));
+  });
+  ipcMain.handle(ipcChannels.projectsActiveGet, (event) => {
+    assertTrustedSender(event);
+    return settings.get("activeProjects");
+  });
+  ipcMain.handle(ipcChannels.projectsActiveSet, (event, request: unknown) => {
+    assertTrustedSender(event);
+    const { projectId, active } = projectActivationRequestSchema.parse(request);
+    const remaining = settings
+      .get("activeProjects")
+      .filter((candidate) => candidate !== projectId);
+    const next = active ? [...remaining, projectId] : remaining;
+    settings.set("activeProjects", next);
+    return next;
+  });
+  ipcMain.handle(ipcChannels.harnessIconsGet, (event) => {
+    assertTrustedSender(event);
+    return readHarnessIcons();
+  });
+  ipcMain.handle(ipcChannels.appearanceGet, (event) => {
+    assertTrustedSender(event);
+    return settings.get("appearance");
+  });
+  ipcMain.handle(ipcChannels.appearanceSet, (event, preference: unknown) => {
+    assertTrustedSender(event);
+    const parsed = appearancePreferenceSchema.parse(preference);
+    settings.set("appearance", parsed);
+    nativeTheme.themeSource = parsed;
+    mainWindow?.setBackgroundColor(currentWindowBackground());
+    return parsed;
+  });
+}
+
+/**
+ * Picking a folder that is itself a checkout or worktree is an explicit choice,
+ * so that Project joins the rail immediately. Picking a folder that merely
+ * contains repositories only feeds the suggestion list, which is what keeps the
+ * rail from filling up with everything on disk.
+ */
+function adoptChosenProjects(chosenPaths: readonly string[]): void {
+  const chosen = new Set(chosenPaths.map(normalize));
+  const adopted = latestSnapshot.projects
+    .filter(
+      (project) =>
+        chosen.has(normalize(project.rootPath)) ||
+        project.workspaces.some((workspace) =>
+          chosen.has(normalize(workspace.path)),
+        ),
+    )
+    .map((project) => project.id);
+  if (adopted.length === 0) return;
+  settings.set("activeProjects", [
+    ...new Set([...settings.get("activeProjects"), ...adopted]),
+  ]);
+}
+
+function currentWindowBackground(): string {
+  return nativeTheme.shouldUseDarkColors
+    ? windowBackground.dark
+    : windowBackground.light;
+}
+
+/**
+ * The real macOS icon for each Harness, read from whichever application bundle
+ * is actually installed. Harnesses that only exist as a CLI resolve to nothing
+ * and keep their drawn glyph in the interface.
+ */
+async function readHarnessIcons(): Promise<HarnessIcons> {
+  if (harnessIconCache) return harnessIconCache;
+  const icons: Record<string, string> = {};
+  for (const harness of harnesses) {
+    const bundle = applicationBundlePath(harness.id);
+    if (!bundle) continue;
+    try {
+      const icon = await app.getFileIcon(bundle, { size: "normal" });
+      if (!icon.isEmpty()) icons[harness.id] = icon.toDataURL();
+    } catch {
+      // A missing or unreadable bundle simply has no icon.
+    }
+  }
+  harnessIconCache = icons;
+  return icons;
+}
+
+function applicationBundlePath(id: string): string | undefined {
+  if (id === "finder") return "/System/Library/CoreServices/Finder.app";
+  const harness = harnessById(id as OpenWorkspaceRequest["target"]);
+  const names =
+    harness.applicationNames ??
+    (harness.applicationName ? [harness.applicationName] : []);
+  const directories = [
+    "/Applications",
+    join(homedir(), "Applications"),
+    "/System/Applications",
+    "/System/Applications/Utilities",
+  ];
+  for (const name of names) {
+    for (const directory of directories) {
+      const candidate = join(directory, `${name}.app`);
+      if (existsSync(candidate)) return candidate;
+    }
+  }
+  return undefined;
 }
 
 function assertTrustedSender(event: IpcMainInvokeEvent): void {
@@ -296,12 +423,15 @@ function refreshSnapshot(forceFresh = false): Promise<SilvicSnapshot> {
 }
 
 function startSnapshotRefresh(): Promise<SilvicSnapshot> {
-  const refresh = projectService
-    .snapshot(settings.get("roots"))
-    .then((rawSnapshot) => {
+  const refresh = Promise.all([
+    projectService.snapshot(settings.get("roots")),
+    readWorkCliNames(),
+  ])
+    .then(([rawSnapshot, workCliNames]) => {
       const reconciled = workspaceRegistry.reconcile(
         rawSnapshot,
         settings.get("workspaceRecords"),
+        workCliNames,
       );
       settings.set("workspaceRecords", [...reconciled.records]);
       latestSnapshot = reconciled.snapshot;
@@ -352,6 +482,20 @@ async function openWorkspace(request: OpenWorkspaceRequest): Promise<void> {
     lastError = result.stderr.trim();
   }
   throw new Error(lastError || `${harness.name} could not be opened`);
+}
+
+/**
+ * Only links a connector actually reported can be opened, so the renderer can
+ * never hand the browser an arbitrary address.
+ */
+function knownObservationUrl(url: string): string {
+  const known = latestSnapshot.projects.some((project) =>
+    project.workspaces.some((workspace) =>
+      workspace.observations.some((observation) => observation.url === url),
+    ),
+  );
+  if (!known) throw new Error("Silvic can only open a discovered link");
+  return url;
 }
 
 function knownWorkspacePath(path: string): string {

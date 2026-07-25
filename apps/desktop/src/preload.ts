@@ -2,9 +2,12 @@ import { contextBridge, ipcRenderer } from "electron";
 
 import {
   ipcChannels,
+  type AppearancePreference,
   type CreateEnvironmentRequest,
   type DeliveryExecuteRequest,
+  type OpenLinkRequest,
   type OpenWorkspaceRequest,
+  type ProjectActivationRequest,
   type SilvicDesktopApi,
   type SilvicSnapshot,
 } from "@silvic/contracts";
@@ -25,6 +28,15 @@ const api: SilvicDesktopApi = {
   connectGitHub: () => ipcRenderer.invoke(ipcChannels.githubConnect),
   openWorkspace: (request: OpenWorkspaceRequest) =>
     ipcRenderer.invoke(ipcChannels.workspaceOpen, request),
+  openLink: (request: OpenLinkRequest) =>
+    ipcRenderer.invoke(ipcChannels.linkOpen, request),
+  getAppearance: () => ipcRenderer.invoke(ipcChannels.appearanceGet),
+  setAppearance: (preference: AppearancePreference) =>
+    ipcRenderer.invoke(ipcChannels.appearanceSet, preference),
+  getActiveProjects: () => ipcRenderer.invoke(ipcChannels.projectsActiveGet),
+  setProjectActive: (request: ProjectActivationRequest) =>
+    ipcRenderer.invoke(ipcChannels.projectsActiveSet, request),
+  getHarnessIcons: () => ipcRenderer.invoke(ipcChannels.harnessIconsGet),
   onSnapshot: (listener: (snapshot: SilvicSnapshot) => void) => {
     const handler = (
       _event: Electron.IpcRendererEvent,
