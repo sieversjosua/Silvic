@@ -67,6 +67,15 @@ const connectors = new ConnectorRegistry([
   createLocalContextConnector(runner),
 ]);
 const projectService = new ProjectService({ runner, connectors });
+/**
+ * Git state only. Connectors shell out to `gh`, `work` and the port table, which
+ * is most of the cost of a scan, so first paint uses this and the enrichment
+ * arrives afterwards.
+ */
+const fastProjectService = new ProjectService({
+  runner,
+  connectors: new ConnectorRegistry([]),
+});
 const environmentService = new EnvironmentService(runner);
 const deliveryService = new DeliveryService(runner);
 const workspaceRegistry = new WorkspaceRegistry();
@@ -111,6 +120,7 @@ if (!app.requestSingleInstanceLock()) {
     });
     registerIpc();
     createWindow();
+    await paintFromGit(settings.get("roots"));
     await refreshSnapshot();
 
     app.on("activate", () => {
@@ -182,8 +192,11 @@ function registerIpc(): void {
     if (result.canceled) return settings.get("roots");
     const roots = uniquePaths([...settings.get("roots"), ...result.filePaths]);
     settings.set("roots", roots);
-    await refreshSnapshot();
+    // Only the chosen paths, and without connectors, so the rail updates as
+    // soon as the picker closes. Everything else is re-read in the background.
+    await paintFromGit(result.filePaths);
     adoptChosenProjects(result.filePaths);
+    void refreshSnapshot(true);
     return roots;
   });
   ipcMain.handle(ipcChannels.rootsRemove, async (event, root: unknown) => {
@@ -193,7 +206,8 @@ function registerIpc(): void {
       .get("roots")
       .filter((candidate) => normalize(candidate) !== normalize(root));
     settings.set("roots", roots);
-    await refreshSnapshot();
+    await paintFromGit(roots, "replace");
+    void refreshSnapshot(true);
     return roots;
   });
   ipcMain.handle(
@@ -226,7 +240,8 @@ function registerIpc(): void {
         ...parsed,
         path: knownWorkspacePath(parsed.path),
       });
-      await refreshSnapshot(true);
+      await paintFromGit([parsed.path]);
+      void refreshSnapshot(true);
       return result;
     },
   );
@@ -404,7 +419,9 @@ async function createEnvironment(
       displayName: request.branch,
     },
   ]);
-  return refreshSnapshot(true);
+  await paintFromGit([project.rootPath, destinationPath]);
+  void refreshSnapshot(true);
+  return latestSnapshot;
 }
 
 function refreshSnapshot(forceFresh = false): Promise<SilvicSnapshot> {
@@ -426,21 +443,9 @@ function startSnapshotRefresh(): Promise<SilvicSnapshot> {
   const refresh = Promise.all([
     projectService.snapshot(settings.get("roots")),
     readWorkCliNames(),
-  ])
-    .then(([rawSnapshot, workCliNames]) => {
-      const reconciled = workspaceRegistry.reconcile(
-        rawSnapshot,
-        settings.get("workspaceRecords"),
-        workCliNames,
-      );
-      settings.set("workspaceRecords", [...reconciled.records]);
-      latestSnapshot = reconciled.snapshot;
-      mainWindow?.webContents.send(
-        ipcChannels.snapshotChanged,
-        reconciled.snapshot,
-      );
-      return reconciled.snapshot;
-    });
+  ]).then(([rawSnapshot, workCliNames]) =>
+    publishSnapshot(rawSnapshot, workCliNames, "replace"),
+  );
   activeRefresh = refresh;
   void refresh.then(
     () => {
@@ -451,6 +456,64 @@ function startSnapshotRefresh(): Promise<SilvicSnapshot> {
     },
   );
   return refresh;
+}
+
+function publishSnapshot(
+  rawSnapshot: SilvicSnapshot,
+  workCliNames: ReadonlyMap<string, string>,
+  mode: "replace" | "merge",
+): SilvicSnapshot {
+  const reconciled = workspaceRegistry.reconcile(
+    rawSnapshot,
+    settings.get("workspaceRecords"),
+    workCliNames,
+  );
+  settings.set("workspaceRecords", [...reconciled.records]);
+  latestSnapshot =
+    mode === "merge"
+      ? mergeSnapshots(latestSnapshot, reconciled.snapshot)
+      : reconciled.snapshot;
+  mainWindow?.webContents.send(ipcChannels.snapshotChanged, latestSnapshot);
+  return latestSnapshot;
+}
+
+/** A partial scan replaces the projects it covers and leaves the rest alone. */
+function mergeSnapshots(
+  current: SilvicSnapshot,
+  incoming: SilvicSnapshot,
+): SilvicSnapshot {
+  const byId = new Map(current.projects.map((project) => [project.id, project]));
+  for (const project of incoming.projects) byId.set(project.id, project);
+  return {
+    projects: [...byId.values()].sort((left, right) =>
+      left.name.localeCompare(right.name),
+    ),
+    connectorFailures:
+      incoming.connectorFailures.length > 0
+        ? incoming.connectorFailures
+        : current.connectorFailures,
+    refreshedAt: incoming.refreshedAt,
+  };
+}
+
+/**
+ * Git-only pass so the interface reflects a change immediately. Connector
+ * enrichment is an order of magnitude slower and arrives afterwards, so no
+ * user-facing action should ever wait for it.
+ */
+async function paintFromGit(
+  paths: readonly string[],
+  mode: "replace" | "merge" = "merge",
+): Promise<void> {
+  try {
+    const [rawSnapshot, workCliNames] = await Promise.all([
+      fastProjectService.snapshot(paths),
+      readWorkCliNames(),
+    ]);
+    publishSnapshot(rawSnapshot, workCliNames, mode);
+  } catch {
+    // The full refresh reports anything that genuinely failed.
+  }
 }
 
 async function openWorkspace(request: OpenWorkspaceRequest): Promise<void> {
