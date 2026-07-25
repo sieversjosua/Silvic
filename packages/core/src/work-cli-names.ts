@@ -9,18 +9,35 @@ import { basename, join, normalize, sep } from "node:path";
  * row of identical repository basenames.
  */
 export async function readWorkCliNames(
-  stateRoot = process.env.WORK_STATE_ROOT ?? join(homedir(), ".work-cli"),
+  stateRoot?: string,
 ): Promise<ReadonlyMap<string, string>> {
-  const names = new Map<string, string>();
-  const projects = await directories(join(stateRoot, "projects"));
-  for (const project of projects) {
+  const workspaces = await readWorkCliWorkspaces(stateRoot);
+  return new Map(
+    [...workspaces].map(([path, entry]) => [path, entry.workspace]),
+  );
+}
+
+export interface WorkCliWorkspace {
+  project: string;
+  workspace: string;
+  root: string;
+}
+
+/** Every worktree work-cli tracks, keyed by its normalised root path. */
+export async function readWorkCliWorkspaces(
+  stateRoot = process.env.WORK_STATE_ROOT ?? join(homedir(), ".work-cli"),
+): Promise<ReadonlyMap<string, WorkCliWorkspace>> {
+  const found = new Map<string, WorkCliWorkspace>();
+  for (const project of await directories(join(stateRoot, "projects"))) {
     const workspaceRoot = join(stateRoot, "projects", project, "workspaces");
     for (const workspace of await directories(workspaceRoot)) {
-      const state = await readState(join(workspaceRoot, workspace, "state.json"));
-      if (state) names.set(normalize(state.root), state.workspace);
+      const state = await readState(
+        join(workspaceRoot, workspace, "state.json"),
+      );
+      if (state) found.set(normalize(state.root), state);
     }
   }
-  return names;
+  return found;
 }
 
 /**
@@ -79,7 +96,7 @@ async function directories(path: string): Promise<string[]> {
 
 async function readState(
   path: string,
-): Promise<{ root: string; workspace: string } | undefined> {
+): Promise<WorkCliWorkspace | undefined> {
   try {
     const value: unknown = JSON.parse(await readFile(path, "utf8"));
     if (
@@ -88,9 +105,15 @@ async function readState(
       "root" in value &&
       typeof value.root === "string" &&
       "workspace" in value &&
-      typeof value.workspace === "string"
+      typeof value.workspace === "string" &&
+      "project" in value &&
+      typeof value.project === "string"
     ) {
-      return { root: value.root, workspace: value.workspace };
+      return {
+        root: value.root,
+        workspace: value.workspace,
+        project: value.project,
+      };
     }
   } catch {
     // An unreadable or half-written state file is skipped.
