@@ -2,6 +2,7 @@ import { create } from "zustand";
 
 import type {
   CreateEnvironmentRequest,
+  PlotCreationResult,
   SilvicSnapshot,
 } from "@silvic/contracts";
 
@@ -18,7 +19,7 @@ interface SilvicState {
   refresh(): Promise<void>;
   addRoot(): Promise<void>;
   setProjectActive(projectId: string, active: boolean): Promise<void>;
-  createEnvironment(request: CreateEnvironmentRequest): Promise<void>;
+  createEnvironment(request: CreateEnvironmentRequest): Promise<PlotCreationResult>;
   selectProject(id: string): void;
   selectWorkspace(id: string): void;
 }
@@ -96,16 +97,17 @@ export const useSilvic = create<SilvicState>((set, get) => ({
   createEnvironment: async (request) => {
     set({ loading: true, error: undefined });
     try {
-      const snapshot = await window.silvic.createEnvironment(request);
-      setSelectionForSnapshot(set, get, snapshot);
-      const created = snapshot.projects
+      const result = await window.silvic.createEnvironment(request);
+      setSelectionForSnapshot(set, get, result.snapshot);
+      const created = result.snapshot.projects
         .flatMap((project) => project.workspaces)
-        .find((workspace) => workspace.path === request.destinationPath);
+        .find((workspace) => workspace.path === result.plot.path);
       set({
-        snapshot,
+        snapshot: result.snapshot,
         selectedWorkspaceId: created?.workspaceId ?? get().selectedWorkspaceId,
         loading: false,
       });
+      return result;
     } catch (error) {
       set({ error: message(error), loading: false });
       throw error;

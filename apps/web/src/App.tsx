@@ -25,6 +25,7 @@ import type {
   ConnectorObservation,
   DeliveryDraft,
   HarnessDefinition,
+  PlotCreationResult,
   ProjectSnapshot,
   WorkspaceChanges,
   WorkspaceSnapshot,
@@ -261,16 +262,11 @@ export function App() {
 
       {error && <div className="error-toast">{error}</div>}
       {showEnvironment && project && (
-        <NewEnvironmentDialog
-          projectName={project.name}
-          projectRoot={project.rootPath}
+        <NewPlotDialog
           source={workspace ?? project.workspaces[0]}
           loading={loading}
           onCancel={() => setShowEnvironment(false)}
-          onCreate={async (request) => {
-            await createEnvironment(request);
-            setShowEnvironment(false);
-          }}
+          onCreate={createEnvironment}
         />
       )}
       {deliveryWorkspace && (
@@ -789,56 +785,119 @@ function Field({ label, value }: { label: string; value: string }) {
   );
 }
 
-function NewEnvironmentDialog({
-  projectName,
-  projectRoot,
+/**
+ * Creating a plot runs the repository's provisioning steps, which can take
+ * minutes and can fail halfway. The dialog stays open and reports each step
+ * rather than closing and leaving the result invisible.
+ */
+function NewPlotDialog({
   source,
   loading,
   onCancel,
   onCreate,
 }: {
-  projectName: string;
-  projectRoot: string;
   source: WorkspaceSnapshot | undefined;
   loading: boolean;
   onCancel(): void;
   onCreate(request: {
     sourcePath: string;
-    destinationPath: string;
     branch: string;
     mode: "worktree" | "clone";
-  }): Promise<void>;
+  }): Promise<PlotCreationResult>;
 }) {
   const [branch, setBranch] = useState("");
   const [mode, setMode] = useState<"worktree" | "clone">("worktree");
-  const safeBranch = branch
+  const [result, setResult] = useState<PlotCreationResult>();
+  const [failure, setFailure] = useState<string>();
+  const plotName = branch
     .trim()
     .replaceAll("/", "-")
     .replace(/[^a-zA-Z0-9._-]+/g, "-")
     .replace(/^-+|-+$/g, "");
-  const destinationPath = `${projectRoot.slice(0, projectRoot.lastIndexOf("/"))}/${projectName}-${safeBranch}`;
 
   if (!source) return null;
+
+  if (result) {
+    const failed = result.provision.find((step) => step.exitCode !== 0);
+    return (
+      <div className="scrim" onMouseDown={onCancel}>
+        <section
+          className="dialog"
+          onMouseDown={(event) => event.stopPropagation()}
+        >
+          <p className="micro">{failed ? "Provisioning failed" : "Plot ready"}</p>
+          <h2>{result.plot.name}</h2>
+          <div className="field">
+            <span className="field-label">Address</span>
+            <i className="field-leader" />
+            <span className="field-value mono">{result.plot.url}</span>
+          </div>
+          <div className="field">
+            <span className="field-label">Location</span>
+            <i className="field-leader" />
+            <span className="field-value mono">{result.plot.path}</span>
+          </div>
+          {result.provision.length === 0 ? (
+            <p className="dialog-copy">
+              This repository declares no provisioning steps. Add a
+              <code> silvic.json </code> to install dependencies, create a
+              deployment or write environment files when a plot is made.
+            </p>
+          ) : (
+            <ol className="provision-steps">
+              {result.provision.map((step) => (
+                <li key={step.label} data-failed={step.exitCode !== 0 || undefined}>
+                  <div className="provision-head">
+                    <strong>{step.label}</strong>
+                    <span className="mono">
+                      {step.exitCode === 0
+                        ? `${Math.round(step.durationMs / 100) / 10}s`
+                        : `exit ${step.exitCode}`}
+                    </span>
+                  </div>
+                  <code className="mono">{step.command}</code>
+                  {step.exitCode !== 0 && step.output && (
+                    <pre className="patch mono">{step.output}</pre>
+                  )}
+                </li>
+              ))}
+            </ol>
+          )}
+          <div className="dialog-actions">
+            <button type="button" className="primary-button" onClick={onCancel}>
+              Done
+            </button>
+          </div>
+        </section>
+      </div>
+    );
+  }
+
   return (
-    <div className="scrim" onMouseDown={onCancel}>
+    <div className="scrim" onMouseDown={loading ? undefined : onCancel}>
       <form
         className="dialog"
         onMouseDown={(event) => event.stopPropagation()}
         onSubmit={(event) => {
           event.preventDefault();
-          if (!branch.trim() || !safeBranch) return;
+          if (!plotName || loading) return;
+          setFailure(undefined);
           void onCreate({
             sourcePath: source.path,
-            destinationPath,
             branch: branch.trim(),
             mode,
-          });
+          })
+            .then(setResult)
+            .catch((error: unknown) =>
+              setFailure(error instanceof Error ? error.message : String(error)),
+            );
         }}
       >
         <p className="micro">New plot</p>
         <h2>Branch from {source.name}</h2>
         <p className="dialog-copy">
-          Create a ready-to-open workspace beside the primary checkout.
+          Silvic creates the worktree, assigns a stable address, then runs
+          whatever this repository declares as provisioning.
         </p>
         <label className="dialog-field">
           <span className="micro">Branch</span>
@@ -872,12 +931,22 @@ function NewEnvironmentDialog({
             <span>Fully isolated Git directory</span>
           </label>
         </fieldset>
-        {safeBranch && <p className="destination mono">{destinationPath}</p>}
+        {plotName && <p className="destination mono">{plotName}</p>}
+        {failure && <p className="dialog-error">{failure}</p>}
         <div className="dialog-actions">
-          <button type="button" className="ghost-button" onClick={onCancel}>
+          <button
+            type="button"
+            className="ghost-button"
+            onClick={onCancel}
+            disabled={loading}
+          >
             Cancel
           </button>
-          <button type="submit" className="primary-button" disabled={loading || !safeBranch}>
+          <button
+            type="submit"
+            className="primary-button"
+            disabled={loading || !plotName}
+          >
             {loading ? "Creating…" : "Create plot"}
           </button>
         </div>

@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join, normalize } from "node:path";
+import { join, normalize } from "node:path";
 import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 
@@ -33,6 +33,7 @@ import {
   type AppearancePreference,
   type CreateEnvironmentRequest,
   type HarnessIcons,
+  type PlotCreationResult,
   type OpenWorkspaceRequest,
   type SilvicSnapshot,
 } from "@silvic/contracts";
@@ -42,7 +43,11 @@ import {
   EnvironmentService,
   LocalCommandRunner,
   ProjectService,
+  Provisioner,
   WorkspaceRegistry,
+  plotPort,
+  plotUrl,
+  readRecipe,
   readWorkCliNames,
   resolvedCommandPath,
   type WorkspaceRecord,
@@ -54,6 +59,8 @@ interface Settings {
   legacyMigrationCompleted: boolean;
   appearance: AppearancePreference;
   activeProjects: string[];
+  /** Plot path to the port it was assigned, so addresses stay stable. */
+  plotPorts: Record<string, number>;
 }
 
 /** Matches `--surface-sunk` in the renderer so the first frame never flashes. */
@@ -78,6 +85,7 @@ const fastProjectService = new ProjectService({
 });
 const environmentService = new EnvironmentService(runner);
 const deliveryService = new DeliveryService(runner);
+const provisioner = new Provisioner(runner);
 const workspaceRegistry = new WorkspaceRegistry();
 const settings = new Store<Settings>({
   name: "settings",
@@ -87,6 +95,7 @@ const settings = new Store<Settings>({
     legacyMigrationCompleted: false,
     appearance: "system",
     activeProjects: [],
+    plotPorts: {},
   },
 });
 
@@ -370,7 +379,7 @@ function assertTrustedSender(event: IpcMainInvokeEvent): void {
 
 async function createEnvironment(
   request: CreateEnvironmentRequest,
-): Promise<SilvicSnapshot> {
+): Promise<PlotCreationResult> {
   const sourcePath = normalize(request.sourcePath);
   const project = latestSnapshot.projects.find((candidate) =>
     candidate.workspaces.some(
@@ -382,13 +391,14 @@ async function createEnvironment(
   );
   if (!project || !source) throw new Error("Choose a discovered Workspace");
 
-  const destinationPath = join(
-    dirname(project.rootPath),
-    `${safePathSegment(project.name)}-${safePathSegment(request.branch)}`,
-  );
-  if (normalize(request.destinationPath) !== normalize(destinationPath)) {
-    throw new Error("The environment destination is not valid");
-  }
+  // The recipe decides where plots live and what the project is called, so the
+  // renderer no longer has to guess a destination path.
+  const recipe = await readRecipe(project.rootPath);
+  const plot = safePathSegment(request.branch);
+  if (!plot) throw new Error("That branch name has no usable plot name");
+  const destinationPath = join(recipe.directory, plot);
+  const port = plotPort(recipe.project, plot, takenPlotPorts());
+  const url = plotUrl(port);
 
   await environmentService.create({
     sourcePath,
@@ -419,9 +429,29 @@ async function createEnvironment(
       displayName: request.branch,
     },
   ]);
+  settings.set("plotPorts", { ...settings.get("plotPorts"), [destinationPath]: port });
+
+  const provision = await provisioner.run(recipe.provision, {
+    root: destinationPath,
+    sourceRoot: project.rootPath,
+    project: recipe.project,
+    plot,
+    branch: request.branch,
+    url,
+  });
+
   await paintFromGit([project.rootPath, destinationPath]);
   void refreshSnapshot(true);
-  return latestSnapshot;
+  return {
+    snapshot: latestSnapshot,
+    plot: { name: plot, path: destinationPath, port, url },
+    provision,
+  };
+}
+
+/** Ports already handed out, so two plots never land on the same one. */
+function takenPlotPorts(): Set<number> {
+  return new Set(Object.values(settings.get("plotPorts")));
 }
 
 function refreshSnapshot(forceFresh = false): Promise<SilvicSnapshot> {

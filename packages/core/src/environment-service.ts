@@ -8,6 +8,8 @@ import type { CommandRunner } from "./command-runner";
 import { requireSuccess } from "./command-runner";
 
 export interface EnvironmentCreationOptions extends CreateEnvironmentRequest {
+  /** Decided by the recipe, not by the caller of the IPC request. */
+  destinationPath: string;
   origin?: string;
   startPoint?: string;
 }

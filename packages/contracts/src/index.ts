@@ -166,6 +166,53 @@ export const openWorkspaceRequestSchema = z
   .strict();
 export type OpenWorkspaceRequest = z.infer<typeof openWorkspaceRequestSchema>;
 
+/**
+ * The optional `silvic.json` at a repository root. Every field has a working
+ * default, so a repository with no recipe still produces a usable Plot.
+ */
+export const provisionStepSchema = z
+  .object({
+    run: z.string().min(1).max(2_000),
+    label: z.string().min(1).max(120).optional(),
+  })
+  .strict();
+export type ProvisionStep = z.infer<typeof provisionStepSchema>;
+
+export const plotCommandSchema = z
+  .object({
+    run: z.string().min(1).max(2_000),
+    url: z.boolean().optional(),
+    autoStart: z.boolean().optional(),
+  })
+  .strict();
+export type PlotCommand = z.infer<typeof plotCommandSchema>;
+
+export const recipeSchema = z
+  .object({
+    project: z.string().min(1).max(120).optional(),
+    plots: z
+      .object({ directory: z.string().min(1).max(400).optional() })
+      .strict()
+      .optional(),
+    commands: z
+      .record(
+        z.string().regex(/^[a-z][a-z0-9-]*$/).max(60),
+        plotCommandSchema,
+      )
+      .optional(),
+    provision: z.array(provisionStepSchema).max(50).optional(),
+  })
+  .strict();
+export type Recipe = z.infer<typeof recipeSchema>;
+
+export interface ProvisionResult {
+  label: string;
+  command: string;
+  exitCode: number;
+  output: string;
+  durationMs: number;
+}
+
 export const openLinkRequestSchema = z
   .object({
     url: z
@@ -179,7 +226,6 @@ export type OpenLinkRequest = z.infer<typeof openLinkRequestSchema>;
 export const createEnvironmentRequestSchema = z
   .object({
     sourcePath: z.string().min(1),
-    destinationPath: z.string().min(1),
     branch: z.string().min(1).max(240),
     mode: z.enum(["worktree", "clone"]),
   })
@@ -227,6 +273,12 @@ export type DeliveryExecuteRequest = z.infer<
   typeof deliveryExecuteRequestSchema
 >;
 
+export interface PlotCreationResult {
+  snapshot: SilvicSnapshot;
+  plot: { name: string; path: string; port: number; url: string };
+  provision: readonly ProvisionResult[];
+}
+
 export interface DeliveryResult {
   pullRequestUrl?: string;
 }
@@ -253,7 +305,7 @@ export interface SilvicDesktopApi {
   addRoot(): Promise<readonly string[]>;
   removeRoot(root: string): Promise<readonly string[]>;
   refresh(): Promise<SilvicSnapshot>;
-  createEnvironment(request: CreateEnvironmentRequest): Promise<SilvicSnapshot>;
+  createEnvironment(request: CreateEnvironmentRequest): Promise<PlotCreationResult>;
   getChanges(request: WorkspacePathRequest): Promise<WorkspaceChanges>;
   draftDelivery(request: WorkspacePathRequest): Promise<DeliveryDraft>;
   executeDelivery(request: DeliveryExecuteRequest): Promise<DeliveryResult>;
