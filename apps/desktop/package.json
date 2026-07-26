@@ -8,7 +8,7 @@
   "type": "module",
   "main": "out/main/main.js",
   "scripts": {
-    "dev": "electron-vite dev --config electron.vite.config.ts",
+    "dev": "electron-vite dev --watch --config electron.vite.config.ts",
     "build": "electron-vite build --config electron.vite.config.ts && node ../../Scripts/verify-electron-bundle.mjs",
     "package:mac": "bash ../../Scripts/package-mac.sh"
   },
