@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Bot,
   ChevronDown,
-  Cloud,
   ExternalLink,
   FolderOpen,
   GitBranch,
@@ -35,6 +34,7 @@ import type {
 import { useAppearance } from "./appearance";
 import { Grove } from "./Grove";
 import { Mark } from "./Mark";
+import { ClaudeMark, CodexMark, ConvexMark, T3Mark } from "./providers";
 import { RecipeDialog } from "./RecipeDialog";
 import {
   localChangeCount,
@@ -46,8 +46,8 @@ import {
 import { useSilvic } from "./store";
 
 const harnessMenu = [
-  ["claude", "Claude Code", <Bot size={15} key="claude" />],
-  ["t3-code", "T3 Code", <SquareTerminal size={15} key="t3" />],
+  ["claude", "Claude Code", <ClaudeMark size={15} key="claude" />],
+  ["t3-code", "T3 Code", <T3Mark size={15} key="t3" />],
   ["opencode", "OpenCode", <SquareTerminal size={15} key="opencode" />],
   ["terminal", "Terminal", <Terminal size={15} key="terminal" />],
   ["finder", "Finder", <FolderOpen size={15} key="finder" />],
@@ -638,7 +638,7 @@ function WorkspaceInspector({
             <HarnessIcon
               id="codex"
               icons={harnessIcons}
-              fallback={<Bot size={13} />}
+              fallback={<CodexMark size={14} />}
             />
             Open in Codex
           </button>
@@ -698,7 +698,7 @@ function WorkspaceInspector({
           empty="No local runtime detected"
         />
         <Observations
-          icon={<Cloud size={12} />}
+          icon={<ConvexMark size={12} />}
           title="Deployment"
           observations={grouped.get("deployment") ?? []}
           empty="No deployment attached"
@@ -710,7 +710,7 @@ function WorkspaceInspector({
           empty="No pull request"
         />
         <Observations
-          icon={<Bot size={12} />}
+          icon={<CodexMark size={12} />}
           title="Sessions"
           observations={grouped.get("session") ?? []}
           empty="No active agent session"

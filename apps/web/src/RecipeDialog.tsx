@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import {
   ChevronDown,
   ChevronUp,
-  Cloud,
   Plus,
   Sparkles,
   Terminal,
@@ -17,6 +16,8 @@ import {
   type RecipeDocument,
   type RepositoryFindings,
 } from "@silvic/contracts";
+
+import { ConvexMark } from "./providers";
 
 type CommandEntry = { id: string } & PlotCommand;
 type Section = "location" | "commands" | "provision";
@@ -264,7 +265,7 @@ export function RecipeDialog({
                         ])
                       }
                     >
-                      <Cloud size={12} /> Convex
+                      <ConvexMark size={12} /> Convex
                     </button>
                   </div>
                 </div>
@@ -277,7 +278,15 @@ export function RecipeDialog({
                   <div className="recipe-step" key={index}>
                     <div className="recipe-step-head">
                       <span className="micro">
-                        {isConvexStep(step) ? "Convex deployment" : "Command"}
+                        {isConvexStep(step) ? (
+                          <>
+                            <ConvexMark size={12} /> Convex deployment
+                          </>
+                        ) : (
+                          <>
+                            <Terminal size={11} /> Command
+                          </>
+                        )}
                       </span>
                       <div className="recipe-step-tools">
                         <button
@@ -461,7 +470,7 @@ function Suggestion({
   if (seen.length === 0) return null;
   return (
     <div className="recipe-suggestion">
-      <Sparkles size={13} />
+      {findings.convex ? <ConvexMark size={15} /> : <Sparkles size={13} />}
       <div>
         <strong>Found {seen.join(" · ")}</strong>
         <span>Silvic can propose a recipe from this.</span>

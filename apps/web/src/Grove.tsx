@@ -14,8 +14,6 @@ import {
   type NodeProps,
 } from "@xyflow/react";
 import {
-  Bot,
-  Cloud,
   Copy,
   FolderOpen,
   GitBranch,
@@ -40,6 +38,7 @@ import type {
 } from "@silvic/contracts";
 
 import { substrate, type Appearance } from "./appearance";
+import { ClaudeMark, CodexMark, ConvexMark, T3Mark } from "./providers";
 import {
   QUIET_FOLD_MIN,
   isQuiet,
@@ -416,7 +415,7 @@ function WorkspaceNode({ data }: NodeProps<WorkspaceFlowNode>) {
               height={13}
             />
           ) : (
-            <Bot size={12} />
+            <CodexMark size={13} />
           )}
           Open
         </button>
@@ -465,9 +464,9 @@ function WorkspaceNode({ data }: NodeProps<WorkspaceFlowNode>) {
 }
 
 const plotHarnesses = [
-  ["codex", "Codex", <Bot size={14} key="codex" />],
-  ["claude", "Claude Code", <Bot size={14} key="claude" />],
-  ["t3-code", "T3 Code", <SquareTerminal size={14} key="t3" />],
+  ["codex", "Codex", <CodexMark size={14} key="codex" />],
+  ["claude", "Claude Code", <ClaudeMark size={14} key="claude" />],
+  ["t3-code", "T3 Code", <T3Mark size={14} key="t3" />],
   ["opencode", "OpenCode", <SquareTerminal size={14} key="opencode" />],
   ["terminal", "Terminal", <Terminal size={14} key="terminal" />],
 ] as const;
@@ -595,9 +594,9 @@ function QuietNode({ data }: NodeProps<QuietFlowNode>) {
 
 function signalIcon(kind: ConnectorObservation["kind"]) {
   if (kind === "runtime") return <Play size={10} />;
-  if (kind === "deployment") return <Cloud size={10} />;
+  if (kind === "deployment") return <ConvexMark size={10} />;
   if (kind === "review") return <GitPullRequest size={10} />;
-  if (kind === "session") return <Bot size={10} />;
+  if (kind === "session") return <CodexMark size={10} />;
   return <Radio size={10} />;
 }
 
