@@ -47,6 +47,7 @@ import {
   type RecipeDocument,
   type OpenWorkspaceRequest,
   type SilvicSnapshot,
+  type WorkspaceSnapshot,
 } from "@silvic/contracts";
 import {
   ConnectorRegistry,
@@ -375,13 +376,15 @@ function registerIpc(): void {
     if (!result) throw new Error("The step produced no result");
     return result;
   });
-  ipcMain.handle(ipcChannels.teardownPlan, (event, request: unknown) => {
+  ipcMain.handle(ipcChannels.teardownPlan, async (event, request: unknown) => {
     assertTrustedSender(event);
     const parsed = teardownRequestSchema.parse(request);
+    const workspace = knownWorkspace(parsed.path);
     return planTeardown({
-      workspace: knownWorkspace(parsed.path),
+      workspace,
       scope: parsed.scope,
       deleteBranch: parsed.deleteBranch,
+      heldOnlyHere: await commitsHeldOnlyHere(workspace),
     });
   });
   ipcMain.handle(ipcChannels.teardownRun, async (event, request: unknown) => {
@@ -398,6 +401,7 @@ function registerIpc(): void {
       workspace,
       scope: parsed.scope,
       deleteBranch: parsed.deleteBranch,
+      heldOnlyHere: await commitsHeldOnlyHere(workspace),
     });
     const results = await teardownService.execute(plan, {
       path: workspace.path,
@@ -786,6 +790,36 @@ function withProvisioning(snapshot: SilvicSnapshot): SilvicSnapshot {
       }),
     })),
   };
+}
+
+/**
+ * How many commits would stop being reachable if this branch went away: those
+ * on it and on no other ref, local or remote. Zero means deleting the branch
+ * discards nothing, which is the ordinary state of a plot nobody committed in.
+ * Undefined when the question could not be answered, so teardown can refuse
+ * rather than assume either way.
+ */
+async function commitsHeldOnlyHere(
+  workspace: WorkspaceSnapshot,
+): Promise<number | undefined> {
+  const branch = workspace.git.branch;
+  if (!branch) return undefined;
+  const result = await runner.run({
+    executable: "git",
+    arguments: [
+      "rev-list",
+      "--count",
+      branch,
+      "--not",
+      `--exclude=${branch}`,
+      "--branches",
+      "--remotes",
+    ],
+    cwd: workspace.path,
+  });
+  if (result.exitCode !== 0) return undefined;
+  const count = Number.parseInt(result.stdout.trim(), 10);
+  return Number.isNaN(count) ? undefined : count;
 }
 
 /** Plots are directories named `<project>-<plot>`; older ones are `<plot>`. */

@@ -108,14 +108,17 @@ describe("planTeardown", () => {
     expect(plan.blockers.join(" ")).toMatch(/3 uncommitted changes/);
   });
 
-  it("blocks removal while commits are unpushed", () => {
+  it("removes a worktree holding unpushed commits, since the branch keeps them", () => {
     const plan = planTeardown({
       workspace: plot({ git: { ...plot().git, ahead: 2 } }),
       scope: "remove",
       deleteBranch: false,
+      heldOnlyHere: 2,
     });
 
-    expect(plan.blockers.join(" ")).toMatch(/2 commits are not pushed/);
+    // Deleting a worktree deletes no commits. They are still on the branch,
+    // which this plan keeps.
+    expect(plan.blockers).toEqual([]);
   });
 
   it("removes a clean worktree and keeps the branch by default", () => {
@@ -131,15 +134,41 @@ describe("planTeardown", () => {
     expect(plan.keeps.join(" ")).toMatch(/feature\/auth/);
   });
 
-  it("will not delete a branch that exists nowhere else", () => {
+  it("will not delete a branch holding commits that exist nowhere else", () => {
+    const plan = planTeardown({
+      workspace: plot(),
+      scope: "remove",
+      deleteBranch: true,
+      heldOnlyHere: 2,
+    });
+
+    expect(plan.blockers.join(" ")).toMatch(/2 commits exist only on/i);
+  });
+
+  it("deletes a never-pushed branch that holds nothing of its own", () => {
+    // The ordinary plot: branched from main, never committed in, no upstream.
+    // Nothing is lost by deleting it, so nothing should stand in the way.
     const { upstream: _ignored, ...withoutUpstream } = plot().git;
     const plan = planTeardown({
       workspace: plot({ git: withoutUpstream }),
       scope: "remove",
       deleteBranch: true,
+      heldOnlyHere: 0,
     });
 
-    expect(plan.blockers.join(" ")).toMatch(/no upstream/i);
+    expect(plan.blockers).toEqual([]);
+    expect(plan.steps.some((step) => step.id === "branch")).toBe(true);
+  });
+
+  it("refuses rather than guesses when the count could not be taken", () => {
+    const plan = planTeardown({
+      workspace: plot(),
+      scope: "remove",
+      deleteBranch: true,
+      heldOnlyHere: undefined,
+    });
+
+    expect(plan.blockers.join(" ")).toMatch(/could not tell/i);
   });
 
   it("hands an independent clone back rather than deleting the directory", () => {

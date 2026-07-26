@@ -38,12 +38,19 @@ export interface TeardownRequest {
   workspace: WorkspaceSnapshot;
   scope: TeardownScope;
   deleteBranch: boolean;
+  /**
+   * Commits reachable from this branch and from no other ref, local or remote.
+   * Zero means deleting the branch discards nothing, however it was set up.
+   * `undefined` means Silvic could not measure it and will not guess.
+   */
+  heldOnlyHere?: number | undefined;
 }
 
 export function planTeardown({
   workspace,
   scope,
   deleteBranch,
+  heldOnlyHere,
 }: TeardownRequest): TeardownPlan {
   const steps: TeardownStep[] = [];
   const blockers: string[] = [];
@@ -108,11 +115,8 @@ export function planTeardown({
       `${uncommitted} uncommitted change${uncommitted === 1 ? "" : "s"} would be lost. Commit or discard them first.`,
     );
   }
-  if (workspace.git.ahead > 0) {
-    blockers.push(
-      `${workspace.git.ahead} commit${workspace.git.ahead === 1 ? "" : "s"} are not pushed. Push them first, or they only exist here.`,
-    );
-  }
+  // Unpushed commits are not at risk here: removing a worktree deletes no
+  // commits, and the branch still holds them unless it is deleted too.
 
   if (workspace.locationKind === "worktree") {
     steps.push({
@@ -131,9 +135,17 @@ export function planTeardown({
   }
 
   if (deleteBranch) {
-    if (!workspace.git.upstream) {
+    // Whether a branch was ever pushed says nothing about whether it holds
+    // work: a plot branched from main and never committed to is the common
+    // case, and deleting it discards nothing. What matters is whether any
+    // commit would become unreachable, which is a thing to count, not guess.
+    if (heldOnlyHere === undefined) {
       blockers.push(
-        `${workspace.branch} has no upstream, so deleting it would be the only copy.`,
+        `Silvic could not tell whether ${workspace.branch} holds commits that exist nowhere else. Delete it yourself once you know.`,
+      );
+    } else if (heldOnlyHere > 0) {
+      blockers.push(
+        `${heldOnlyHere} commit${heldOnlyHere === 1 ? "" : "s"} exist only on ${workspace.branch}. Push or merge them first, or deleting the branch is the end of them.`,
       );
     }
     steps.push({
