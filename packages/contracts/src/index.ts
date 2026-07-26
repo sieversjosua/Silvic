@@ -160,6 +160,17 @@ export interface SilvicSnapshot {
   refreshedAt: string;
 }
 
+export const harnessIdSchema = z.enum([
+  "codex",
+  "claude",
+  "t3-code",
+  "opencode",
+  "vscode",
+  "terminal",
+  "finder",
+]);
+export type HarnessId = z.infer<typeof harnessIdSchema>;
+
 export const openWorkspaceRequestSchema = z
   .object({
     path: z.string().min(1),
@@ -386,6 +397,8 @@ export interface SilvicDesktopApi {
     request: ProjectActivationRequest,
   ): Promise<readonly string[]>;
   copyText(text: string): Promise<void>;
+  getDefaultHarness(): Promise<HarnessId>;
+  setDefaultHarness(id: HarnessId): Promise<HarnessId>;
   getRecipe(projectId: string): Promise<RecipeDocument>;
   inspectProject(projectId: string): Promise<RepositoryFindings>;
   saveRecipe(request: RecipeSaveRequest): Promise<RecipeDocument>;
@@ -411,6 +424,8 @@ export const ipcChannels = {
   projectsActiveGet: "silvic:projects:active:get",
   projectsActiveSet: "silvic:projects:active:set",
   clipboardWrite: "silvic:clipboard:write",
+  defaultHarnessGet: "silvic:harness:default:get",
+  defaultHarnessSet: "silvic:harness:default:set",
   recipeGet: "silvic:recipe:get",
   projectInspect: "silvic:project:inspect",
   recipeSave: "silvic:recipe:save",

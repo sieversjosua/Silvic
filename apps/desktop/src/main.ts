@@ -25,6 +25,7 @@ import { createWorkCliConnector } from "@silvic/connector-work-cli";
 import {
   appearancePreferenceSchema,
   createEnvironmentRequestSchema,
+  harnessIdSchema,
   deliveryExecuteRequestSchema,
   ipcChannels,
   openLinkRequestSchema,
@@ -34,6 +35,7 @@ import {
   workspacePathRequestSchema,
   type AppearancePreference,
   type CreateEnvironmentRequest,
+  type HarnessId,
   type PlotCreationResult,
   type RecipeDocument,
   type OpenWorkspaceRequest,
@@ -64,6 +66,7 @@ interface Settings {
   legacyMigrationCompleted: boolean;
   appearance: AppearancePreference;
   activeProjects: string[];
+  defaultHarness: HarnessId;
   /** Plot path to the port it was assigned, so addresses stay stable. */
   plotPorts: Record<string, number>;
 }
@@ -100,6 +103,7 @@ const settings = new Store<Settings>({
     legacyMigrationCompleted: false,
     appearance: "system",
     activeProjects: [],
+    defaultHarness: "codex",
     plotPorts: {},
   },
 });
@@ -301,6 +305,16 @@ function registerIpc(): void {
       throw new Error("Invalid text to copy");
     }
     clipboard.writeText(text);
+  });
+  ipcMain.handle(ipcChannels.defaultHarnessGet, (event) => {
+    assertTrustedSender(event);
+    return settings.get("defaultHarness");
+  });
+  ipcMain.handle(ipcChannels.defaultHarnessSet, (event, id: unknown) => {
+    assertTrustedSender(event);
+    const parsed = harnessIdSchema.parse(id);
+    settings.set("defaultHarness", parsed);
+    return parsed;
   });
   ipcMain.handle(ipcChannels.recipeGet, async (event, projectId: unknown) => {
     assertTrustedSender(event);

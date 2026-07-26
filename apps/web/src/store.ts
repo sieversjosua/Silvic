@@ -2,6 +2,7 @@ import { create } from "zustand";
 
 import type {
   CreateEnvironmentRequest,
+  HarnessId,
   PlotCreationResult,
   SilvicSnapshot,
 } from "@silvic/contracts";
@@ -10,6 +11,7 @@ interface SilvicState {
   snapshot: SilvicSnapshot;
   roots: readonly string[];
   activeProjectIds: readonly string[];
+  defaultHarness: HarnessId;
   selectedProjectId: string | undefined;
   selectedWorkspaceId: string | undefined;
   loading: boolean;
@@ -18,6 +20,7 @@ interface SilvicState {
   refresh(): Promise<void>;
   addRoot(): Promise<void>;
   setProjectActive(projectId: string, active: boolean): Promise<void>;
+  setDefaultHarness(id: HarnessId): Promise<void>;
   createEnvironment(request: CreateEnvironmentRequest): Promise<PlotCreationResult>;
   selectProject(id: string): void;
   selectWorkspace(id: string): void;
@@ -33,18 +36,21 @@ export const useSilvic = create<SilvicState>((set, get) => ({
   snapshot: emptySnapshot,
   roots: [],
   activeProjectIds: [],
+  defaultHarness: "codex",
   selectedProjectId: undefined,
   selectedWorkspaceId: undefined,
   loading: true,
   error: undefined,
   initialize: async () => {
     try {
-      const [snapshot, roots, activeProjectIds] = await Promise.all([
-        window.silvic.getSnapshot(),
-        window.silvic.getRoots(),
-        window.silvic.getActiveProjects(),
-      ]);
-      set({ activeProjectIds });
+      const [snapshot, roots, activeProjectIds, defaultHarness] =
+        await Promise.all([
+          window.silvic.getSnapshot(),
+          window.silvic.getRoots(),
+          window.silvic.getActiveProjects(),
+          window.silvic.getDefaultHarness(),
+        ]);
+      set({ activeProjectIds, defaultHarness });
       setSelectionForSnapshot(set, get, snapshot);
       set({ snapshot, roots, loading: false });
       return window.silvic.onSnapshot((nextSnapshot) => {
@@ -86,6 +92,14 @@ export const useSilvic = create<SilvicState>((set, get) => ({
       });
       set({ activeProjectIds });
       setSelectionForSnapshot(set, get, get().snapshot);
+    } catch (error) {
+      set({ error: message(error) });
+    }
+  },
+  setDefaultHarness: async (id) => {
+    set({ defaultHarness: id });
+    try {
+      await window.silvic.setDefaultHarness(id);
     } catch (error) {
       set({ error: message(error) });
     }

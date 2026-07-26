@@ -24,6 +24,7 @@ import type {
   ConnectorObservation,
   DeliveryDraft,
   HarnessDefinition,
+  HarnessId,
   PlotCreationResult,
   ProjectSnapshot,
   WorkspaceChanges,
@@ -33,6 +34,7 @@ import type {
 import { useAppearance } from "./appearance";
 import { Grove } from "./Grove";
 import { Mark } from "./Mark";
+import { HarnessRows, harnessLabel } from "./harnesses";
 import { CodexMark, ConvexMark, HarnessMark } from "./providers";
 import { RecipeDialog } from "./RecipeDialog";
 import {
@@ -44,15 +46,11 @@ import {
 } from "./state";
 import { useSilvic } from "./store";
 
-const harnessMenu = [
-  ["claude", "Claude Code"],
-  ["t3-code", "T3 Code"],
-  ["opencode", "OpenCode"],
-  ["vscode", "VS Code"],
-  ["terminal", "Terminal"],
-  ["finder", "Finder"],
-] as const;
 
+/**
+ * Each row can be made the default for the Open button. The control sits on the
+ * left so the current default is scannable down the edge of the menu.
+ */
 export function App() {
   const {
     snapshot,
@@ -66,6 +64,8 @@ export function App() {
     refresh,
     addRoot,
     setProjectActive,
+    defaultHarness,
+    setDefaultHarness,
     createEnvironment,
     selectProject,
     selectWorkspace,
@@ -238,6 +238,8 @@ export function App() {
               onSelect={selectWorkspace}
               onOpen={openWorkspace}
               onEditRecipe={() => setRecipeProject(project)}
+              defaultHarness={defaultHarness}
+              onSetDefaultHarness={(id) => void setDefaultHarness(id)}
               onNewPlot={() => setShowEnvironment(true)}
             />
 
@@ -252,6 +254,8 @@ export function App() {
           <WorkspaceInspector
             key={workspace.workspaceId}
             workspace={workspace}
+            defaultHarness={defaultHarness}
+            onSetDefaultHarness={(id) => void setDefaultHarness(id)}
             onOpen={openWorkspace}
             onShip={() => setDeliveryWorkspace(workspace)}
           />
@@ -571,10 +575,14 @@ function AppearanceControl({
 
 function WorkspaceInspector({
   workspace,
+  defaultHarness,
+  onSetDefaultHarness,
   onOpen,
   onShip,
 }: {
   workspace: WorkspaceSnapshot;
+  defaultHarness: HarnessId;
+  onSetDefaultHarness(id: HarnessId): void;
   onOpen(path: string, target: HarnessDefinition["id"]): void;
   onShip(): void;
 }) {
@@ -605,9 +613,12 @@ function WorkspaceInspector({
         )}
 
         <div className="split-button">
-          <button type="button" onClick={() => void onOpen(workspace.path, "codex")}>
-            <CodexMark size={14} />
-            Open in Codex
+          <button
+            type="button"
+            onClick={() => void onOpen(workspace.path, defaultHarness)}
+          >
+            <HarnessMark id={defaultHarness} size={14} />
+            Open in {harnessLabel(defaultHarness)}
           </button>
           <button
             type="button"
@@ -622,19 +633,14 @@ function WorkspaceInspector({
             <>
               <div className="menu-scrim" onClick={() => setOpenMenu(false)} />
               <div className="menu">
-                {harnessMenu.map(([id, label]) => (
-                  <button
-                    type="button"
-                    key={id}
-                    onClick={() => {
-                      setOpenMenu(false);
-                      void onOpen(workspace.path, id);
-                    }}
-                  >
-                    <HarnessMark id={id} />
-                    {label}
-                  </button>
-                ))}
+                <HarnessRows
+                  defaultHarness={defaultHarness}
+                  onOpen={(id) => {
+                    setOpenMenu(false);
+                    void onOpen(workspace.path, id);
+                  }}
+                  onSetDefault={onSetDefaultHarness}
+                />
               </div>
             </>
           )}

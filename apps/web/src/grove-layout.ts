@@ -3,7 +3,7 @@ import type { ProjectSnapshot, WorkspaceSnapshot } from "@silvic/contracts";
 import { workspaceState } from "./state";
 
 export const NODE_WIDTH = 268;
-export const NODE_HEIGHT = 152;
+export const NODE_HEIGHT = 184;
 const COLUMN_GAP = 108;
 const ROW_GAP = 22;
 /** Roughly the proportions of the canvas area between rail and inspector. */

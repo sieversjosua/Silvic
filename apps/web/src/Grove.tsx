@@ -31,6 +31,7 @@ import {
 
 import type {
   ConnectorObservation,
+  HarnessId,
   HarnessDefinition,
   ProjectSnapshot,
   WorkspaceSnapshot,
@@ -48,6 +49,7 @@ import {
   isQuiet,
   layout,
 } from "./grove-layout";
+import { HarnessRows, harnessLabel } from "./harnesses";
 import {
   cardSignals,
   locationLabel,
@@ -73,6 +75,8 @@ interface WorkspaceNodeData extends Record<string, unknown> {
   onCloseMenu(): void;
   onEditRecipe(): void;
   onNewPlot(): void;
+  defaultHarness: HarnessId;
+  onSetDefaultHarness(id: HarnessId): void;
 }
 
 interface QuietNodeData extends Record<string, unknown> {
@@ -93,6 +97,8 @@ interface GroveProps {
   onOpen(path: string, target: HarnessDefinition["id"]): void;
   onEditRecipe(): void;
   onNewPlot(): void;
+  defaultHarness: HarnessId;
+  onSetDefaultHarness(id: HarnessId): void;
 }
 
 const nodeTypes = { workspace: memo(WorkspaceNode), quiet: memo(QuietNode) };
@@ -114,6 +120,8 @@ function GroveCanvas({
   onOpen,
   onEditRecipe,
   onNewPlot,
+  defaultHarness,
+  onSetDefaultHarness,
 }: GroveProps) {
   const [nudges, setNudges] = useState<ProjectNudges>(() =>
     readNudges(project.id),
@@ -167,6 +175,8 @@ function GroveCanvas({
           onCloseMenu: () => setMenuPlotId(undefined),
           onEditRecipe,
           onNewPlot,
+          defaultHarness,
+          onSetDefaultHarness,
         },
       } satisfies WorkspaceFlowNode;
     });
@@ -181,6 +191,8 @@ function GroveCanvas({
     onOpen,
     onEditRecipe,
     onNewPlot,
+    defaultHarness,
+    onSetDefaultHarness,
   ]);
 
   const quietTotal = project.workspaces.filter(isQuiet).length;
@@ -435,11 +447,11 @@ function WorkspaceNode({ data }: NodeProps<WorkspaceFlowNode>) {
           type="button"
           onClick={(event) => {
             event.stopPropagation();
-            data.onOpen(workspace.path, "codex");
+            data.onOpen(workspace.path, data.defaultHarness);
           }}
         >
-          <CodexMark size={13} />
-          Open
+          <HarnessMark id={data.defaultHarness} size={13} />
+          {harnessLabel(data.defaultHarness)}
         </button>
         <button
           type="button"
@@ -489,8 +501,10 @@ function WorkspaceNode({ data }: NodeProps<WorkspaceFlowNode>) {
           anchor={menuButton.current}
           workspace={workspace}
           runtimeUrl={runtimeUrl}
+          defaultHarness={data.defaultHarness}
           onClose={data.onCloseMenu}
           onOpen={data.onOpen}
+          onSetDefaultHarness={data.onSetDefaultHarness}
           onEditRecipe={data.onEditRecipe}
         />
       )}
@@ -498,15 +512,6 @@ function WorkspaceNode({ data }: NodeProps<WorkspaceFlowNode>) {
     </article>
   );
 }
-
-const plotHarnesses = [
-  ["codex", "Codex"],
-  ["claude", "Claude Code"],
-  ["t3-code", "T3 Code"],
-  ["opencode", "OpenCode"],
-  ["vscode", "VS Code"],
-  ["terminal", "Terminal"],
-] as const;
 
 /**
  * React Flow puts nodes inside a transformed viewport, so a menu rendered in
@@ -518,15 +523,19 @@ function PlotMenu({
   anchor,
   workspace,
   runtimeUrl,
+  defaultHarness,
   onClose,
   onOpen,
+  onSetDefaultHarness,
   onEditRecipe,
 }: {
   anchor: HTMLElement | null;
   workspace: WorkspaceSnapshot;
   runtimeUrl: string | undefined;
+  defaultHarness: HarnessId;
   onClose(): void;
   onOpen(path: string, target: HarnessDefinition["id"]): void;
+  onSetDefaultHarness(id: HarnessId): void;
   onEditRecipe(): void;
 }) {
   useEffect(() => {
@@ -552,17 +561,11 @@ function PlotMenu({
         role="menu"
         style={{ top: rect.bottom + 6, left: Math.max(8, rect.right - 200) }}
       >
-        {plotHarnesses.map(([id, label]) => (
-          <button
-            type="button"
-            role="menuitem"
-            key={id}
-            onClick={run(() => onOpen(workspace.path, id))}
-          >
-            <HarnessMark id={id} size={14} />
-            Open in {label}
-          </button>
-        ))}
+        <HarnessRows
+          defaultHarness={defaultHarness}
+          onOpen={(id) => run(() => onOpen(workspace.path, id))()}
+          onSetDefault={onSetDefaultHarness}
+        />
         <div className="menu-rule" />
         <button
           type="button"

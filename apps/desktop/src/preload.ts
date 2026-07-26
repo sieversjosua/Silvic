@@ -5,6 +5,7 @@ import {
   type AppearancePreference,
   type CreateEnvironmentRequest,
   type DeliveryExecuteRequest,
+  type HarnessId,
   type OpenLinkRequest,
   type OpenWorkspaceRequest,
   type ProjectActivationRequest,
@@ -41,6 +42,9 @@ const api: SilvicDesktopApi = {
     ipcRenderer.invoke(ipcChannels.clipboardWrite, text),
   inspectProject: (projectId: string) =>
     ipcRenderer.invoke(ipcChannels.projectInspect, projectId),
+  getDefaultHarness: () => ipcRenderer.invoke(ipcChannels.defaultHarnessGet),
+  setDefaultHarness: (id: HarnessId) =>
+    ipcRenderer.invoke(ipcChannels.defaultHarnessSet, id),
   getRecipe: (projectId: string) =>
     ipcRenderer.invoke(ipcChannels.recipeGet, projectId),
   saveRecipe: (request: RecipeSaveRequest) =>
