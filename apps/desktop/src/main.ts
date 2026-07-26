@@ -19,7 +19,7 @@ import Store from "electron-store";
 
 import { convexConnector } from "@silvic/connector-convex";
 import { createGitHubConnector } from "@silvic/connector-github";
-import { harnessById, harnesses } from "@silvic/connector-harnesses";
+import { harnessById } from "@silvic/connector-harnesses";
 import { createLocalContextConnector } from "@silvic/connector-local";
 import { createWorkCliConnector } from "@silvic/connector-work-cli";
 import {
@@ -34,7 +34,6 @@ import {
   workspacePathRequestSchema,
   type AppearancePreference,
   type CreateEnvironmentRequest,
-  type HarnessIcons,
   type PlotCreationResult,
   type RecipeDocument,
   type OpenWorkspaceRequest,
@@ -113,7 +112,6 @@ let latestSnapshot: SilvicSnapshot = {
 };
 let activeRefresh: Promise<SilvicSnapshot> | undefined;
 let queuedFreshRefresh: Promise<SilvicSnapshot> | undefined;
-let harnessIconCache: HarnessIcons | undefined;
 
 app.setName("Silvic");
 
@@ -283,10 +281,6 @@ function registerIpc(): void {
     settings.set("activeProjects", next);
     return next;
   });
-  ipcMain.handle(ipcChannels.harnessIconsGet, (event) => {
-    assertTrustedSender(event);
-    return readHarnessIcons();
-  });
   ipcMain.handle(ipcChannels.clipboardWrite, (event, text: unknown) => {
     assertTrustedSender(event);
     if (typeof text !== "string" || text.length > 8_000) {
@@ -375,49 +369,6 @@ function currentWindowBackground(): string {
   return nativeTheme.shouldUseDarkColors
     ? windowBackground.dark
     : windowBackground.light;
-}
-
-/**
- * The real macOS icon for each Harness, read from whichever application bundle
- * is actually installed. Harnesses that only exist as a CLI resolve to nothing
- * and keep their drawn glyph in the interface.
- */
-async function readHarnessIcons(): Promise<HarnessIcons> {
-  if (harnessIconCache) return harnessIconCache;
-  const icons: Record<string, string> = {};
-  for (const harness of harnesses) {
-    const bundle = applicationBundlePath(harness.id);
-    if (!bundle) continue;
-    try {
-      const icon = await app.getFileIcon(bundle, { size: "normal" });
-      if (!icon.isEmpty()) icons[harness.id] = icon.toDataURL();
-    } catch {
-      // A missing or unreadable bundle simply has no icon.
-    }
-  }
-  harnessIconCache = icons;
-  return icons;
-}
-
-function applicationBundlePath(id: string): string | undefined {
-  if (id === "finder") return "/System/Library/CoreServices/Finder.app";
-  const harness = harnessById(id as OpenWorkspaceRequest["target"]);
-  const names =
-    harness.applicationNames ??
-    (harness.applicationName ? [harness.applicationName] : []);
-  const directories = [
-    "/Applications",
-    join(homedir(), "Applications"),
-    "/System/Applications",
-    "/System/Applications/Utilities",
-  ];
-  for (const name of names) {
-    for (const directory of directories) {
-      const candidate = join(directory, `${name}.app`);
-      if (existsSync(candidate)) return candidate;
-    }
-  }
-  return undefined;
 }
 
 function assertTrustedSender(event: IpcMainInvokeEvent): void {

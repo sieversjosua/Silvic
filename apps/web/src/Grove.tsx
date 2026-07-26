@@ -26,7 +26,6 @@ import {
   Plus,
   Radio,
   SlidersHorizontal,
-  SquareTerminal,
   Terminal,
 } from "lucide-react";
 
@@ -38,7 +37,7 @@ import type {
 } from "@silvic/contracts";
 
 import { substrate, type Appearance } from "./appearance";
-import { ClaudeMark, CodexMark, ConvexMark, T3Mark } from "./providers";
+import { CodexMark, ConvexMark, HarnessMark } from "./providers";
 import {
   QUIET_FOLD_MIN,
   isQuiet,
@@ -61,7 +60,6 @@ interface WorkspaceNodeData extends Record<string, unknown> {
   selected: boolean;
   dimmed: boolean;
   menuOpen: boolean;
-  harnessIcons: Readonly<Record<string, string>>;
   onSelect(id: string): void;
   onOpen(path: string, target: HarnessDefinition["id"]): void;
   onOpenMenu(id: string): void;
@@ -82,7 +80,6 @@ interface GroveProps {
   project: ProjectSnapshot;
   query: string;
   appearance: Appearance;
-  harnessIcons: Readonly<Record<string, string>>;
   selectedWorkspaceId: string | undefined;
   onSelect(id: string): void;
   onOpen(path: string, target: HarnessDefinition["id"]): void;
@@ -103,7 +100,6 @@ function GroveCanvas({
   project,
   query,
   appearance,
-  harnessIcons,
   selectedWorkspaceId,
   onSelect,
   onOpen,
@@ -154,7 +150,6 @@ function GroveCanvas({
           selected: workspace.workspaceId === selectedWorkspaceId,
           dimmed: needle.length > 0 && !matches(workspace, needle),
           menuOpen: menuPlotId === workspace.workspaceId,
-          harnessIcons,
           onSelect,
           onOpen,
           onOpenMenu: setMenuPlotId,
@@ -167,7 +162,6 @@ function GroveCanvas({
     tidy,
     nudges,
     query,
-    harnessIcons,
     menuPlotId,
     selectedWorkspaceId,
     onSelect,
@@ -406,17 +400,7 @@ function WorkspaceNode({ data }: NodeProps<WorkspaceFlowNode>) {
             data.onOpen(workspace.path, "codex");
           }}
         >
-          {data.harnessIcons["codex"] ? (
-            <img
-              className="harness-icon"
-              src={data.harnessIcons["codex"]}
-              alt=""
-              width={13}
-              height={13}
-            />
-          ) : (
-            <CodexMark size={13} />
-          )}
+          <CodexMark size={13} />
           Open
         </button>
         <button
@@ -464,11 +448,12 @@ function WorkspaceNode({ data }: NodeProps<WorkspaceFlowNode>) {
 }
 
 const plotHarnesses = [
-  ["codex", "Codex", <CodexMark size={14} key="codex" />],
-  ["claude", "Claude Code", <ClaudeMark size={14} key="claude" />],
-  ["t3-code", "T3 Code", <T3Mark size={14} key="t3" />],
-  ["opencode", "OpenCode", <SquareTerminal size={14} key="opencode" />],
-  ["terminal", "Terminal", <Terminal size={14} key="terminal" />],
+  ["codex", "Codex"],
+  ["claude", "Claude Code"],
+  ["t3-code", "T3 Code"],
+  ["opencode", "OpenCode"],
+  ["vscode", "VS Code"],
+  ["terminal", "Terminal"],
 ] as const;
 
 /**
@@ -515,14 +500,14 @@ function PlotMenu({
         role="menu"
         style={{ top: rect.bottom + 6, left: Math.max(8, rect.right - 200) }}
       >
-        {plotHarnesses.map(([id, label, glyph]) => (
+        {plotHarnesses.map(([id, label]) => (
           <button
             type="button"
             role="menuitem"
             key={id}
             onClick={run(() => onOpen(workspace.path, id))}
           >
-            {glyph}
+            <HarnessMark id={id} size={14} />
             Open in {label}
           </button>
         ))}

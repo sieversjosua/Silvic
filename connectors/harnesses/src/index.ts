@@ -26,6 +26,12 @@ export const harnesses = [
     executable: "opencode",
   },
   {
+    id: "vscode",
+    name: "VS Code",
+    kind: "application",
+    applicationNames: ["Visual Studio Code", "Visual Studio Code - Insiders"],
+  },
+  {
     id: "terminal",
     name: "Terminal",
     kind: "system",

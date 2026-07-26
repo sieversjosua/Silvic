@@ -41,7 +41,7 @@
     ],
     "mac": {
       "category": "public.app-category.developer-tools",
-      "icon": "../../Resources/Silvic.icns",
+      "icon": "../../Resources/Silvic-Electron.icns",
       "target": [
         "dir"
       ]

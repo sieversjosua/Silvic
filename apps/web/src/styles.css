@@ -560,13 +560,6 @@ button {
   border-top: 1px solid var(--rule);
 }
 
-/* Real application icons keep their own artwork; never tint them. */
-.harness-icon {
-  flex: 0 0 auto;
-  border-radius: 3px;
-  object-fit: contain;
-}
-
 .rail-action {
   display: flex;
   gap: 7px;

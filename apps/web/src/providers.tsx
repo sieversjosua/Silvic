@@ -9,8 +9,12 @@ export type ProviderId =
   | "codex"
   | "claude"
   | "t3-code"
+  | "opencode"
+  | "vscode"
   | "workos"
-  | "clerk";
+  | "clerk"
+  | "supabase"
+  | "cloudflare";
 
 export function ConvexMark({ size = 16 }: { size?: number }) {
   return (
@@ -116,13 +120,116 @@ export function ClerkMark({ size = 16 }: { size?: number }) {
   );
 }
 
+/** The white plate in the source mark is dropped so it works on both sheets. */
+export function OpenCodeMark({ size = 16 }: { size?: number }) {
+  return (
+    <svg viewBox="0 0 512 512" width={size} height={size} fill="none" aria-hidden="true">
+      <path d="M320 224V352H192V224H320Z" fill="currentColor" opacity="0.25" />
+      <path
+        fillRule="evenodd"
+        clipRule="evenodd"
+        d="M384 416H128V96H384V416ZM320 160H192V352H320V160Z"
+        fill="currentColor"
+      />
+    </svg>
+  );
+}
+
+/**
+ * The source mark carries two gaussian-blur drop shadows that are invisible
+ * below about 32px, so they are left out here.
+ */
+export function VsCodeMark({ size = 16 }: { size?: number }) {
+  return (
+    <svg viewBox="0 0 100 100" width={size} height={size} fill="none" aria-hidden="true">
+      <mask
+        id="silvic-vscode-mask"
+        width="100"
+        height="100"
+        x="0"
+        y="0"
+        mask-type="alpha"
+        maskUnits="userSpaceOnUse"
+      >
+        <path
+          fill="#fff"
+          fillRule="evenodd"
+          d="M70.912 99.317a6.223 6.223 0 0 0 4.96-.19l20.589-9.907A6.25 6.25 0 0 0 100 83.587V16.413a6.25 6.25 0 0 0-3.54-5.632L75.874.874a6.226 6.226 0 0 0-7.104 1.21L29.355 38.04 12.187 25.01a4.162 4.162 0 0 0-5.318.236l-5.506 5.009a4.168 4.168 0 0 0-.004 6.162L16.247 50 1.36 63.583a4.168 4.168 0 0 0 .004 6.162l5.506 5.01a4.162 4.162 0 0 0 5.318.236l17.168-13.032L68.77 97.917a6.217 6.217 0 0 0 2.143 1.4ZM75.015 27.3 45.11 50l29.906 22.701V27.3Z"
+          clipRule="evenodd"
+        />
+      </mask>
+      <g mask="url(#silvic-vscode-mask)">
+        <path
+          fill="#0065A9"
+          d="M96.461 10.796 75.857.876a6.23 6.23 0 0 0-7.107 1.207l-67.451 61.5a4.167 4.167 0 0 0 .004 6.162l5.51 5.009a4.167 4.167 0 0 0 5.32.236l81.228-61.62c2.725-2.067 6.639-.124 6.639 3.297v-.24a6.25 6.25 0 0 0-3.539-5.63Z"
+        />
+        <path
+          fill="#007ACC"
+          d="m96.461 89.204-20.604 9.92a6.229 6.229 0 0 1-7.107-1.207l-67.451-61.5a4.167 4.167 0 0 1 .004-6.162l5.51-5.009a4.167 4.167 0 0 1 5.32-.236l81.228 61.62c2.725 2.067 6.639.124 6.639-3.297v.24a6.25 6.25 0 0 1-3.539 5.63Z"
+        />
+        <path
+          fill="#1F9CF0"
+          d="M75.858 99.126a6.232 6.232 0 0 1-7.108-1.21c2.306 2.307 6.25.674 6.25-2.588V4.672c0-3.262-3.944-4.895-6.25-2.589a6.232 6.232 0 0 1 7.108-1.21l20.6 9.908A6.25 6.25 0 0 1 100 16.413v67.174a6.25 6.25 0 0 1-3.541 5.633l-20.601 9.906Z"
+        />
+      </g>
+    </svg>
+  );
+}
+
+export function SupabaseMark({ size = 16 }: { size?: number }) {
+  return (
+    <svg viewBox="0 0 109 113" width={size} height={size} fill="none" aria-hidden="true">
+      <path
+        d="M63.7076 110.284C60.8481 113.885 55.0502 111.912 54.9813 107.314L53.9738 40.0627L99.1935 40.0627C107.384 40.0627 111.952 49.5228 106.859 55.9374L63.7076 110.284Z"
+        fill="url(#silvic-supabase-a)"
+      />
+      <path
+        d="M45.317 2.07103C48.1765 -1.53037 53.9745 0.442937 54.0434 5.041L54.4849 72.2922H9.83113C1.64038 72.2922 -2.92775 62.8321 2.1655 56.4175L45.317 2.07103Z"
+        fill="#3ECF8E"
+      />
+      <defs>
+        <linearGradient
+          id="silvic-supabase-a"
+          x1="53.9738"
+          y1="54.974"
+          x2="94.1635"
+          y2="71.8295"
+          gradientUnits="userSpaceOnUse"
+        >
+          <stop stopColor="#249361" />
+          <stop offset="1" stopColor="#3ECF8E" />
+        </linearGradient>
+      </defs>
+    </svg>
+  );
+}
+
+export function CloudflareMark({ size = 16 }: { size?: number }) {
+  return (
+    <svg viewBox="0 0 256 116" width={size} height={size} aria-hidden="true">
+      <path
+        fill="#F4811F"
+        d="M176.332 108.348c1.593-5.31 1.062-10.622-1.593-13.809-2.656-3.187-6.374-5.31-11.154-5.842L71.17 87.634c-.531 0-1.062-.53-1.593-.53-.531-.532-.531-1.063 0-1.594.531-1.062 1.062-1.594 2.124-1.594l92.946-1.062c11.154-.53 22.839-9.56 27.087-20.182l5.312-13.809c0-.532.531-1.063 0-1.594C191.203 20.182 166.772 0 138.091 0 111.535 0 88.697 16.995 80.73 40.896c-5.311-3.718-11.684-5.843-19.12-5.31-12.747 1.061-22.838 11.683-24.432 24.43-.531 3.187 0 6.374.532 9.56C16.996 70.107 0 87.103 0 108.348c0 2.124 0 3.718.531 5.842 0 1.063 1.062 1.594 1.594 1.594h170.489c1.062 0 2.125-.53 2.125-1.594l1.593-5.842Z"
+      />
+      <path
+        fill="#FAAD3F"
+        d="M205.544 48.863h-2.656c-.531 0-1.062.53-1.593 1.062l-3.718 12.747c-1.593 5.31-1.062 10.623 1.594 13.809 2.655 3.187 6.373 5.31 11.153 5.843l19.652 1.062c.53 0 1.062.53 1.593.53.53.532.53 1.063 0 1.594-.531 1.063-1.062 1.594-2.125 1.594l-20.182 1.062c-11.154.53-22.838 9.56-27.087 20.182l-1.063 4.78c-.531.532 0 1.594 1.063 1.594h70.108c1.062 0 1.593-.531 1.593-1.593 1.062-4.25 2.124-9.03 2.124-13.81 0-27.618-22.838-50.456-50.456-50.456"
+      />
+    </svg>
+  );
+}
+
 const marks: Record<ProviderId, (props: { size?: number }) => React.ReactElement> = {
   convex: ConvexMark,
   codex: CodexMark,
   claude: ClaudeMark,
   "t3-code": T3Mark,
+  opencode: OpenCodeMark,
+  vscode: VsCodeMark,
   workos: WorkOsMark,
   clerk: ClerkMark,
+  supabase: SupabaseMark,
+  cloudflare: CloudflareMark,
 };
 
 export function ProviderMark({
@@ -138,4 +245,60 @@ export function ProviderMark({
 
 export function isProviderId(value: string): value is ProviderId {
   return value in marks;
+}
+
+/**
+ * One icon per harness, everywhere. Borrowing the installed application's macOS
+ * icon looked inconsistent beside the brand marks — full-colour, differently
+ * padded, and mushy once scaled to menu size — so Silvic draws all of them.
+ * Terminal and Finder have no brand mark and use the interface's own glyphs.
+ */
+export function HarnessMark({
+  id,
+  size = 15,
+}: {
+  id: string;
+  size?: number;
+}) {
+  if (id === "terminal") return <TerminalGlyph size={size} />;
+  if (id === "finder") return <FinderGlyph size={size} />;
+  if (id === "vscode") return <VsCodeMark size={size} />;
+  return isProviderId(id) ? <ProviderMark id={id} size={size} /> : null;
+}
+
+function TerminalGlyph({ size }: { size: number }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width={size}
+      height={size}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="2.5" y="4" width="19" height="16" rx="2.5" />
+      <path d="m7 9.5 3 2.5-3 2.5M13 15h4" />
+    </svg>
+  );
+}
+
+function FinderGlyph({ size }: { size: number }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width={size}
+      height={size}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M3 7.5a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />
+    </svg>
+  );
 }

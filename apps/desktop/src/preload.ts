@@ -37,7 +37,6 @@ const api: SilvicDesktopApi = {
   getActiveProjects: () => ipcRenderer.invoke(ipcChannels.projectsActiveGet),
   setProjectActive: (request: ProjectActivationRequest) =>
     ipcRenderer.invoke(ipcChannels.projectsActiveSet, request),
-  getHarnessIcons: () => ipcRenderer.invoke(ipcChannels.harnessIconsGet),
   copyText: (text: string) =>
     ipcRenderer.invoke(ipcChannels.clipboardWrite, text),
   inspectProject: (projectId: string) =>

@@ -13,7 +13,6 @@ import {
   RefreshCw,
   Search,
   SlidersHorizontal,
-  SquareTerminal,
   Sun,
   Terminal,
   X,
@@ -34,7 +33,7 @@ import type {
 import { useAppearance } from "./appearance";
 import { Grove } from "./Grove";
 import { Mark } from "./Mark";
-import { ClaudeMark, CodexMark, ConvexMark, T3Mark } from "./providers";
+import { CodexMark, ConvexMark, HarnessMark } from "./providers";
 import { RecipeDialog } from "./RecipeDialog";
 import {
   localChangeCount,
@@ -46,11 +45,12 @@ import {
 import { useSilvic } from "./store";
 
 const harnessMenu = [
-  ["claude", "Claude Code", <ClaudeMark size={15} key="claude" />],
-  ["t3-code", "T3 Code", <T3Mark size={15} key="t3" />],
-  ["opencode", "OpenCode", <SquareTerminal size={15} key="opencode" />],
-  ["terminal", "Terminal", <Terminal size={15} key="terminal" />],
-  ["finder", "Finder", <FolderOpen size={15} key="finder" />],
+  ["claude", "Claude Code"],
+  ["t3-code", "T3 Code"],
+  ["opencode", "OpenCode"],
+  ["vscode", "VS Code"],
+  ["terminal", "Terminal"],
+  ["finder", "Finder"],
 ] as const;
 
 export function App() {
@@ -58,7 +58,6 @@ export function App() {
     snapshot,
     roots,
     activeProjectIds,
-    harnessIcons,
     selectedProjectId,
     selectedWorkspaceId,
     loading,
@@ -235,8 +234,7 @@ export function App() {
               project={project}
               query={query}
               appearance={appearance}
-              harnessIcons={harnessIcons}
-              selectedWorkspaceId={workspace?.workspaceId}
+                selectedWorkspaceId={workspace?.workspaceId}
               onSelect={selectWorkspace}
               onOpen={openWorkspace}
               onEditRecipe={() => setRecipeProject(project)}
@@ -253,7 +251,6 @@ export function App() {
           <WorkspaceInspector
             key={workspace.workspaceId}
             workspace={workspace}
-            harnessIcons={harnessIcons}
             onOpen={openWorkspace}
             onShip={() => setDeliveryWorkspace(workspace)}
           />
@@ -493,31 +490,6 @@ function SuggestionList({
   );
 }
 
-/** The installed application's own icon, falling back to a drawn glyph. */
-function HarnessIcon({
-  id,
-  icons,
-  fallback,
-  size = 14,
-}: {
-  id: string;
-  icons: Readonly<Record<string, string>>;
-  fallback: React.ReactNode;
-  size?: number;
-}) {
-  const source = icons[id];
-  if (!source) return <>{fallback}</>;
-  return (
-    <img
-      className="harness-icon"
-      src={source}
-      alt=""
-      width={size}
-      height={size}
-    />
-  );
-}
-
 /**
  * Connector health is app-level and rarely actionable, so it sits quietly in the
  * rail instead of covering the canvas. Naming each connector and its error keeps
@@ -598,12 +570,10 @@ function AppearanceControl({
 
 function WorkspaceInspector({
   workspace,
-  harnessIcons,
   onOpen,
   onShip,
 }: {
   workspace: WorkspaceSnapshot;
-  harnessIcons: Readonly<Record<string, string>>;
   onOpen(path: string, target: HarnessDefinition["id"]): void;
   onShip(): void;
 }) {
@@ -635,11 +605,7 @@ function WorkspaceInspector({
 
         <div className="split-button">
           <button type="button" onClick={() => void onOpen(workspace.path, "codex")}>
-            <HarnessIcon
-              id="codex"
-              icons={harnessIcons}
-              fallback={<CodexMark size={14} />}
-            />
+            <CodexMark size={14} />
             Open in Codex
           </button>
           <button
@@ -655,7 +621,7 @@ function WorkspaceInspector({
             <>
               <div className="menu-scrim" onClick={() => setOpenMenu(false)} />
               <div className="menu">
-                {harnessMenu.map(([id, label, glyph]) => (
+                {harnessMenu.map(([id, label]) => (
                   <button
                     type="button"
                     key={id}
@@ -664,12 +630,7 @@ function WorkspaceInspector({
                       void onOpen(workspace.path, id);
                     }}
                   >
-                    <HarnessIcon
-                      id={id}
-                      icons={harnessIcons}
-                      fallback={glyph}
-                      size={15}
-                    />
+                    <HarnessMark id={id} />
                     {label}
                   </button>
                 ))}

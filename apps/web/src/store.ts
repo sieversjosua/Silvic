@@ -10,7 +10,6 @@ interface SilvicState {
   snapshot: SilvicSnapshot;
   roots: readonly string[];
   activeProjectIds: readonly string[];
-  harnessIcons: Readonly<Record<string, string>>;
   selectedProjectId: string | undefined;
   selectedWorkspaceId: string | undefined;
   loading: boolean;
@@ -34,21 +33,18 @@ export const useSilvic = create<SilvicState>((set, get) => ({
   snapshot: emptySnapshot,
   roots: [],
   activeProjectIds: [],
-  harnessIcons: {},
   selectedProjectId: undefined,
   selectedWorkspaceId: undefined,
   loading: true,
   error: undefined,
   initialize: async () => {
     try {
-      const [snapshot, roots, activeProjectIds, harnessIcons] =
-        await Promise.all([
-          window.silvic.getSnapshot(),
-          window.silvic.getRoots(),
-          window.silvic.getActiveProjects(),
-          window.silvic.getHarnessIcons(),
-        ]);
-      set({ activeProjectIds, harnessIcons });
+      const [snapshot, roots, activeProjectIds] = await Promise.all([
+        window.silvic.getSnapshot(),
+        window.silvic.getRoots(),
+        window.silvic.getActiveProjects(),
+      ]);
+      set({ activeProjectIds });
       setSelectionForSnapshot(set, get, snapshot);
       set({ snapshot, roots, loading: false });
       return window.silvic.onSnapshot((nextSnapshot) => {

@@ -92,7 +92,14 @@ export interface Connector {
 }
 
 export interface HarnessDefinition {
-  id: "codex" | "claude" | "t3-code" | "opencode" | "terminal" | "finder";
+  id:
+    | "codex"
+    | "claude"
+    | "t3-code"
+    | "opencode"
+    | "vscode"
+    | "terminal"
+    | "finder";
   name: string;
   kind: "application" | "command" | "system";
   applicationName?: string;
@@ -159,6 +166,7 @@ export const openWorkspaceRequestSchema = z
       "claude",
       "t3-code",
       "opencode",
+      "vscode",
       "terminal",
       "finder",
     ]),
@@ -356,9 +364,6 @@ export type ProjectActivationRequest = z.infer<
   typeof projectActivationRequestSchema
 >;
 
-/** Harness id to a data URL of the installed application's real macOS icon. */
-export type HarnessIcons = Readonly<Record<string, string>>;
-
 export interface SilvicDesktopApi {
   getSnapshot(): Promise<SilvicSnapshot>;
   getRoots(): Promise<readonly string[]>;
@@ -378,7 +383,6 @@ export interface SilvicDesktopApi {
   setProjectActive(
     request: ProjectActivationRequest,
   ): Promise<readonly string[]>;
-  getHarnessIcons(): Promise<HarnessIcons>;
   copyText(text: string): Promise<void>;
   getRecipe(projectId: string): Promise<RecipeDocument>;
   inspectProject(projectId: string): Promise<RepositoryFindings>;
@@ -404,7 +408,6 @@ export const ipcChannels = {
   appearanceSet: "silvic:appearance:set",
   projectsActiveGet: "silvic:projects:active:get",
   projectsActiveSet: "silvic:projects:active:set",
-  harnessIconsGet: "silvic:harness:icons:get",
   clipboardWrite: "silvic:clipboard:write",
   recipeGet: "silvic:recipe:get",
   projectInspect: "silvic:project:inspect",
