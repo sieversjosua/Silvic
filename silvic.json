@@ -1,0 +1,16 @@
+{
+  "packageManager": "pnpm",
+  "provision": [
+    {
+      "label": "Install dependencies",
+      "run": "pnpm install"
+    }
+  ],
+  "commands": {
+    "web": {
+      "run": "pnpm dev",
+      "url": true,
+      "autoStart": true
+    }
+  }
+}
