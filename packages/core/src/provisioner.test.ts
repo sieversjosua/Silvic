@@ -186,13 +186,20 @@ describe("Provisioner", () => {
   });
 
   it("repairs with the package manager the repository uses", () => {
-    expect(remedyCommand("convex-cli", "pnpm")).toBe("pnpm add convex@latest");
-    expect(remedyCommand("convex-cli", "bun")).toBe("bun add convex@latest");
-    expect(remedyCommand("convex-cli", "yarn")).toBe("yarn add convex@latest");
+    expect(remedyCommand("convex-cli", "pnpm")).toBe("pnpm add convex@1.34");
+    expect(remedyCommand("convex-cli", "bun")).toBe("bun add convex@1.34");
+    expect(remedyCommand("convex-cli", "yarn")).toBe("yarn add convex@1.34");
     // npm is the assumption when a repository has not said otherwise.
     expect(remedyCommand("convex-cli", undefined)).toBe(
-      "npm install convex@latest",
+      "npm install convex@1.34",
     );
+  });
+
+  it("asks for the version that gained the feature, never the newest", () => {
+    // Reaching for @latest breaks a repository whose other packages peer-depend
+    // on a Convex range: the CLI updates and nothing installs afterwards.
+    expect(remedyCommand("convex-cli", "npm")).not.toContain("latest");
+    expect(remedyCommand("convex-cli", "npm")).toContain("@1.34");
   });
 
   it("does nothing when a repository declares no provisioning", async () => {

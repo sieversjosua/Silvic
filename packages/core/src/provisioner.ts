@@ -125,8 +125,11 @@ export function provisionDiagnosis(
   if (!isConvexStep(step)) return undefined;
   if (!/unknown command '?deployment'?/i.test(output)) return undefined;
   return {
-    advice: `This plot's Convex CLI is too old to give it its own deployment: \`convex deployment create\` arrived in convex ${convexDeploymentMinimum}.`,
-    remedy: { id: "convex-cli", label: "Update Convex and provision again" },
+    advice: `This plot's Convex CLI is too old to give it its own deployment: \`convex deployment create\` arrived in convex ${convexDeploymentMinimum}. Silvic installs exactly that version rather than the newest, so packages that pin an older Convex still resolve.`,
+    remedy: {
+      id: "convex-cli",
+      label: `Install convex ${convexDeploymentMinimum} and provision again`,
+    },
   };
 }
 
@@ -134,6 +137,12 @@ export function provisionDiagnosis(
  * What a remedy runs, in the plot where provisioning failed. Updating there
  * rather than in the source checkout keeps the change reviewable: it lands as
  * ordinary work in the plot, to be committed with everything else.
+ *
+ * The version asked for is the one that introduced the feature, never the
+ * newest. A repository holds packages that peer-depend on Convex within a
+ * range, and reaching past that range leaves a tree which no longer installs,
+ * so the repair has to be the smallest step that clears the failure. It can
+ * only ever raise the version: it is offered when the CLI is older than this.
  */
 export function remedyCommand(
   remedy: ProvisionRemedyId,
@@ -142,7 +151,7 @@ export function remedyCommand(
   // One remedy so far; the switch is where the next one goes.
   switch (remedy) {
     case "convex-cli":
-      return `${addPackage(packageManager)} convex@latest`;
+      return `${addPackage(packageManager)} convex@${convexDeploymentMinimum}`;
   }
 }
 
@@ -150,7 +159,7 @@ export function remedyCommand(
 export function remedyLabel(remedy: ProvisionRemedyId): string {
   switch (remedy) {
     case "convex-cli":
-      return "Update Convex";
+      return `Install convex ${convexDeploymentMinimum}`;
   }
 }
 
