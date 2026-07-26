@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join, normalize } from "node:path";
+import { basename, join, normalize } from "node:path";
 import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 
@@ -33,6 +33,7 @@ import {
   projectActivationRequestSchema,
   teardownRequestSchema,
   plotPreviewRequestSchema,
+  plotRepairRequestSchema,
   testStepRequestSchema,
   recipeSaveRequestSchema,
   workspacePathRequestSchema,
@@ -40,6 +41,8 @@ import {
   type CreateEnvironmentRequest,
   type HarnessId,
   type PlotCreationResult,
+  type PlotRepairRequest,
+  type ProvisionResult,
   type RecipeDocument,
   type OpenWorkspaceRequest,
   type SilvicSnapshot,
@@ -54,9 +57,13 @@ import {
   TeardownService,
   inspectRepository,
   planTeardown,
+  provisionOutputLimit,
+  remedyCommand,
+  remedyLabel,
   WorkspaceRegistry,
   plotPort,
   plotUrl,
+  provisionStepLabel,
   readRecipe,
   readRecipeSource,
   readWorkCliNames,
@@ -64,6 +71,8 @@ import {
   resolvedCommandPath,
   type WorkspaceRecord,
 } from "@silvic/core";
+
+import { PlotProgressReporter } from "./plot-progress";
 
 interface Settings {
   roots: string[];
@@ -254,6 +263,10 @@ function registerIpc(): void {
       return createEnvironment(createEnvironmentRequestSchema.parse(request));
     },
   );
+  ipcMain.handle(ipcChannels.plotRepair, async (event, request: unknown) => {
+    assertTrustedSender(event);
+    return repairPlot(plotRepairRequestSchema.parse(request));
+  });
   ipcMain.handle(ipcChannels.githubConnect, async (event) => {
     assertTrustedSender(event);
     await openTerminalCommand("gh", ["auth", "login", "--web"]);
@@ -481,6 +494,14 @@ function assertTrustedSender(event: IpcMainInvokeEvent): void {
   }
 }
 
+const checkoutStepId = "checkout";
+const surveyStepId = "survey";
+const remedyStepId = "remedy";
+
+function provisionStepId(index: number): string {
+  return `provision:${index}`;
+}
+
 async function createEnvironment(
   request: CreateEnvironmentRequest,
 ): Promise<PlotCreationResult> {
@@ -507,56 +528,222 @@ async function createEnvironment(
   const port = plotPort(recipe.project, plot, takenPlotPorts());
   const url = plotUrl(port);
 
-  await environmentService.create({
-    sourcePath,
-    destinationPath,
-    branch: request.branch,
-    mode: request.mode,
-    ...(project.origin ? { origin: project.origin } : {}),
-    ...(source.git.revision ? { startPoint: source.git.revision } : {}),
-  });
-  if (request.mode === "clone") {
-    settings.set(
-      "roots",
-      uniquePaths([...settings.get("roots"), destinationPath]),
-    );
-  }
-  settings.set("workspaceRecords", [
-    ...settings
-      .get("workspaceRecords")
-      .filter(
-        (record) => normalize(record.path) !== normalize(destinationPath),
-      ),
-    {
-      workspaceId: randomUUID(),
-      projectId: project.id,
-      path: destinationPath,
+  // Named before anything runs, so the dialog can show the whole plan and not
+  // just the step that happens to be running.
+  const progress = new PlotProgressReporter(
+    request.branch,
+    [
+      {
+        id: checkoutStepId,
+        label:
+          request.mode === "worktree"
+            ? "Create the linked worktree"
+            : "Clone the repository",
+      },
+      ...recipe.provision.map((step, index) => ({
+        id: provisionStepId(index),
+        label: provisionStepLabel(step, index),
+      })),
+      { id: surveyStepId, label: "Survey the new plot" },
+    ],
+    (payload) => mainWindow?.webContents.send(ipcChannels.plotProgress, payload),
+  );
+  progress.announce();
+
+  try {
+    progress.began(checkoutStepId);
+    await environmentService.create({
+      sourcePath,
+      destinationPath,
       branch: request.branch,
-      parentWorkspaceId: source.workspaceId,
-      displayName: request.branch,
-    },
-  ]);
-  settings.set("plotPorts", { ...settings.get("plotPorts"), [destinationPath]: port });
+      mode: request.mode,
+      ...(project.origin ? { origin: project.origin } : {}),
+      ...(source.git.revision ? { startPoint: source.git.revision } : {}),
+    });
+    if (request.mode === "clone") {
+      settings.set(
+        "roots",
+        uniquePaths([...settings.get("roots"), destinationPath]),
+      );
+    }
+    settings.set("workspaceRecords", [
+      ...settings
+        .get("workspaceRecords")
+        .filter(
+          (record) => normalize(record.path) !== normalize(destinationPath),
+        ),
+      {
+        workspaceId: randomUUID(),
+        projectId: project.id,
+        path: destinationPath,
+        branch: request.branch,
+        parentWorkspaceId: source.workspaceId,
+        displayName: request.branch,
+      },
+    ]);
+    settings.set("plotPorts", { ...settings.get("plotPorts"), [destinationPath]: port });
+    progress.finished(checkoutStepId);
 
-  const provision = await provisioner.run(recipe.provision, {
-    root: destinationPath,
-    sourceRoot: project.rootPath,
-    project: recipe.project,
-    plot,
-    branch: request.branch,
-    url,
-    ...(recipe.packageManager
-      ? { packageManager: recipe.packageManager }
-      : {}),
-  });
+    const provision = await provisioner.run(
+      recipe.provision,
+      {
+        root: destinationPath,
+        sourceRoot: project.rootPath,
+        project: recipe.project,
+        plot,
+        branch: request.branch,
+        url,
+        ...(recipe.packageManager
+          ? { packageManager: recipe.packageManager }
+          : {}),
+      },
+      {
+        onStepStart: ({ index }) => progress.began(provisionStepId(index)),
+        onStepOutput: ({ index, chunk }) =>
+          progress.wrote(provisionStepId(index), chunk),
+        onStep: (result, index) =>
+          result.exitCode === 0
+            ? progress.finished(provisionStepId(index), result.durationMs)
+            : progress.failed(
+                provisionStepId(index),
+                result.advice ?? result.output,
+              ),
+      },
+    );
 
-  await paintFromGit([project.rootPath, destinationPath]);
-  void refreshSnapshot(true);
-  return {
-    snapshot: latestSnapshot,
-    plot: { name: plot, path: destinationPath, port, url },
-    provision,
-  };
+    progress.began(surveyStepId);
+    await paintFromGit([project.rootPath, destinationPath]);
+    progress.finished(surveyStepId);
+    void refreshSnapshot(true);
+    return {
+      snapshot: latestSnapshot,
+      plot: { name: plot, path: destinationPath, port, url },
+      provision,
+    };
+  } catch (error) {
+    progress.stumbled(error instanceof Error ? error.message : String(error));
+    throw error;
+  } finally {
+    progress.settled();
+  }
+}
+
+/**
+ * A plot that failed to provision is still a plot. When Silvic recognised the
+ * failure well enough to offer a repair, this runs that repair in the plot and
+ * provisions it again — the steps are declared idempotent, so the ones that
+ * already succeeded simply pass a second time.
+ */
+async function repairPlot(
+  request: PlotRepairRequest,
+): Promise<readonly ProvisionResult[]> {
+  const workspace = knownWorkspace(request.path);
+  const project = latestSnapshot.projects.find((candidate) =>
+    candidate.workspaces.some(
+      (candidateWorkspace) =>
+        candidateWorkspace.workspaceId === workspace.workspaceId,
+    ),
+  );
+  if (!project) throw new Error("That plot belongs to no known project");
+
+  const recipe = await readRecipe(project.rootPath);
+  const packageManager =
+    recipe.packageManager ??
+    (await inspectRepository(workspace.path)).packageManager;
+  const command = remedyCommand(request.remedy, packageManager);
+  const label = remedyLabel(request.remedy);
+  const plot = plotNameIn(workspace.path, recipe.project);
+  const port =
+    storedPlotPort(workspace.path) ??
+    plotPort(recipe.project, plot, takenPlotPorts());
+
+  const progress = new PlotProgressReporter(
+    workspace.git.branch,
+    [
+      { id: remedyStepId, label },
+      ...recipe.provision.map((step, index) => ({
+        id: provisionStepId(index),
+        label: provisionStepLabel(step, index),
+      })),
+    ],
+    (payload) => mainWindow?.webContents.send(ipcChannels.plotProgress, payload),
+  );
+  progress.announce();
+
+  try {
+    progress.began(remedyStepId);
+    const startedAt = Date.now();
+    const result = await runner.run({
+      executable: "sh",
+      arguments: ["-c", command],
+      cwd: workspace.path,
+      onOutput: (chunk) => progress.wrote(remedyStepId, chunk),
+    });
+    const repair: ProvisionResult = {
+      label,
+      command,
+      exitCode: result.exitCode,
+      output: `${result.stdout}${result.stderr}`
+        .trim()
+        .slice(0, provisionOutputLimit),
+      durationMs: Date.now() - startedAt,
+    };
+    if (repair.exitCode !== 0) {
+      progress.failed(remedyStepId, repair.output);
+      return [repair];
+    }
+    progress.finished(remedyStepId, repair.durationMs);
+
+    const provision = await provisioner.run(
+      recipe.provision,
+      {
+        root: workspace.path,
+        sourceRoot: project.rootPath,
+        project: recipe.project,
+        plot,
+        branch: workspace.git.branch,
+        url: plotUrl(port),
+        ...(packageManager ? { packageManager } : {}),
+      },
+      {
+        onStepStart: ({ index }) => progress.began(provisionStepId(index)),
+        onStepOutput: ({ index, chunk }) =>
+          progress.wrote(provisionStepId(index), chunk),
+        onStep: (stepResult, index) =>
+          stepResult.exitCode === 0
+            ? progress.finished(provisionStepId(index), stepResult.durationMs)
+            : progress.failed(
+                provisionStepId(index),
+                stepResult.advice ?? stepResult.output,
+              ),
+      },
+    );
+
+    await paintFromGit([workspace.path]);
+    void refreshSnapshot(true);
+    return [repair, ...provision];
+  } catch (error) {
+    progress.stumbled(error instanceof Error ? error.message : String(error));
+    throw error;
+  } finally {
+    progress.settled();
+  }
+}
+
+/** Plots are directories named `<project>-<plot>`; older ones are `<plot>`. */
+function plotNameIn(path: string, project: string): string {
+  const folder = basename(path);
+  return folder.startsWith(`${project}-`)
+    ? folder.slice(project.length + 1)
+    : folder;
+}
+
+/** The address a plot was already given, so a repair cannot move it. */
+function storedPlotPort(path: string): number | undefined {
+  const target = normalize(path);
+  return Object.entries(settings.get("plotPorts")).find(
+    ([candidate]) => normalize(candidate) === target,
+  )?.[1];
 }
 
 /** Ports already handed out, so two plots never land on the same one. */

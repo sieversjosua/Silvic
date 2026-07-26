@@ -9,6 +9,12 @@ export interface CommandRequest {
   environment?: Readonly<Record<string, string>>;
   input?: string;
   signal?: AbortSignal;
+  /**
+   * Called with each chunk of stdout and stderr as it arrives. The buffered
+   * result is still returned in full; this only exists so a caller can show
+   * a long-running command moving rather than a frozen interface.
+   */
+  onOutput?: (chunk: string) => void;
 }
 
 export interface CommandResult {
@@ -41,8 +47,14 @@ export class LocalCommandRunner implements CommandRunner {
       const stdout: Buffer[] = [];
       const stderr: Buffer[] = [];
 
-      child.stdout?.on("data", (chunk: Buffer) => stdout.push(chunk));
-      child.stderr?.on("data", (chunk: Buffer) => stderr.push(chunk));
+      child.stdout?.on("data", (chunk: Buffer) => {
+        stdout.push(chunk);
+        request.onOutput?.(chunk.toString("utf8"));
+      });
+      child.stderr?.on("data", (chunk: Buffer) => {
+        stderr.push(chunk);
+        request.onOutput?.(chunk.toString("utf8"));
+      });
       if (request.input !== undefined) child.stdin?.end(request.input);
       child.once("error", reject);
       child.once("close", (exitCode) => {

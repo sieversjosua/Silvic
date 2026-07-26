@@ -268,12 +268,29 @@ export const recipeSchema = z
   .strict();
 export type Recipe = z.infer<typeof recipeSchema>;
 
+/**
+ * A repair Silvic can carry out itself. The renderer asks for it by name and
+ * never by command: what actually runs is decided in the main process, from
+ * the package manager the repository uses.
+ */
+export const provisionRemedyIdSchema = z.enum(["convex-cli"]);
+export type ProvisionRemedyId = z.infer<typeof provisionRemedyIdSchema>;
+
+export interface ProvisionRemedy {
+  id: ProvisionRemedyId;
+  /** What the button offering it says. */
+  label: string;
+}
+
 export interface ProvisionResult {
   label: string;
   command: string;
   exitCode: number;
   output: string;
   durationMs: number;
+  /** Silvic's reading of a failure it recognises, in its own words. */
+  advice?: string;
+  remedy?: ProvisionRemedy;
 }
 
 export const recipeSaveRequestSchema = z
@@ -350,6 +367,11 @@ export type CreateEnvironmentRequest = z.infer<
   typeof createEnvironmentRequestSchema
 >;
 
+export const plotRepairRequestSchema = z
+  .object({ path: z.string().min(1), remedy: provisionRemedyIdSchema })
+  .strict();
+export type PlotRepairRequest = z.infer<typeof plotRepairRequestSchema>;
+
 export const workspacePathRequestSchema = z
   .object({ path: z.string().min(1) })
   .strict();
@@ -420,6 +442,26 @@ export interface PlotCreationResult {
   provision: readonly ProvisionResult[];
 }
 
+export interface PlotProgressStep {
+  id: string;
+  label: string;
+  status: "pending" | "running" | "done" | "failed";
+  /** The newest line the step printed, so a long step still shows movement. */
+  detail?: string;
+  durationMs?: number;
+}
+
+/**
+ * Creation can take minutes, so the whole plan is sent on every change: the
+ * steps still to come are as informative as the one running, and a full state
+ * cannot arrive out of order the way a stream of deltas can.
+ */
+export interface PlotProgress {
+  /** Which creation these steps belong to. Git allows one branch once. */
+  branch: string;
+  steps: readonly PlotProgressStep[];
+}
+
 export interface DeliveryResult {
   pullRequestUrl?: string;
 }
@@ -444,6 +486,8 @@ export interface SilvicDesktopApi {
   removeRoot(root: string): Promise<readonly string[]>;
   refresh(): Promise<SilvicSnapshot>;
   createEnvironment(request: CreateEnvironmentRequest): Promise<PlotCreationResult>;
+  /** Runs the named repair in the plot, then provisions it again. */
+  repairPlot(request: PlotRepairRequest): Promise<readonly ProvisionResult[]>;
   getChanges(request: WorkspacePathRequest): Promise<WorkspaceChanges>;
   draftDelivery(request: WorkspacePathRequest): Promise<DeliveryDraft>;
   executeDelivery(request: DeliveryExecuteRequest): Promise<DeliveryResult>;
@@ -467,6 +511,7 @@ export interface SilvicDesktopApi {
   inspectProject(projectId: string): Promise<RepositoryFindings>;
   saveRecipe(request: RecipeSaveRequest): Promise<RecipeDocument>;
   onSnapshot(listener: (snapshot: SilvicSnapshot) => void): () => void;
+  onPlotProgress(listener: (progress: PlotProgress) => void): () => void;
 }
 
 export const ipcChannels = {
@@ -491,6 +536,8 @@ export const ipcChannels = {
   defaultHarnessGet: "silvic:harness:default:get",
   defaultHarnessSet: "silvic:harness:default:set",
   plotPreview: "silvic:plot:preview",
+  plotProgress: "silvic:plot:progress",
+  plotRepair: "silvic:plot:repair",
   stepTest: "silvic:step:test",
   teardownPlan: "silvic:teardown:plan",
   teardownRun: "silvic:teardown:run",

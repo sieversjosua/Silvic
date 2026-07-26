@@ -7,8 +7,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { LocalCommandRunner } from "./command-runner";
 import {
   Provisioner,
+  provisionDiagnosis,
   provisionEnvironment,
   readConvexTarget,
+  remedyCommand,
 } from "./provisioner";
 
 const temporaryDirectories: string[] = [];
@@ -101,14 +103,14 @@ describe("Provisioner", () => {
         { run: "touch should-not-exist" },
       ],
       context(root),
-      { onStep: (step) => seen.push(step.label) },
+      { onStep: (step, index) => seen.push(`${index}:${step.label}`) },
     );
 
     expect(results).toHaveLength(2);
     expect(results[1]?.exitCode).toBe(3);
     expect(results[1]?.output).toContain("boom");
     // The step after the failure never ran.
-    expect(seen).toEqual(["Step 1", "Breaks"]);
+    expect(seen).toEqual(["0:Step 1", "1:Breaks"]);
     await expect(
       readFile(join(root, "should-not-exist"), "utf8"),
     ).rejects.toThrow();
@@ -125,6 +127,72 @@ describe("Provisioner", () => {
     );
 
     expect(seen).toEqual([0, 0, 0]);
+  });
+
+  it("reports a step starting, its output, then its result", async () => {
+    const root = await plotRoot();
+    const events: string[] = [];
+
+    await provisioner.run(
+      [
+        { run: "echo installing; echo warning >&2", label: "Install" },
+        { run: "true", label: "Build" },
+      ],
+      context(root),
+      {
+        onStepStart: ({ index, command }) =>
+          events.push(`start ${index} ${command}`),
+        onStepOutput: ({ index, chunk }) =>
+          events.push(`output ${index} ${chunk.trim()}`),
+        onStep: (result, index) => events.push(`done ${index} ${result.label}`),
+      },
+    );
+
+    // A step announces itself before it can print anything, and the result is
+    // only reported once its output has been seen.
+    expect(events[0]).toBe("start 0 echo installing; echo warning >&2");
+    expect(events.slice(1, 3).sort()).toEqual([
+      "output 0 installing",
+      "output 0 warning",
+    ]);
+    expect(events.slice(3)).toEqual([
+      "done 0 Install",
+      "start 1 true",
+      "done 1 Build",
+    ]);
+  });
+
+  it("explains a Convex CLI too old for a deployment per plot, and offers the fix", () => {
+    const diagnosis = provisionDiagnosis(
+      { convex: { name: "dev/{plot}" } },
+      "error: unknown command 'deployment'\n\nUsage: convex <command> [options]",
+    );
+
+    expect(diagnosis?.advice).toContain("convex 1.34");
+    expect(diagnosis?.remedy?.id).toBe("convex-cli");
+  });
+
+  it("has nothing to add to a failure it does not recognise", () => {
+    expect(
+      provisionDiagnosis(
+        { convex: { name: "dev/{plot}" } },
+        "network unreachable",
+      ),
+    ).toBeUndefined();
+    // A shell step is the repository's own command, not one Silvic wrote.
+    expect(
+      provisionDiagnosis({ run: "npm ci" }, "unknown command 'deployment'"),
+    ).toBeUndefined();
+  });
+
+  it("repairs with the package manager the repository uses", () => {
+    expect(remedyCommand("convex-cli", "pnpm")).toBe("pnpm add convex@latest");
+    expect(remedyCommand("convex-cli", "bun")).toBe("bun add convex@latest");
+    expect(remedyCommand("convex-cli", "yarn")).toBe("yarn add convex@latest");
+    // npm is the assumption when a repository has not said otherwise.
+    expect(remedyCommand("convex-cli", undefined)).toBe(
+      "npm install convex@latest",
+    );
   });
 
   it("does nothing when a repository declares no provisioning", async () => {

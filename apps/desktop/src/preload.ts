@@ -11,6 +11,8 @@ import {
   type ProjectActivationRequest,
   type RecipeSaveRequest,
   type PlotPreviewRequest,
+  type PlotProgress,
+  type PlotRepairRequest,
   type TestStepRequest,
   type TeardownRequestPayload,
   type SilvicDesktopApi,
@@ -25,6 +27,8 @@ const api: SilvicDesktopApi = {
   refresh: () => ipcRenderer.invoke(ipcChannels.snapshotRefresh),
   createEnvironment: (request: CreateEnvironmentRequest) =>
     ipcRenderer.invoke(ipcChannels.environmentCreate, request),
+  repairPlot: (request: PlotRepairRequest) =>
+    ipcRenderer.invoke(ipcChannels.plotRepair, request),
   getChanges: (request) => ipcRenderer.invoke(ipcChannels.changesGet, request),
   draftDelivery: (request) =>
     ipcRenderer.invoke(ipcChannels.deliveryDraft, request),
@@ -68,6 +72,14 @@ const api: SilvicDesktopApi = {
     ipcRenderer.on(ipcChannels.snapshotChanged, handler);
     return () =>
       ipcRenderer.removeListener(ipcChannels.snapshotChanged, handler);
+  },
+  onPlotProgress: (listener: (progress: PlotProgress) => void) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      progress: PlotProgress,
+    ) => listener(progress);
+    ipcRenderer.on(ipcChannels.plotProgress, handler);
+    return () => ipcRenderer.removeListener(ipcChannels.plotProgress, handler);
   },
 };
 

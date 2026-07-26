@@ -2346,9 +2346,105 @@ button {
   font-size: 10.5px;
 }
 
+/* The same rows while the work is still happening: a mark per step, so the
+   plan, the step running and the ones still to come are all readable. */
+.provision-steps.live {
+  max-height: 232px;
+  overflow-y: auto;
+}
+
+.provision-steps li[data-status] {
+  position: relative;
+  padding-left: 30px;
+}
+
+.provision-steps li[data-status]::before {
+  content: "";
+  position: absolute;
+  top: 13px;
+  left: 12px;
+  width: 7px;
+  height: 7px;
+  border: 1px solid var(--rule-strong);
+  border-radius: 50%;
+}
+
+.provision-steps li[data-status="running"]::before {
+  border-color: var(--accent);
+  background: var(--accent);
+  animation: pulse 1.2s var(--ease) infinite;
+}
+
+.provision-steps li[data-status="done"]::before {
+  border-color: var(--tone-ready);
+  background: var(--tone-ready);
+}
+
+.provision-steps li[data-status="failed"] {
+  border-color: color-mix(in srgb, var(--tone-attention) 45%, transparent);
+}
+
+.provision-steps li[data-status="failed"]::before {
+  border-color: var(--tone-attention);
+  background: var(--tone-attention);
+}
+
+.provision-steps li[data-status="pending"] {
+  border-style: dashed;
+}
+
+.provision-steps li[data-status="pending"] .provision-head strong {
+  color: var(--ink-faint);
+}
+
+.provision-steps li[data-status="running"] .provision-head span {
+  color: var(--accent);
+}
+
+.provision-steps li[data-status="failed"] .provision-head span {
+  color: var(--tone-attention);
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+/* Silvic's reading of the failure, ahead of the tool's own words. */
+.step-advice {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: var(--r-md);
+  color: var(--ink-muted);
+  font-size: 11.5px;
+  line-height: 1.5;
+  background: var(--surface-sunk);
+}
+
+/* A CLI aligns its output in columns; wrapping it shreds that into nonsense,
+   so it keeps its own shape and scrolls sideways instead. */
 .provision-steps .patch {
   margin-top: 8px;
   max-height: 140px;
+  overflow-x: auto;
+  white-space: pre;
+}
+
+/* The repair Silvic can carry out, offered where the failure is explained. */
+.remedy-button {
+  margin-top: 9px;
+}
+
+.step-output summary {
+  margin-top: 9px;
+  color: var(--ink-faint);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.step-output summary:hover {
+  color: var(--ink-muted);
 }
 
 .patch {

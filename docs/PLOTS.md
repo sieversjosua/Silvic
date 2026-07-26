@@ -72,7 +72,9 @@ One optional file at the repository root. Every field optional.
   // Ordered, idempotent, retryable. Each step reports what it did.
   "provision": [
     { "run": "bun install" },
-    { "convex": { "deployment": "dev", "from": "CONVEX_DEPLOYMENT" } }
+    // Team and project are read from the source checkout's CONVEX_DEPLOYMENT
+    // when they are left out. Needs convex 1.34 or newer in the repository.
+    { "convex": { "name": "dev/{plot}" } }
   ]
 }
 ```

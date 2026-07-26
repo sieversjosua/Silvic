@@ -104,24 +104,22 @@ export const useSilvic = create<SilvicState>((set, get) => ({
       set({ error: message(error) });
     }
   },
+  /**
+   * `loading` belongs to the background survey, which runs on a timer. Creating
+   * a plot takes minutes and reports its own progress, so it is the dialog that
+   * holds the pending state and shows the failure.
+   */
   createEnvironment: async (request) => {
-    set({ loading: true, error: undefined });
-    try {
-      const result = await window.silvic.createEnvironment(request);
-      setSelectionForSnapshot(set, get, result.snapshot);
-      const created = result.snapshot.projects
-        .flatMap((project) => project.workspaces)
-        .find((workspace) => workspace.path === result.plot.path);
-      set({
-        snapshot: result.snapshot,
-        selectedWorkspaceId: created?.workspaceId ?? get().selectedWorkspaceId,
-        loading: false,
-      });
-      return result;
-    } catch (error) {
-      set({ error: message(error), loading: false });
-      throw error;
-    }
+    const result = await window.silvic.createEnvironment(request);
+    setSelectionForSnapshot(set, get, result.snapshot);
+    const created = result.snapshot.projects
+      .flatMap((project) => project.workspaces)
+      .find((workspace) => workspace.path === result.plot.path);
+    set({
+      snapshot: result.snapshot,
+      selectedWorkspaceId: created?.workspaceId ?? get().selectedWorkspaceId,
+    });
+    return result;
   },
   selectProject: (selectedProjectId) => {
     const project = get().snapshot.projects.find(

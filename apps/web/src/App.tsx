@@ -26,7 +26,9 @@ import type {
   HarnessDefinition,
   HarnessId,
   PlotCreationResult,
+  PlotProgressStep,
   ProjectSnapshot,
+  ProvisionRemedyId,
   WorkspaceChanges,
   WorkspaceSnapshot,
 } from "@silvic/contracts";
@@ -288,7 +290,6 @@ export function App() {
       {showEnvironment && project && (
         <NewPlotDialog
           source={workspace ?? project.workspaces[0]}
-          loading={loading}
           onCancel={() => setShowEnvironment(false)}
           onCreate={createEnvironment}
         />
@@ -795,12 +796,10 @@ function Field({ label, value }: { label: string; value: string }) {
  */
 function NewPlotDialog({
   source,
-  loading,
   onCancel,
   onCreate,
 }: {
   source: WorkspaceSnapshot | undefined;
-  loading: boolean;
   onCancel(): void;
   onCreate(request: {
     sourcePath: string;
@@ -810,25 +809,63 @@ function NewPlotDialog({
 }) {
   const [branch, setBranch] = useState("");
   const [mode, setMode] = useState<"worktree" | "clone">("worktree");
+  const [creating, setCreating] = useState(false);
+  const [repairing, setRepairing] = useState(false);
+  const [steps, setSteps] = useState<readonly PlotProgressStep[]>([]);
   const [result, setResult] = useState<PlotCreationResult>();
   const [failure, setFailure] = useState<string>();
+  // The branch being created, so progress from an abandoned attempt cannot
+  // paint over the one the dialog is waiting on.
+  const creatingBranch = useRef<string | undefined>(undefined);
   const plotName = branch
     .trim()
     .replaceAll("/", "-")
     .replace(/[^a-zA-Z0-9._-]+/g, "-")
     .replace(/^-+|-+$/g, "");
 
+  useEffect(
+    () =>
+      window.silvic.onPlotProgress((progress) => {
+        if (progress.branch === creatingBranch.current) setSteps(progress.steps);
+      }),
+    [],
+  );
+
   if (!source) return null;
 
   if (result) {
     const failed = result.provision.find((step) => step.exitCode !== 0);
+    // The repair runs in the plot that already exists, so the dialog reports it
+    // exactly as it reported creation: the same steps, live.
+    const repair = (remedy: ProvisionRemedyId) => {
+      setFailure(undefined);
+      setSteps([]);
+      setRepairing(true);
+      creatingBranch.current = branch.trim();
+      void window.silvic
+        .repairPlot({ path: result.plot.path, remedy })
+        .then((provision) => setResult({ ...result, provision }))
+        .catch((error: unknown) =>
+          setFailure(error instanceof Error ? error.message : String(error)),
+        )
+        .finally(() => {
+          creatingBranch.current = undefined;
+          setRepairing(false);
+        });
+    };
     return (
-      <div className="scrim" onMouseDown={onCancel}>
+      <div className="scrim" onMouseDown={repairing ? undefined : onCancel}>
         <section
           className="dialog"
           onMouseDown={(event) => event.stopPropagation()}
         >
-          <p className="micro">{failed ? "Provisioning failed" : "Plot ready"}</p>
+          <p className="micro">
+            {repairing
+              ? "Repairing"
+              : failed
+                ? "Provisioning failed"
+                : "Plot ready"}
+          </p>
           <h2>{result.plot.name}</h2>
           <div className="field">
             <span className="field-label">Address</span>
@@ -840,7 +877,9 @@ function NewPlotDialog({
             <i className="field-leader" />
             <span className="field-value mono">{result.plot.path}</span>
           </div>
-          {result.provision.length === 0 ? (
+          {repairing ? (
+            <ProgressSteps steps={steps} />
+          ) : result.provision.length === 0 ? (
             <p className="dialog-copy">
               This repository declares no provisioning steps. Add a
               <code> silvic.json </code> to install dependencies, create a
@@ -848,27 +887,59 @@ function NewPlotDialog({
             </p>
           ) : (
             <ol className="provision-steps">
-              {result.provision.map((step) => (
-                <li key={step.label} data-failed={step.exitCode !== 0 || undefined}>
-                  <div className="provision-head">
-                    <strong>{step.label}</strong>
-                    <span className="mono">
-                      {step.exitCode === 0
-                        ? `${Math.round(step.durationMs / 100) / 10}s`
-                        : `exit ${step.exitCode}`}
-                    </span>
-                  </div>
-                  <code className="mono">{step.command}</code>
-                  {step.exitCode !== 0 && step.output && (
-                    <pre className="patch mono">{step.output}</pre>
-                  )}
-                </li>
-              ))}
+              {result.provision.map((step) => {
+                const remedy = step.remedy;
+                return (
+                  <li
+                    key={step.label}
+                    data-failed={step.exitCode !== 0 || undefined}
+                  >
+                    <div className="provision-head">
+                      <strong>{step.label}</strong>
+                      <span className="mono">
+                        {step.exitCode === 0
+                          ? `${Math.round(step.durationMs / 100) / 10}s`
+                          : `exit ${step.exitCode}`}
+                      </span>
+                    </div>
+                    <code className="mono">{step.command}</code>
+                    {step.advice && <p className="step-advice">{step.advice}</p>}
+                    {remedy && (
+                      <button
+                        type="button"
+                        className="ghost-button remedy-button"
+                        onClick={() => repair(remedy.id)}
+                      >
+                        {remedy.label}
+                      </button>
+                    )}
+                    {step.exitCode !== 0 &&
+                      step.output &&
+                      // Once Silvic has named the cause, the tool's own words
+                      // are corroboration rather than the headline, so they
+                      // fold away.
+                      (step.advice ? (
+                        <details className="step-output">
+                          <summary>What the command printed</summary>
+                          <pre className="patch mono">{step.output}</pre>
+                        </details>
+                      ) : (
+                        <pre className="patch mono">{step.output}</pre>
+                      ))}
+                  </li>
+                );
+              })}
             </ol>
           )}
+          {failure && <p className="dialog-error">{failure}</p>}
           <div className="dialog-actions">
-            <button type="button" className="primary-button" onClick={onCancel}>
-              Done
+            <button
+              type="button"
+              className="primary-button"
+              onClick={onCancel}
+              disabled={repairing}
+            >
+              {repairing ? "Working…" : "Done"}
             </button>
           </div>
         </section>
@@ -877,23 +948,27 @@ function NewPlotDialog({
   }
 
   return (
-    <div className="scrim" onMouseDown={loading ? undefined : onCancel}>
+    <div className="scrim" onMouseDown={creating ? undefined : onCancel}>
       <form
         className="dialog"
         onMouseDown={(event) => event.stopPropagation()}
         onSubmit={(event) => {
           event.preventDefault();
-          if (!plotName || loading) return;
+          if (!plotName || creating) return;
+          const requested = branch.trim();
           setFailure(undefined);
-          void onCreate({
-            sourcePath: source.path,
-            branch: branch.trim(),
-            mode,
-          })
+          setSteps([]);
+          setCreating(true);
+          creatingBranch.current = requested;
+          void onCreate({ sourcePath: source.path, branch: requested, mode })
             .then(setResult)
             .catch((error: unknown) =>
               setFailure(error instanceof Error ? error.message : String(error)),
-            );
+            )
+            .finally(() => {
+              creatingBranch.current = undefined;
+              setCreating(false);
+            });
         }}
       >
         <p className="micro">New plot</p>
@@ -909,9 +984,10 @@ function NewPlotDialog({
             value={branch}
             onChange={(event) => setBranch(event.target.value)}
             placeholder="feature/agent-task"
+            disabled={creating}
           />
         </label>
-        <fieldset className="choices">
+        <fieldset className="choices" disabled={creating}>
           <legend className="micro">Location</legend>
           <label data-selected={mode === "worktree" || undefined}>
             <input
@@ -935,27 +1011,58 @@ function NewPlotDialog({
           </label>
         </fieldset>
         {plotName && <p className="destination mono">{plotName}</p>}
+        {steps.length > 0 && <ProgressSteps steps={steps} />}
         {failure && <p className="dialog-error">{failure}</p>}
         <div className="dialog-actions">
           <button
             type="button"
             className="ghost-button"
             onClick={onCancel}
-            disabled={loading}
+            disabled={creating}
           >
             Cancel
           </button>
           <button
             type="submit"
             className="primary-button"
-            disabled={loading || !plotName}
+            disabled={creating || !plotName}
           >
-            {loading ? "Creating…" : "Create plot"}
+            {creating ? "Creating…" : "Create plot"}
           </button>
         </div>
       </form>
     </div>
   );
+}
+
+/**
+ * What the main process is doing right now. Every step is listed from the
+ * start, including the ones still to come, so a long provisioning run reads as
+ * progress through a known plan rather than an interface that has stopped.
+ */
+function ProgressSteps({ steps }: { steps: readonly PlotProgressStep[] }) {
+  return (
+    <ol className="provision-steps live">
+      {steps.map((step) => (
+        <li key={step.id} data-status={step.status}>
+          <div className="provision-head">
+            <strong>{step.label}</strong>
+            <span className="mono">{stepStatusLabel(step)}</span>
+          </div>
+          {step.detail && <code className="mono">{step.detail}</code>}
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+function stepStatusLabel(step: PlotProgressStep): string {
+  if (step.status === "pending") return "waiting";
+  if (step.status === "running") return "running";
+  if (step.status === "failed") return "failed";
+  return step.durationMs === undefined
+    ? "done"
+    : `${Math.round(step.durationMs / 100) / 10}s`;
 }
 
 function DeliveryDialog({
