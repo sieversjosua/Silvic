@@ -51,7 +51,7 @@ export function HarnessRows({
               onSetDefault(id);
             }}
           >
-            <Pin size={11} />
+            <Pin size={12} />
           </button>
           <button
             type="button"

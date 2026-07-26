@@ -127,12 +127,49 @@ create    worktree, name, port
 provision ordered steps, streamed, each result recorded
 start     commands marked autoStart
 resume    reconcile what exists, start only what is missing
-archive   stop processes, keep the worktree
-clean up  remove worktree, branch, and provisioned resources, after confirmation
 ```
 
 Provisioning is separate from starting. A Plot that fails to provision is still
 a Plot — it reports what failed and offers a retry, rather than disappearing.
+
+## Tearing down
+
+Activity and retention are separate questions. *Is anything running here* is
+already answered by the operational state — Active or Quiet. What teardown deals
+with is *what this Plot still holds, and what releasing it costs*:
+
+| Resource | Cost to keep | Getting it back |
+| -------- | ------------ | --------------- |
+| Processes | a port, some memory | start them again |
+| Worktree | disk | recreate from the branch |
+| Provider deployment | **money** | provision again |
+| Branch | nothing, once pushed | only if it was pushed |
+
+So teardown is a ladder rather than a state, each rung reversible at increasing
+cost:
+
+- **Stop** — end processes. Free, instant, nothing lost.
+- **Archive** — release what the Plot holds, keeping its files and branch.
+- **Remove** — delete the worktree. The branch is a separate, explicit choice.
+
+Nothing runs without showing the exact ordered plan first, including what
+survives. A plan is refused outright rather than partially applied when it would
+lose work: uncommitted changes, unpushed commits, or a branch with no upstream
+all block it. The primary checkout can never be torn down — it is the project.
+
+### Steps Silvic cannot perform
+
+A plan lists these too, with the reason, rather than dropping them. Two matter
+today:
+
+- **Convex deployments cannot be deleted.** The CLI offers `select`, `create`
+  and `token`, and nothing that removes a deployment. Archiving a Plot therefore
+  cannot stop it costing money; Silvic says so and links to the dashboard.
+- **Processes Silvic did not start cannot be stopped**, because there is no
+  supervision yet.
+
+Claiming a resource was released when it was not would be worse than leaving it
+to the user, so the plan is honest about which steps are the user's.
 
 ## Open decisions
 

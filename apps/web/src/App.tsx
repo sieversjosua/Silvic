@@ -37,6 +37,7 @@ import { Mark } from "./Mark";
 import { HarnessRows, harnessLabel } from "./harnesses";
 import { CodexMark, ConvexMark, HarnessMark } from "./providers";
 import { RecipeDialog } from "./RecipeDialog";
+import { TeardownDialog } from "./TeardownDialog";
 import {
   localChangeCount,
   locationLabel,
@@ -74,6 +75,7 @@ export function App() {
   const [query, setQuery] = useState("");
   const [menuProjectId, setMenuProjectId] = useState<string>();
   const [recipeProject, setRecipeProject] = useState<ProjectSnapshot>();
+  const [teardownPlot, setTeardownPlot] = useState<WorkspaceSnapshot>();
   const [showEnvironment, setShowEnvironment] = useState(false);
   const [deliveryWorkspace, setDeliveryWorkspace] =
     useState<WorkspaceSnapshot>();
@@ -241,6 +243,7 @@ export function App() {
               defaultHarness={defaultHarness}
               onSetDefaultHarness={(id) => void setDefaultHarness(id)}
               onNewPlot={() => setShowEnvironment(true)}
+              onTeardown={setTeardownPlot}
             />
 
           </>
@@ -267,6 +270,13 @@ export function App() {
         )}
       </aside>
 
+      {teardownPlot && (
+        <TeardownDialog
+          workspace={teardownPlot}
+          onClose={() => setTeardownPlot(undefined)}
+          onDone={() => void refresh()}
+        />
+      )}
       {recipeProject && (
         <RecipeDialog
           projectId={recipeProject.id}

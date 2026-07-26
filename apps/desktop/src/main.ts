@@ -31,6 +31,7 @@ import {
   openLinkRequestSchema,
   openWorkspaceRequestSchema,
   projectActivationRequestSchema,
+  teardownRequestSchema,
   recipeSaveRequestSchema,
   workspacePathRequestSchema,
   type AppearancePreference,
@@ -48,7 +49,9 @@ import {
   LocalCommandRunner,
   ProjectService,
   Provisioner,
+  TeardownService,
   inspectRepository,
+  planTeardown,
   WorkspaceRegistry,
   plotPort,
   plotUrl,
@@ -94,6 +97,7 @@ const fastProjectService = new ProjectService({
 const environmentService = new EnvironmentService(runner);
 const deliveryService = new DeliveryService(runner);
 const provisioner = new Provisioner(runner);
+const teardownService = new TeardownService(runner);
 const workspaceRegistry = new WorkspaceRegistry();
 const settings = new Store<Settings>({
   name: "settings",
@@ -315,6 +319,39 @@ function registerIpc(): void {
     const parsed = harnessIdSchema.parse(id);
     settings.set("defaultHarness", parsed);
     return parsed;
+  });
+  ipcMain.handle(ipcChannels.teardownPlan, (event, request: unknown) => {
+    assertTrustedSender(event);
+    const parsed = teardownRequestSchema.parse(request);
+    return planTeardown({
+      workspace: knownWorkspace(parsed.path),
+      scope: parsed.scope,
+      deleteBranch: parsed.deleteBranch,
+    });
+  });
+  ipcMain.handle(ipcChannels.teardownRun, async (event, request: unknown) => {
+    assertTrustedSender(event);
+    const parsed = teardownRequestSchema.parse(request);
+    const workspace = knownWorkspace(parsed.path);
+    const project = latestSnapshot.projects.find((candidate) =>
+      candidate.workspaces.some(
+        (entry) => normalize(entry.path) === normalize(parsed.path),
+      ),
+    );
+    if (!project) throw new Error("Silvic can only tear down a known plot");
+    const plan = planTeardown({
+      workspace,
+      scope: parsed.scope,
+      deleteBranch: parsed.deleteBranch,
+    });
+    const results = await teardownService.execute(plan, {
+      path: workspace.path,
+      branch: workspace.branch,
+      projectRoot: project.rootPath,
+    });
+    await paintFromGit([project.rootPath], "merge");
+    void refreshSnapshot(true);
+    return { results, snapshot: latestSnapshot };
   });
   ipcMain.handle(ipcChannels.recipeGet, async (event, projectId: unknown) => {
     assertTrustedSender(event);
@@ -629,6 +666,15 @@ function knownObservationUrl(url: string): string {
   );
   if (!known) throw new Error("Silvic can only open a discovered link");
   return url;
+}
+
+function knownWorkspace(path: string) {
+  const normalized = normalize(path);
+  const workspace = latestSnapshot.projects
+    .flatMap((project) => project.workspaces)
+    .find((candidate) => normalize(candidate.path) === normalized);
+  if (!workspace) throw new Error("Silvic can only tear down a known plot");
+  return workspace;
 }
 
 function knownWorkspacePath(path: string): string {

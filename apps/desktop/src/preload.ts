@@ -10,6 +10,7 @@ import {
   type OpenWorkspaceRequest,
   type ProjectActivationRequest,
   type RecipeSaveRequest,
+  type TeardownRequestPayload,
   type SilvicDesktopApi,
   type SilvicSnapshot,
 } from "@silvic/contracts";
@@ -45,6 +46,10 @@ const api: SilvicDesktopApi = {
   getDefaultHarness: () => ipcRenderer.invoke(ipcChannels.defaultHarnessGet),
   setDefaultHarness: (id: HarnessId) =>
     ipcRenderer.invoke(ipcChannels.defaultHarnessSet, id),
+  planTeardown: (request: TeardownRequestPayload) =>
+    ipcRenderer.invoke(ipcChannels.teardownPlan, request),
+  runTeardown: (request: TeardownRequestPayload) =>
+    ipcRenderer.invoke(ipcChannels.teardownRun, request),
   getRecipe: (projectId: string) =>
     ipcRenderer.invoke(ipcChannels.recipeGet, projectId),
   saveRecipe: (request: RecipeSaveRequest) =>

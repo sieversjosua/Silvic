@@ -294,6 +294,17 @@ export interface RecipeDocument {
   resolved: { project: string; directory: string };
 }
 
+export const teardownScopeSchema = z.enum(["stop", "archive", "remove"]);
+
+export const teardownRequestSchema = z
+  .object({
+    path: z.string().min(1),
+    scope: teardownScopeSchema,
+    deleteBranch: z.boolean(),
+  })
+  .strict();
+export type TeardownRequestPayload = z.infer<typeof teardownRequestSchema>;
+
 export const openLinkRequestSchema = z
   .object({
     url: z
@@ -354,6 +365,31 @@ export type DeliveryExecuteRequest = z.infer<
   typeof deliveryExecuteRequestSchema
 >;
 
+export interface TeardownStepPayload {
+  id: string;
+  label: string;
+  detail: string;
+  manual?: string;
+  url?: string;
+}
+
+export interface TeardownPlanPayload {
+  scope: z.infer<typeof teardownScopeSchema>;
+  steps: readonly TeardownStepPayload[];
+  blockers: readonly string[];
+  keeps: readonly string[];
+}
+
+export interface TeardownRunResult {
+  results: readonly {
+    id: string;
+    label: string;
+    status: "done" | "skipped" | "failed";
+    output: string;
+  }[];
+  snapshot: SilvicSnapshot;
+}
+
 export interface PlotCreationResult {
   snapshot: SilvicSnapshot;
   plot: { name: string; path: string; port: number; url: string };
@@ -399,6 +435,8 @@ export interface SilvicDesktopApi {
   copyText(text: string): Promise<void>;
   getDefaultHarness(): Promise<HarnessId>;
   setDefaultHarness(id: HarnessId): Promise<HarnessId>;
+  planTeardown(request: TeardownRequestPayload): Promise<TeardownPlanPayload>;
+  runTeardown(request: TeardownRequestPayload): Promise<TeardownRunResult>;
   getRecipe(projectId: string): Promise<RecipeDocument>;
   inspectProject(projectId: string): Promise<RepositoryFindings>;
   saveRecipe(request: RecipeSaveRequest): Promise<RecipeDocument>;
@@ -426,6 +464,8 @@ export const ipcChannels = {
   clipboardWrite: "silvic:clipboard:write",
   defaultHarnessGet: "silvic:harness:default:get",
   defaultHarnessSet: "silvic:harness:default:set",
+  teardownPlan: "silvic:teardown:plan",
+  teardownRun: "silvic:teardown:run",
   recipeGet: "silvic:recipe:get",
   projectInspect: "silvic:project:inspect",
   recipeSave: "silvic:recipe:save",

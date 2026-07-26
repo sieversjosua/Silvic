@@ -8,5 +8,6 @@ export * from "./ports";
 export * from "./project-service";
 export * from "./provisioner";
 export * from "./recipe";
+export * from "./teardown";
 export * from "./work-cli-names";
 export * from "./workspace-registry";

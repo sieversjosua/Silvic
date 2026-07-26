@@ -26,6 +26,7 @@ import {
   Plus,
   Radio,
   SlidersHorizontal,
+  Trash2,
   Terminal,
 } from "lucide-react";
 
@@ -77,6 +78,7 @@ interface WorkspaceNodeData extends Record<string, unknown> {
   onNewPlot(): void;
   defaultHarness: HarnessId;
   onSetDefaultHarness(id: HarnessId): void;
+  onTeardown(workspace: WorkspaceSnapshot): void;
 }
 
 interface QuietNodeData extends Record<string, unknown> {
@@ -99,6 +101,7 @@ interface GroveProps {
   onNewPlot(): void;
   defaultHarness: HarnessId;
   onSetDefaultHarness(id: HarnessId): void;
+  onTeardown(workspace: WorkspaceSnapshot): void;
 }
 
 const nodeTypes = { workspace: memo(WorkspaceNode), quiet: memo(QuietNode) };
@@ -122,6 +125,7 @@ function GroveCanvas({
   onNewPlot,
   defaultHarness,
   onSetDefaultHarness,
+  onTeardown,
 }: GroveProps) {
   const [nudges, setNudges] = useState<ProjectNudges>(() =>
     readNudges(project.id),
@@ -177,6 +181,7 @@ function GroveCanvas({
           onNewPlot,
           defaultHarness,
           onSetDefaultHarness,
+          onTeardown,
         },
       } satisfies WorkspaceFlowNode;
     });
@@ -193,6 +198,7 @@ function GroveCanvas({
     onNewPlot,
     defaultHarness,
     onSetDefaultHarness,
+    onTeardown,
   ]);
 
   const quietTotal = project.workspaces.filter(isQuiet).length;
@@ -369,6 +375,7 @@ function WorkspaceNode({ data }: NodeProps<WorkspaceFlowNode>) {
     <article
       className="plot"
       data-tone={state.tone}
+      data-running={state.tone === "active" || undefined}
       data-primary={workspace.isPrimary || undefined}
       data-selected={data.selected || undefined}
       data-dimmed={data.dimmed || undefined}
@@ -506,6 +513,7 @@ function WorkspaceNode({ data }: NodeProps<WorkspaceFlowNode>) {
           onOpen={data.onOpen}
           onSetDefaultHarness={data.onSetDefaultHarness}
           onEditRecipe={data.onEditRecipe}
+          onTeardown={data.onTeardown}
         />
       )}
       <Handle id="out-right" type="source" position={Position.Right} />
@@ -528,6 +536,7 @@ function PlotMenu({
   onOpen,
   onSetDefaultHarness,
   onEditRecipe,
+  onTeardown,
 }: {
   anchor: HTMLElement | null;
   workspace: WorkspaceSnapshot;
@@ -537,6 +546,7 @@ function PlotMenu({
   onOpen(path: string, target: HarnessDefinition["id"]): void;
   onSetDefaultHarness(id: HarnessId): void;
   onEditRecipe(): void;
+  onTeardown(workspace: WorkspaceSnapshot): void;
 }) {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -593,14 +603,22 @@ function PlotMenu({
             Copy address
           </button>
         )}
-        {workspace.isPrimary && (
-          <>
-            <div className="menu-rule" />
-            <button type="button" role="menuitem" onClick={run(onEditRecipe)}>
-              <SlidersHorizontal size={14} />
-              Recipe…
-            </button>
-          </>
+        <div className="menu-rule" />
+        {workspace.isPrimary ? (
+          <button type="button" role="menuitem" onClick={run(onEditRecipe)}>
+            <SlidersHorizontal size={14} />
+            Recipe…
+          </button>
+        ) : (
+          <button
+            type="button"
+            role="menuitem"
+            className="danger"
+            onClick={run(() => onTeardown(workspace))}
+          >
+            <Trash2 size={14} />
+            Tear down…
+          </button>
         )}
       </div>
     </>,
