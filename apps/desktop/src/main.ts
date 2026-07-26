@@ -114,6 +114,9 @@ let activeRefresh: Promise<SilvicSnapshot> | undefined;
 let queuedFreshRefresh: Promise<SilvicSnapshot> | undefined;
 
 app.setName("Silvic");
+if (process.platform === "darwin" && !app.isPackaged) {
+  process.title = "Silvic";
+}
 
 if (!app.requestSingleInstanceLock()) {
   app.quit();
@@ -411,7 +414,10 @@ async function createEnvironment(
   const recipe = await readRecipe(project.rootPath);
   const plot = safePathSegment(request.branch);
   if (!plot) throw new Error("That branch name has no usable plot name");
-  const destinationPath = join(recipe.directory, plot);
+  // A harness shows the directory's last segment and nothing else, so the
+  // project belongs in it: `feature-auth` alone says nothing about which
+  // repository you have opened.
+  const destinationPath = join(recipe.directory, `${recipe.project}-${plot}`);
   const port = plotPort(recipe.project, plot, takenPlotPorts());
   const url = plotUrl(port);
 

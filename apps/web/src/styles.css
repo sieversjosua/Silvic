@@ -961,6 +961,11 @@ button {
 }
 
 .plot-remote {
+  opacity: 0;
+  transition:
+    opacity 120ms var(--ease),
+    color 120ms var(--ease),
+    background 120ms var(--ease);
   display: grid;
   width: 22px;
   height: 22px;
@@ -1055,10 +1060,39 @@ button {
   color: var(--tone, var(--tone-quiet));
 }
 
+.chip.linked {
+  cursor: pointer;
+  transition:
+    border-color 120ms var(--ease),
+    color 120ms var(--ease);
+}
+
+.chip.linked:hover {
+  color: var(--ink);
+  border-color: var(--rule-strong);
+  background: var(--surface-hover);
+}
+
+/*
+ * Actions stay hidden until the card is hovered or selected, so a resting
+ * canvas shows only information. Opacity rather than display keeps the card's
+ * height fixed, so nothing reflows on hover.
+ */
 .plot-actions {
   display: flex;
   gap: 5px;
   margin-top: 10px;
+  opacity: 0;
+  transition: opacity 120ms var(--ease);
+}
+
+.plot:hover .plot-actions,
+.plot[data-selected] .plot-actions,
+.plot:focus-within .plot-actions,
+.plot:hover .plot-remote,
+.plot[data-selected] .plot-remote,
+.plot:focus-within .plot-remote {
+  opacity: 1;
 }
 
 .plot-actions button {

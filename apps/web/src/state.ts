@@ -57,6 +57,8 @@ export interface CardSignal {
   kind: ConnectorObservation["kind"];
   tone: ConnectorObservation["state"];
   text: string;
+  /** Present when the chip has somewhere to go, which makes it clickable. */
+  url?: string;
 }
 
 const severity: Record<ConnectorObservation["state"], number> = {
@@ -99,7 +101,8 @@ export function cardSignals(workspace: WorkspaceSnapshot): CardSignal[] {
           : kind === "session"
             ? (worst.detail ?? worst.label)
             : worst.label;
-      return { kind, tone: worst.state, text } satisfies CardSignal;
+      const url = items.length === 1 ? worst.url : undefined;
+      return { kind, tone: worst.state, text, ...(url ? { url } : {}) };
     })
     .filter((signal) => signal !== undefined)
     .sort((left, right) => severity[left.tone] - severity[right.tone]);

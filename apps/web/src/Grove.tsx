@@ -53,6 +53,7 @@ import {
   locationLabel,
   workingTreeLabel,
   workspaceState,
+  type CardSignal,
 } from "./state";
 
 const STORAGE_KEY = "silvic.grove.nudges.v2";
@@ -424,10 +425,7 @@ function WorkspaceNode({ data }: NodeProps<WorkspaceFlowNode>) {
       {signals.length > 0 && (
         <div className="plot-signals">
           {signals.map((signal) => (
-            <span key={signal.kind} className="chip" data-tone={signal.tone}>
-              {signalIcon(signal.kind)}
-              <span>{signal.text}</span>
-            </span>
+            <Signal key={signal.kind} signal={signal} />
           ))}
         </div>
       )}
@@ -639,6 +637,37 @@ function plotSummary(project: ProjectSnapshot): string {
   return busy > 0
     ? `${plots.length} plots · ${busy} busy`
     : `${plots.length} plots · all quiet`;
+}
+
+function Signal({ signal }: { signal: CardSignal }) {
+  const { url } = signal;
+  const body = (
+    <>
+      {signalIcon(signal.kind)}
+      <span>{signal.text}</span>
+    </>
+  );
+  if (!url) {
+    return (
+      <span className="chip" data-tone={signal.tone}>
+        {body}
+      </span>
+    );
+  }
+  return (
+    <button
+      type="button"
+      className="chip linked"
+      data-tone={signal.tone}
+      title={url}
+      onClick={(event) => {
+        event.stopPropagation();
+        void window.silvic.openLink({ url });
+      }}
+    >
+      {body}
+    </button>
+  );
 }
 
 function signalIcon(kind: ConnectorObservation["kind"]) {
