@@ -2436,6 +2436,21 @@ button {
   margin-top: 9px;
 }
 
+/* A plot whose recipe never finished says so on the canvas, not only when
+   selected: it looks like every other clean worktree otherwise. */
+.plot-unprovisioned {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-top: 9px;
+  color: var(--tone-attention);
+  font-size: 11px;
+}
+
+.plot-unprovisioned svg {
+  flex: 0 0 auto;
+}
+
 .step-output summary {
   margin-top: 9px;
   color: var(--ink-faint);

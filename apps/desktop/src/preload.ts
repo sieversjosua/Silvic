@@ -12,7 +12,7 @@ import {
   type RecipeSaveRequest,
   type PlotPreviewRequest,
   type PlotProgress,
-  type PlotRepairRequest,
+  type PlotProvisionRequest,
   type TestStepRequest,
   type TeardownRequestPayload,
   type SilvicDesktopApi,
@@ -27,8 +27,8 @@ const api: SilvicDesktopApi = {
   refresh: () => ipcRenderer.invoke(ipcChannels.snapshotRefresh),
   createEnvironment: (request: CreateEnvironmentRequest) =>
     ipcRenderer.invoke(ipcChannels.environmentCreate, request),
-  repairPlot: (request: PlotRepairRequest) =>
-    ipcRenderer.invoke(ipcChannels.plotRepair, request),
+  provisionPlot: (request: PlotProvisionRequest) =>
+    ipcRenderer.invoke(ipcChannels.plotProvision, request),
   getChanges: (request) => ipcRenderer.invoke(ipcChannels.changesGet, request),
   draftDelivery: (request) =>
     ipcRenderer.invoke(ipcChannels.deliveryDraft, request),

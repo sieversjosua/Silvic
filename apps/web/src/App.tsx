@@ -9,6 +9,7 @@ import {
   Monitor,
   Moon,
   MoreHorizontal,
+  PackageCheck,
   Plus,
   RefreshCw,
   Search,
@@ -27,8 +28,10 @@ import type {
   HarnessId,
   PlotCreationResult,
   PlotProgressStep,
+  PlotProvisioning,
   ProjectSnapshot,
   ProvisionRemedyId,
+  ProvisionResult,
   WorkspaceChanges,
   WorkspaceSnapshot,
 } from "@silvic/contracts";
@@ -78,6 +81,7 @@ export function App() {
   const [menuProjectId, setMenuProjectId] = useState<string>();
   const [recipeProject, setRecipeProject] = useState<ProjectSnapshot>();
   const [teardownPlot, setTeardownPlot] = useState<WorkspaceSnapshot>();
+  const [provisioningPlot, setProvisioningPlot] = useState<WorkspaceSnapshot>();
   const [showEnvironment, setShowEnvironment] = useState(false);
   const [deliveryWorkspace, setDeliveryWorkspace] =
     useState<WorkspaceSnapshot>();
@@ -263,6 +267,7 @@ export function App() {
             onSetDefaultHarness={(id) => void setDefaultHarness(id)}
             onOpen={openWorkspace}
             onShip={() => setDeliveryWorkspace(workspace)}
+            onProvision={() => setProvisioningPlot(workspace)}
           />
         ) : (
           <div className="inspector-empty">
@@ -272,6 +277,13 @@ export function App() {
         )}
       </aside>
 
+      {provisioningPlot && (
+        <ProvisionDialog
+          key={provisioningPlot.workspaceId}
+          workspace={provisioningPlot}
+          onClose={() => setProvisioningPlot(undefined)}
+        />
+      )}
       {teardownPlot && (
         <TeardownDialog
           workspace={teardownPlot}
@@ -590,12 +602,14 @@ function WorkspaceInspector({
   onSetDefaultHarness,
   onOpen,
   onShip,
+  onProvision,
 }: {
   workspace: WorkspaceSnapshot;
   defaultHarness: HarnessId;
   onSetDefaultHarness(id: HarnessId): void;
   onOpen(path: string, target: HarnessDefinition["id"]): void;
   onShip(): void;
+  onProvision(): void;
 }) {
   const [openMenu, setOpenMenu] = useState(false);
   const state = workspaceState(workspace);
@@ -670,6 +684,29 @@ function WorkspaceInspector({
             </button>
           )}
         </Section>
+        {!workspace.isPrimary && (
+          <Section icon={<PackageCheck size={12} />} title="Provisioning">
+            <Field
+              label="Recipe"
+              value={provisioningLabel(workspace.provisioning)}
+            />
+            {workspace.provisioning?.status === "failed" && (
+              <Field
+                label="Stopped at"
+                value={failedStepLabel(workspace.provisioning) ?? "Unknown step"}
+              />
+            )}
+            <button
+              type="button"
+              className="section-action"
+              onClick={onProvision}
+            >
+              {workspace.provisioning?.status === "failed"
+                ? "Finish provisioning"
+                : "Provision again"}
+            </button>
+          </Section>
+        )}
         <Observations
           icon={<Terminal size={12} />}
           title="Runtime"
@@ -698,6 +735,28 @@ function WorkspaceInspector({
       </div>
     </>
   );
+}
+
+/**
+ * Plots made before Silvic recorded provisioning have nothing to report, which
+ * is not the same as having succeeded and must not read like it.
+ */
+function provisioningLabel(provisioning: PlotProvisioning | undefined): string {
+  if (!provisioning) return "Not recorded";
+  return provisioning.status === "complete"
+    ? `Complete · ${shortDate(provisioning.at)}`
+    : `Failed · ${shortDate(provisioning.at)}`;
+}
+
+function failedStepLabel(provisioning: PlotProvisioning): string | undefined {
+  return provisioning.steps.find((step) => step.exitCode !== 0)?.label;
+}
+
+function shortDate(iso: string): string {
+  const date = new Date(iso);
+  return Number.isNaN(date.getTime())
+    ? "unknown"
+    : date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
 function Section({
@@ -843,7 +902,7 @@ function NewPlotDialog({
       setRepairing(true);
       creatingBranch.current = branch.trim();
       void window.silvic
-        .repairPlot({ path: result.plot.path, remedy })
+        .provisionPlot({ path: result.plot.path, remedy })
         .then((provision) => setResult({ ...result, provision }))
         .catch((error: unknown) =>
           setFailure(error instanceof Error ? error.message : String(error)),
@@ -886,50 +945,7 @@ function NewPlotDialog({
               deployment or write environment files when a plot is made.
             </p>
           ) : (
-            <ol className="provision-steps">
-              {result.provision.map((step) => {
-                const remedy = step.remedy;
-                return (
-                  <li
-                    key={step.label}
-                    data-failed={step.exitCode !== 0 || undefined}
-                  >
-                    <div className="provision-head">
-                      <strong>{step.label}</strong>
-                      <span className="mono">
-                        {step.exitCode === 0
-                          ? `${Math.round(step.durationMs / 100) / 10}s`
-                          : `exit ${step.exitCode}`}
-                      </span>
-                    </div>
-                    <code className="mono">{step.command}</code>
-                    {step.advice && <p className="step-advice">{step.advice}</p>}
-                    {remedy && (
-                      <button
-                        type="button"
-                        className="ghost-button remedy-button"
-                        onClick={() => repair(remedy.id)}
-                      >
-                        {remedy.label}
-                      </button>
-                    )}
-                    {step.exitCode !== 0 &&
-                      step.output &&
-                      // Once Silvic has named the cause, the tool's own words
-                      // are corroboration rather than the headline, so they
-                      // fold away.
-                      (step.advice ? (
-                        <details className="step-output">
-                          <summary>What the command printed</summary>
-                          <pre className="patch mono">{step.output}</pre>
-                        </details>
-                      ) : (
-                        <pre className="patch mono">{step.output}</pre>
-                      ))}
-                  </li>
-                );
-              })}
-            </ol>
+            <ProvisionResults results={result.provision} onRemedy={repair} />
           )}
           {failure && <p className="dialog-error">{failure}</p>}
           <div className="dialog-actions">
@@ -1031,6 +1047,151 @@ function NewPlotDialog({
           </button>
         </div>
       </form>
+    </div>
+  );
+}
+
+/**
+ * A finished run, step by step. Where Silvic recognised a failure it says so in
+ * its own words and offers the repair; the tool's output is kept but folded, so
+ * the explanation is what you read first.
+ */
+function ProvisionResults({
+  results,
+  onRemedy,
+}: {
+  results: readonly ProvisionResult[];
+  onRemedy?: (remedy: ProvisionRemedyId) => void;
+}) {
+  return (
+    <ol className="provision-steps">
+      {results.map((step) => {
+        const remedy = step.remedy;
+        return (
+          <li key={step.label} data-failed={step.exitCode !== 0 || undefined}>
+            <div className="provision-head">
+              <strong>{step.label}</strong>
+              <span className="mono">
+                {step.exitCode === 0
+                  ? `${Math.round(step.durationMs / 100) / 10}s`
+                  : `exit ${step.exitCode}`}
+              </span>
+            </div>
+            <code className="mono">{step.command}</code>
+            {step.advice && <p className="step-advice">{step.advice}</p>}
+            {remedy && onRemedy && (
+              <button
+                type="button"
+                className="ghost-button remedy-button"
+                onClick={() => onRemedy(remedy.id)}
+              >
+                {remedy.label}
+              </button>
+            )}
+            {step.exitCode !== 0 &&
+              step.output &&
+              // Once Silvic has named the cause, the tool's own words are
+              // corroboration rather than the headline, so they fold away.
+              (step.advice ? (
+                <details className="step-output">
+                  <summary>What the command printed</summary>
+                  <pre className="patch mono">{step.output}</pre>
+                </details>
+              ) : (
+                <pre className="patch mono">{step.output}</pre>
+              ))}
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+/**
+ * Provisioning an existing plot: what the last run did, and the means to run it
+ * again. A recipe that failed halfway is a state a plot can sit in for days, so
+ * it has to be inspectable and repeatable outside the dialog that created it.
+ */
+function ProvisionDialog({
+  workspace,
+  onClose,
+}: {
+  workspace: WorkspaceSnapshot;
+  onClose(): void;
+}) {
+  const [running, setRunning] = useState(false);
+  const [steps, setSteps] = useState<readonly PlotProgressStep[]>([]);
+  const [results, setResults] = useState<readonly ProvisionResult[]>(
+    workspace.provisioning?.steps ?? [],
+  );
+  const [failure, setFailure] = useState<string>();
+
+  useEffect(
+    () =>
+      window.silvic.onPlotProgress((progress) => {
+        if (progress.branch === workspace.branch) setSteps(progress.steps);
+      }),
+    [workspace.branch],
+  );
+
+  const run = (remedy?: ProvisionRemedyId) => {
+    setFailure(undefined);
+    setSteps([]);
+    setRunning(true);
+    void window.silvic
+      .provisionPlot({ path: workspace.path, ...(remedy ? { remedy } : {}) })
+      .then(setResults)
+      .catch((error: unknown) =>
+        setFailure(error instanceof Error ? error.message : String(error)),
+      )
+      .finally(() => setRunning(false));
+  };
+
+  const failed = results.find((step) => step.exitCode !== 0);
+  return (
+    <div className="scrim" onMouseDown={running ? undefined : onClose}>
+      <section
+        className="dialog"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <p className="micro">
+          {running ? "Provisioning" : failed ? "Provisioning failed" : "Provisioning"}
+        </p>
+        <h2>{workspace.name}</h2>
+        <p className="dialog-copy">
+          {running
+            ? "Running the steps this repository declares, in the plot."
+            : results.length === 0
+              ? "Nothing is recorded for this plot. Running the recipe again is safe: its steps are meant to be repeatable, and the ones that already succeeded will simply pass."
+              : "The last run of this repository's recipe here. Running it again repeats every step."}
+        </p>
+        {running ? (
+          <ProgressSteps steps={steps} />
+        ) : (
+          results.length > 0 && (
+            <ProvisionResults results={results} onRemedy={(id) => run(id)} />
+          )
+        )}
+        {failure && <p className="dialog-error">{failure}</p>}
+        <div className="dialog-actions">
+          <button
+            type="button"
+            className="ghost-button"
+            onClick={onClose}
+            disabled={running}
+          >
+            Close
+          </button>
+          <button
+            type="button"
+            className="primary-button"
+            onClick={() => run()}
+            disabled={running}
+          >
+            {running ? "Provisioning…" : "Provision again"}
+          </button>
+        </div>
+      </section>
     </div>
   );
 }

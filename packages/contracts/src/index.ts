@@ -138,6 +138,8 @@ export interface WorkspaceSnapshot extends WorkspaceTarget {
   isPrimary: boolean;
   git: GitStatus;
   observations: readonly ConnectorObservation[];
+  /** The last provisioning run, absent for plots made before it was recorded. */
+  provisioning?: PlotProvisioning;
   lineage?: {
     parentWorkspaceId: string;
     evidence: "recorded" | "inferred";
@@ -367,10 +369,14 @@ export type CreateEnvironmentRequest = z.infer<
   typeof createEnvironmentRequestSchema
 >;
 
-export const plotRepairRequestSchema = z
-  .object({ path: z.string().min(1), remedy: provisionRemedyIdSchema })
+export const plotProvisionRequestSchema = z
+  .object({
+    path: z.string().min(1),
+    /** Runs before the recipe, when a failure named a repair Silvic can make. */
+    remedy: provisionRemedyIdSchema.optional(),
+  })
   .strict();
-export type PlotRepairRequest = z.infer<typeof plotRepairRequestSchema>;
+export type PlotProvisionRequest = z.infer<typeof plotProvisionRequestSchema>;
 
 export const workspacePathRequestSchema = z
   .object({ path: z.string().min(1) })
@@ -452,6 +458,18 @@ export interface PlotProgressStep {
 }
 
 /**
+ * What provisioning did the last time it ran here. A plot whose recipe failed
+ * halfway is still a plot, so it has to be able to say so long after the
+ * dialog that created it has been closed.
+ */
+export interface PlotProvisioning {
+  status: "complete" | "failed";
+  /** When the run finished, ISO 8601. */
+  at: string;
+  steps: readonly ProvisionResult[];
+}
+
+/**
  * Creation can take minutes, so the whole plan is sent on every change: the
  * steps still to come are as informative as the one running, and a full state
  * cannot arrive out of order the way a stream of deltas can.
@@ -486,8 +504,10 @@ export interface SilvicDesktopApi {
   removeRoot(root: string): Promise<readonly string[]>;
   refresh(): Promise<SilvicSnapshot>;
   createEnvironment(request: CreateEnvironmentRequest): Promise<PlotCreationResult>;
-  /** Runs the named repair in the plot, then provisions it again. */
-  repairPlot(request: PlotRepairRequest): Promise<readonly ProvisionResult[]>;
+  /** Runs the recipe in an existing plot, after a named repair when given. */
+  provisionPlot(
+    request: PlotProvisionRequest,
+  ): Promise<readonly ProvisionResult[]>;
   getChanges(request: WorkspacePathRequest): Promise<WorkspaceChanges>;
   draftDelivery(request: WorkspacePathRequest): Promise<DeliveryDraft>;
   executeDelivery(request: DeliveryExecuteRequest): Promise<DeliveryResult>;
@@ -537,7 +557,7 @@ export const ipcChannels = {
   defaultHarnessSet: "silvic:harness:default:set",
   plotPreview: "silvic:plot:preview",
   plotProgress: "silvic:plot:progress",
-  plotRepair: "silvic:plot:repair",
+  plotProvision: "silvic:plot:provision",
   stepTest: "silvic:step:test",
   teardownPlan: "silvic:teardown:plan",
   teardownRun: "silvic:teardown:run",

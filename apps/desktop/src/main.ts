@@ -33,7 +33,7 @@ import {
   projectActivationRequestSchema,
   teardownRequestSchema,
   plotPreviewRequestSchema,
-  plotRepairRequestSchema,
+  plotProvisionRequestSchema,
   testStepRequestSchema,
   recipeSaveRequestSchema,
   workspacePathRequestSchema,
@@ -41,7 +41,8 @@ import {
   type CreateEnvironmentRequest,
   type HarnessId,
   type PlotCreationResult,
-  type PlotRepairRequest,
+  type PlotProvisioning,
+  type PlotProvisionRequest,
   type ProvisionResult,
   type RecipeDocument,
   type OpenWorkspaceRequest,
@@ -83,7 +84,12 @@ interface Settings {
   defaultHarness: HarnessId;
   /** Plot path to the port it was assigned, so addresses stay stable. */
   plotPorts: Record<string, number>;
+  /** Plot path to the outcome of the last provisioning run there. */
+  plotProvisioning: Record<string, PlotProvisioning>;
 }
+
+/** Enough of a failure to show and act on, without keeping whole build logs. */
+const recordedOutputLimit = 4_000;
 
 /** Matches `--surface-sunk` in the renderer so the first frame never flashes. */
 const windowBackground = { light: "#f4f4f1", dark: "#0f1210" } as const;
@@ -120,6 +126,7 @@ const settings = new Store<Settings>({
     activeProjects: [],
     defaultHarness: "codex",
     plotPorts: {},
+    plotProvisioning: {},
   },
 });
 
@@ -263,9 +270,9 @@ function registerIpc(): void {
       return createEnvironment(createEnvironmentRequestSchema.parse(request));
     },
   );
-  ipcMain.handle(ipcChannels.plotRepair, async (event, request: unknown) => {
+  ipcMain.handle(ipcChannels.plotProvision, async (event, request: unknown) => {
     assertTrustedSender(event);
-    return repairPlot(plotRepairRequestSchema.parse(request));
+    return provisionPlot(plotProvisionRequestSchema.parse(request));
   });
   ipcMain.handle(ipcChannels.githubConnect, async (event) => {
     assertTrustedSender(event);
@@ -611,6 +618,7 @@ async function createEnvironment(
       },
     );
 
+    recordProvisioning(destinationPath, provision);
     progress.began(surveyStepId);
     await paintFromGit([project.rootPath, destinationPath]);
     progress.finished(surveyStepId);
@@ -629,13 +637,13 @@ async function createEnvironment(
 }
 
 /**
- * A plot that failed to provision is still a plot. When Silvic recognised the
- * failure well enough to offer a repair, this runs that repair in the plot and
- * provisions it again — the steps are declared idempotent, so the ones that
- * already succeeded simply pass a second time.
+ * A plot that failed to provision is still a plot, so the recipe can be run in
+ * it again — the steps are declared idempotent, and the ones that already
+ * succeeded simply pass a second time. A remedy, when Silvic recognised the
+ * failure well enough to offer one, runs first.
  */
-async function repairPlot(
-  request: PlotRepairRequest,
+async function provisionPlot(
+  request: PlotProvisionRequest,
 ): Promise<readonly ProvisionResult[]> {
   const workspace = knownWorkspace(request.path);
   const project = latestSnapshot.projects.find((candidate) =>
@@ -650,8 +658,7 @@ async function repairPlot(
   const packageManager =
     recipe.packageManager ??
     (await inspectRepository(workspace.path)).packageManager;
-  const command = remedyCommand(request.remedy, packageManager);
-  const label = remedyLabel(request.remedy);
+  const remedy = request.remedy;
   const plot = plotNameIn(workspace.path, recipe.project);
   const port =
     storedPlotPort(workspace.path) ??
@@ -660,7 +667,7 @@ async function repairPlot(
   const progress = new PlotProgressReporter(
     workspace.git.branch,
     [
-      { id: remedyStepId, label },
+      ...(remedy ? [{ id: remedyStepId, label: remedyLabel(remedy) }] : []),
       ...recipe.provision.map((step, index) => ({
         id: provisionStepId(index),
         label: provisionStepLabel(step, index),
@@ -671,28 +678,34 @@ async function repairPlot(
   progress.announce();
 
   try {
-    progress.began(remedyStepId);
-    const startedAt = Date.now();
-    const result = await runner.run({
-      executable: "sh",
-      arguments: ["-c", command],
-      cwd: workspace.path,
-      onOutput: (chunk) => progress.wrote(remedyStepId, chunk),
-    });
-    const repair: ProvisionResult = {
-      label,
-      command,
-      exitCode: result.exitCode,
-      output: `${result.stdout}${result.stderr}`
-        .trim()
-        .slice(0, provisionOutputLimit),
-      durationMs: Date.now() - startedAt,
-    };
-    if (repair.exitCode !== 0) {
-      progress.failed(remedyStepId, repair.output);
-      return [repair];
+    let repair: ProvisionResult | undefined;
+    if (remedy) {
+      progress.began(remedyStepId);
+      const startedAt = Date.now();
+      const command = remedyCommand(remedy, packageManager);
+      const result = await runner.run({
+        executable: "sh",
+        arguments: ["-c", command],
+        cwd: workspace.path,
+        onOutput: (chunk) => progress.wrote(remedyStepId, chunk),
+      });
+      repair = {
+        label: remedyLabel(remedy),
+        command,
+        exitCode: result.exitCode,
+        output: `${result.stdout}${result.stderr}`
+          .trim()
+          .slice(0, provisionOutputLimit),
+        durationMs: Date.now() - startedAt,
+      };
+      if (repair.exitCode !== 0) {
+        progress.failed(remedyStepId, repair.output);
+        recordProvisioning(workspace.path, [repair]);
+        void refreshSnapshot(true);
+        return [repair];
+      }
+      progress.finished(remedyStepId, repair.durationMs);
     }
-    progress.finished(remedyStepId, repair.durationMs);
 
     const provision = await provisioner.run(
       recipe.provision,
@@ -719,15 +732,60 @@ async function repairPlot(
       },
     );
 
+    const results = repair ? [repair, ...provision] : provision;
+    recordProvisioning(workspace.path, results);
     await paintFromGit([workspace.path]);
     void refreshSnapshot(true);
-    return [repair, ...provision];
+    return results;
   } catch (error) {
     progress.stumbled(error instanceof Error ? error.message : String(error));
     throw error;
   } finally {
     progress.settled();
   }
+}
+
+/**
+ * What the last run did, kept so a plot can say it never finished long after
+ * the dialog that ran it has gone. Output is trimmed hard: this is a record of
+ * what happened, not a log store.
+ */
+function recordProvisioning(
+  path: string,
+  steps: readonly ProvisionResult[],
+): void {
+  settings.set("plotProvisioning", {
+    ...settings.get("plotProvisioning"),
+    [path]: {
+      status: steps.some((step) => step.exitCode !== 0) ? "failed" : "complete",
+      at: new Date().toISOString(),
+      steps: steps.map((step) => ({
+        ...step,
+        output: step.output.slice(0, recordedOutputLimit),
+      })),
+    },
+  });
+}
+
+/** A plot carries the outcome of its last provisioning run into the snapshot. */
+function withProvisioning(snapshot: SilvicSnapshot): SilvicSnapshot {
+  const records = new Map(
+    Object.entries(settings.get("plotProvisioning")).map(([path, record]) => [
+      normalize(path),
+      record,
+    ]),
+  );
+  if (records.size === 0) return snapshot;
+  return {
+    ...snapshot,
+    projects: snapshot.projects.map((project) => ({
+      ...project,
+      workspaces: project.workspaces.map((workspace) => {
+        const record = records.get(normalize(workspace.path));
+        return record ? { ...workspace, provisioning: record } : workspace;
+      }),
+    })),
+  };
 }
 
 /** Plots are directories named `<project>-<plot>`; older ones are `<plot>`. */
@@ -796,10 +854,9 @@ function publishSnapshot(
     workCliNames,
   );
   settings.set("workspaceRecords", [...reconciled.records]);
+  const decorated = withProvisioning(reconciled.snapshot);
   latestSnapshot =
-    mode === "merge"
-      ? mergeSnapshots(latestSnapshot, reconciled.snapshot)
-      : reconciled.snapshot;
+    mode === "merge" ? mergeSnapshots(latestSnapshot, decorated) : decorated;
   mainWindow?.webContents.send(ipcChannels.snapshotChanged, latestSnapshot);
   return latestSnapshot;
 }

@@ -28,6 +28,7 @@ import {
   SlidersHorizontal,
   Trash2,
   Terminal,
+  TriangleAlert,
 } from "lucide-react";
 
 import type {
@@ -440,6 +441,13 @@ function WorkspaceNode({ data }: NodeProps<WorkspaceFlowNode>) {
           </>
         )}
       </p>
+
+      {workspace.provisioning?.status === "failed" && (
+        <p className="plot-unprovisioned">
+          <TriangleAlert size={11} />
+          <span>Provisioning unfinished</span>
+        </p>
+      )}
 
       {signals.length > 0 && (
         <div className="plot-signals">
