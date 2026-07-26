@@ -7,6 +7,8 @@ import type {
   WorkspaceSnapshot,
 } from "@silvic/contracts";
 
+import { failureMessage } from "./errors";
+
 type Scope = TeardownPlanPayload["scope"];
 
 const scopes: ReadonlyArray<[Scope, string, string]> = [
@@ -44,7 +46,7 @@ export function TeardownDialog({
       .planTeardown({ path: workspace.path, scope, deleteBranch })
       .then(setPlan)
       .catch((error: unknown) =>
-        setFailure(error instanceof Error ? error.message : String(error)),
+        setFailure(failureMessage(error)),
       );
   }, [workspace.path, scope, deleteBranch]);
 
@@ -61,7 +63,7 @@ export function TeardownDialog({
       );
       onDone();
     } catch (error) {
-      setFailure(error instanceof Error ? error.message : String(error));
+      setFailure(failureMessage(error));
     } finally {
       setWorking(false);
     }

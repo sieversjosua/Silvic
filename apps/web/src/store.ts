@@ -1,5 +1,7 @@
 import { create } from "zustand";
 
+import { failureMessage } from "./errors";
+
 import type {
   CreateEnvironmentRequest,
   HarnessId,
@@ -158,5 +160,5 @@ function setSelectionForSnapshot(
 }
 
 function message(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return failureMessage(error);
 }

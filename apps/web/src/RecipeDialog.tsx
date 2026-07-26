@@ -22,6 +22,7 @@ import {
 } from "@silvic/contracts";
 
 import { ConvexMark } from "./providers";
+import { failureMessage } from "./errors";
 
 type CommandEntry = { id: string } & PlotCommand;
 type Section = "location" | "commands" | "provision";
@@ -78,7 +79,7 @@ export function RecipeDialog({
         apply(loaded.recipe);
       })
       .catch((error: unknown) =>
-        setFailure(error instanceof Error ? error.message : String(error)),
+        setFailure(failureMessage(error)),
       );
   }, [projectId]);
 
@@ -106,7 +107,7 @@ export function RecipeDialog({
           label: step.label ?? "Step",
           command: step.run,
           exitCode: 1,
-          output: error instanceof Error ? error.message : String(error),
+          output: failureMessage(error),
           durationMs: 0,
         },
       }));
@@ -142,7 +143,7 @@ export function RecipeDialog({
       await window.silvic.saveRecipe({ projectId, recipe: draft });
       onClose();
     } catch (error) {
-      setFailure(error instanceof Error ? error.message : String(error));
+      setFailure(failureMessage(error));
       setSaving(false);
     }
   };

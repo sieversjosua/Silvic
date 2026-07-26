@@ -50,6 +50,7 @@ import {
   workingTreeLabel,
   workspaceState,
 } from "./state";
+import { concernsBranch, failureMessage } from "./errors";
 import { useSilvic } from "./store";
 
 
@@ -876,6 +877,10 @@ function NewPlotDialog({
   // The branch being created, so progress from an abandoned attempt cannot
   // paint over the one the dialog is waiting on.
   const creatingBranch = useRef<string | undefined>(undefined);
+  // A refused branch name is a fault of the field, not of the dialog, so it is
+  // reported there and the general area is left for everything else.
+  const branchFailure =
+    failure && concernsBranch(failure) ? failure : undefined;
   const plotName = branch
     .trim()
     .replaceAll("/", "-")
@@ -905,7 +910,7 @@ function NewPlotDialog({
         .provisionPlot({ path: result.plot.path, remedy })
         .then((provision) => setResult({ ...result, provision }))
         .catch((error: unknown) =>
-          setFailure(error instanceof Error ? error.message : String(error)),
+          setFailure(failureMessage(error)),
         )
         .finally(() => {
           creatingBranch.current = undefined;
@@ -979,7 +984,7 @@ function NewPlotDialog({
           void onCreate({ sourcePath: source.path, branch: requested, mode })
             .then(setResult)
             .catch((error: unknown) =>
-              setFailure(error instanceof Error ? error.message : String(error)),
+              setFailure(failureMessage(error)),
             )
             .finally(() => {
               creatingBranch.current = undefined;
@@ -998,10 +1003,21 @@ function NewPlotDialog({
           <input
             autoFocus
             value={branch}
-            onChange={(event) => setBranch(event.target.value)}
+            onChange={(event) => {
+              setBranch(event.target.value);
+              // The name is what was refused, so editing it clears the refusal.
+              if (branchFailure) setFailure(undefined);
+            }}
             placeholder="feature/agent-task"
             disabled={creating}
+            aria-invalid={branchFailure !== undefined}
+            aria-errormessage={branchFailure ? "branch-failure" : undefined}
           />
+          {branchFailure && (
+            <p className="field-error" id="branch-failure">
+              {branchFailure}
+            </p>
+          )}
         </label>
         <fieldset className="choices" disabled={creating}>
           <legend className="micro">Location</legend>
@@ -1027,8 +1043,8 @@ function NewPlotDialog({
           </label>
         </fieldset>
         {plotName && <p className="destination mono">{plotName}</p>}
-        {steps.length > 0 && <ProgressSteps steps={steps} />}
-        {failure && <p className="dialog-error">{failure}</p>}
+        {steps.length > 0 && <ProgressSteps steps={steps} settled={!creating} />}
+        {failure && !branchFailure && <p className="dialog-error">{failure}</p>}
         <div className="dialog-actions">
           <button
             type="button"
@@ -1142,7 +1158,7 @@ function ProvisionDialog({
       .provisionPlot({ path: workspace.path, ...(remedy ? { remedy } : {}) })
       .then(setResults)
       .catch((error: unknown) =>
-        setFailure(error instanceof Error ? error.message : String(error)),
+        setFailure(failureMessage(error)),
       )
       .finally(() => setRunning(false));
   };
@@ -1166,7 +1182,7 @@ function ProvisionDialog({
               : "The last run of this repository's recipe here. Running it again repeats every step."}
         </p>
         {running ? (
-          <ProgressSteps steps={steps} />
+          <ProgressSteps steps={steps} settled={!running} />
         ) : (
           results.length > 0 && (
             <ProvisionResults results={results} onRemedy={(id) => run(id)} />
@@ -1201,14 +1217,21 @@ function ProvisionDialog({
  * start, including the ones still to come, so a long provisioning run reads as
  * progress through a known plan rather than an interface that has stopped.
  */
-function ProgressSteps({ steps }: { steps: readonly PlotProgressStep[] }) {
+function ProgressSteps({
+  steps,
+  settled,
+}: {
+  steps: readonly PlotProgressStep[];
+  /** The run has ended, so nothing still pending is going to happen. */
+  settled?: boolean;
+}) {
   return (
-    <ol className="provision-steps live">
+    <ol className="provision-steps live" data-settled={settled || undefined}>
       {steps.map((step) => (
         <li key={step.id} data-status={step.status}>
           <div className="provision-head">
             <strong>{step.label}</strong>
-            <span className="mono">{stepStatusLabel(step)}</span>
+            <span className="mono">{stepStatusLabel(step, settled)}</span>
           </div>
           {step.detail && <code className="mono">{step.detail}</code>}
         </li>
@@ -1217,9 +1240,11 @@ function ProgressSteps({ steps }: { steps: readonly PlotProgressStep[] }) {
   );
 }
 
-function stepStatusLabel(step: PlotProgressStep): string {
-  if (step.status === "pending") return "waiting";
-  if (step.status === "running") return "running";
+function stepStatusLabel(step: PlotProgressStep, settled?: boolean): string {
+  // Once the run is over, a step that never started never will. Saying
+  // "waiting" then describes an intention nothing holds.
+  if (step.status === "pending") return settled ? "not run" : "waiting";
+  if (step.status === "running") return settled ? "stopped" : "running";
   if (step.status === "failed") return "failed";
   return step.durationMs === undefined
     ? "done"
@@ -1259,7 +1284,7 @@ function DeliveryDialog({
         }
       })
       .catch((error) =>
-        setFailure(error instanceof Error ? error.message : String(error)),
+        setFailure(failureMessage(error)),
       );
   }, [workspace.path]);
 
@@ -1269,7 +1294,7 @@ function DeliveryDialog({
     try {
       setDraft(await window.silvic.draftDelivery({ path: workspace.path }));
     } catch (error) {
-      setFailure(error instanceof Error ? error.message : String(error));
+      setFailure(failureMessage(error));
     } finally {
       setWorking(false);
     }
@@ -1291,7 +1316,7 @@ function DeliveryDialog({
       });
       await onComplete();
     } catch (error) {
-      setFailure(error instanceof Error ? error.message : String(error));
+      setFailure(failureMessage(error));
       setWorking(false);
     }
   };
