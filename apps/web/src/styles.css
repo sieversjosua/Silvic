@@ -1940,9 +1940,9 @@ button {
 
 .recipe-body {
   display: grid;
-  min-height: 280px;
-  grid-template-columns: 132px minmax(0, 1fr);
-  gap: 18px;
+  min-height: 300px;
+  grid-template-columns: 120px minmax(0, 1fr) 210px;
+  gap: 16px;
 }
 
 .recipe-rail {
@@ -1968,9 +1968,20 @@ button {
   background: var(--surface-hover);
 }
 
+/*
+ * Selection is a left rule plus weight, not a fill. The fill alone was
+ * indistinguishable from the focus ring, so a clicked section looked doubly
+ * selected and a blurred one looked barely selected at all.
+ */
+.recipe-rail button {
+  border-left: 2px solid transparent;
+  border-radius: 0 var(--r-md) var(--r-md) 0;
+}
+
 .recipe-rail button[data-active] {
   color: var(--ink);
-  font-weight: 550;
+  font-weight: 570;
+  border-left-color: var(--accent);
   background: var(--surface-active);
 }
 
@@ -2106,6 +2117,10 @@ button {
   grid-template-columns: 108px minmax(0, 1fr) auto auto auto;
 }
 
+.recipe-step .recipe-row {
+  grid-template-columns: 96px minmax(0, 1fr) auto;
+}
+
 .recipe-row input {
   width: 100%;
   min-width: 0;
@@ -2154,6 +2169,132 @@ button {
 
 .dialog-spacer {
   flex: 1;
+}
+
+/* A toggle, not a third action: quieter than Cancel and Save. */
+.dialog-actions .link-button {
+  padding: 0 4px;
+  color: var(--ink-faint);
+  font-size: 11.5px;
+  text-decoration: underline;
+  text-decoration-color: var(--rule-strong);
+  text-underline-offset: 3px;
+}
+
+.dialog-actions .link-button:hover {
+  color: var(--ink-muted);
+}
+
+/* --- recipe preview ------------------------------------------------------- */
+
+.recipe-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+  padding-left: 16px;
+  border-left: 1px solid var(--rule);
+}
+
+.preview-branch {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 2px;
+}
+
+.preview-branch input {
+  width: 100%;
+  padding: 5px 8px;
+  border: 1px solid var(--rule);
+  border-radius: var(--r-sm);
+  background: var(--surface-sunk);
+  outline: none;
+}
+
+.preview-branch input:focus {
+  border-color: var(--accent-edge);
+  box-shadow: 0 0 0 3px var(--accent-wash);
+}
+
+.recipe-preview .field {
+  padding: 2px 0;
+}
+
+.recipe-preview .field-label,
+.recipe-preview .field-value {
+  font-size: 11px;
+}
+
+.preview-path {
+  overflow-wrap: anywhere;
+  color: var(--ink-faint);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.preview-heading {
+  margin-top: 8px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--rule);
+}
+
+.preview-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.preview-steps li {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  overflow: hidden;
+  color: var(--ink-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.preview-steps li > span:first-child {
+  color: var(--ink-faint);
+  font-size: 9.5px;
+}
+
+.preview-steps li > svg {
+  flex: 0 0 auto;
+}
+
+.step-test {
+  padding: 7px 9px;
+  border: 1px solid var(--rule);
+  border-radius: var(--r-sm);
+  background: var(--surface-sunk);
+}
+
+.step-test[data-failed] {
+  border-color: color-mix(in srgb, var(--tone-attention) 45%, transparent);
+}
+
+.step-test > span {
+  color: var(--tone-ready);
+  font-size: 10px;
+}
+
+.step-test[data-failed] > span {
+  color: var(--tone-attention);
+}
+
+.step-test pre {
+  max-height: 110px;
+  margin: 5px 0 0;
+  overflow: auto;
+  color: var(--ink-faint);
+  font-size: 10px;
+  line-height: 1.5;
+  white-space: pre-wrap;
 }
 
 /* One row per provisioning step, so a failure says which step and why. */

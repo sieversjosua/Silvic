@@ -32,6 +32,8 @@ import {
   openWorkspaceRequestSchema,
   projectActivationRequestSchema,
   teardownRequestSchema,
+  plotPreviewRequestSchema,
+  testStepRequestSchema,
   recipeSaveRequestSchema,
   workspacePathRequestSchema,
   type AppearancePreference,
@@ -319,6 +321,39 @@ function registerIpc(): void {
     const parsed = harnessIdSchema.parse(id);
     settings.set("defaultHarness", parsed);
     return parsed;
+  });
+  ipcMain.handle(ipcChannels.plotPreview, async (event, request: unknown) => {
+    assertTrustedSender(event);
+    const parsed = plotPreviewRequestSchema.parse(request);
+    const rootPath = knownProjectRoot(parsed.projectId);
+    const recipe = await readRecipe(rootPath);
+    const plot = safePathSegment(parsed.branch) || "my-branch";
+    const port = plotPort(recipe.project, plot, takenPlotPorts());
+    return {
+      name: plot,
+      path: join(recipe.directory, `${recipe.project}-${plot}`),
+      port,
+      url: plotUrl(port),
+    };
+  });
+  ipcMain.handle(ipcChannels.stepTest, async (event, request: unknown) => {
+    assertTrustedSender(event);
+    const parsed = testStepRequestSchema.parse(request);
+    const rootPath = knownProjectRoot(parsed.projectId);
+    const recipe = await readRecipe(rootPath);
+    // Runs in the primary checkout, since there is no plot yet. Typed steps are
+    // not testable: creating a deployment is not a rehearsal.
+    const [result] = await provisioner.run([parsed.step], {
+      root: rootPath,
+      sourceRoot: rootPath,
+      project: recipe.project,
+      plot: "preview",
+      ...(recipe.packageManager
+        ? { packageManager: recipe.packageManager }
+        : {}),
+    });
+    if (!result) throw new Error("The step produced no result");
+    return result;
   });
   ipcMain.handle(ipcChannels.teardownPlan, (event, request: unknown) => {
     assertTrustedSender(event);

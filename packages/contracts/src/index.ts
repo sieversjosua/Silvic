@@ -294,6 +294,30 @@ export interface RecipeDocument {
   resolved: { project: string; directory: string };
 }
 
+export const plotPreviewRequestSchema = z
+  .object({
+    projectId: z.string().min(1).max(400),
+    branch: z.string().max(240),
+  })
+  .strict();
+export type PlotPreviewRequest = z.infer<typeof plotPreviewRequestSchema>;
+
+/** What the next plot becomes, computed the same way creation computes it. */
+export interface PlotPreview {
+  name: string;
+  path: string;
+  port: number;
+  url: string;
+}
+
+export const testStepRequestSchema = z
+  .object({
+    projectId: z.string().min(1).max(400),
+    step: shellStepSchema,
+  })
+  .strict();
+export type TestStepRequest = z.infer<typeof testStepRequestSchema>;
+
 export const teardownScopeSchema = z.enum(["stop", "archive", "remove"]);
 
 export const teardownRequestSchema = z
@@ -435,6 +459,8 @@ export interface SilvicDesktopApi {
   copyText(text: string): Promise<void>;
   getDefaultHarness(): Promise<HarnessId>;
   setDefaultHarness(id: HarnessId): Promise<HarnessId>;
+  previewPlot(request: PlotPreviewRequest): Promise<PlotPreview>;
+  testProvisionStep(request: TestStepRequest): Promise<ProvisionResult>;
   planTeardown(request: TeardownRequestPayload): Promise<TeardownPlanPayload>;
   runTeardown(request: TeardownRequestPayload): Promise<TeardownRunResult>;
   getRecipe(projectId: string): Promise<RecipeDocument>;
@@ -464,6 +490,8 @@ export const ipcChannels = {
   clipboardWrite: "silvic:clipboard:write",
   defaultHarnessGet: "silvic:harness:default:get",
   defaultHarnessSet: "silvic:harness:default:set",
+  plotPreview: "silvic:plot:preview",
+  stepTest: "silvic:step:test",
   teardownPlan: "silvic:teardown:plan",
   teardownRun: "silvic:teardown:run",
   recipeGet: "silvic:recipe:get",

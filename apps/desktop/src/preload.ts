@@ -10,6 +10,8 @@ import {
   type OpenWorkspaceRequest,
   type ProjectActivationRequest,
   type RecipeSaveRequest,
+  type PlotPreviewRequest,
+  type TestStepRequest,
   type TeardownRequestPayload,
   type SilvicDesktopApi,
   type SilvicSnapshot,
@@ -46,6 +48,10 @@ const api: SilvicDesktopApi = {
   getDefaultHarness: () => ipcRenderer.invoke(ipcChannels.defaultHarnessGet),
   setDefaultHarness: (id: HarnessId) =>
     ipcRenderer.invoke(ipcChannels.defaultHarnessSet, id),
+  previewPlot: (request: PlotPreviewRequest) =>
+    ipcRenderer.invoke(ipcChannels.plotPreview, request),
+  testProvisionStep: (request: TestStepRequest) =>
+    ipcRenderer.invoke(ipcChannels.stepTest, request),
   planTeardown: (request: TeardownRequestPayload) =>
     ipcRenderer.invoke(ipcChannels.teardownPlan, request),
   runTeardown: (request: TeardownRequestPayload) =>

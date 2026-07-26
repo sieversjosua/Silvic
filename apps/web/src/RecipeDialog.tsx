@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   ChevronDown,
   ChevronUp,
+  Play,
   Plus,
   Sparkles,
   Terminal,
@@ -13,8 +14,11 @@ import {
   type PlotCommand,
   type ProvisionStep,
   type Recipe,
+  type PlotPreview,
+  type ProvisionResult,
   type RecipeDocument,
   type RepositoryFindings,
+  type ShellStep,
 } from "@silvic/contracts";
 
 import { ConvexMark } from "./providers";
@@ -44,6 +48,11 @@ export function RecipeDialog({
   const [commands, setCommands] = useState<CommandEntry[]>([]);
   const [provision, setProvision] = useState<ProvisionStep[]>([]);
   const [showJson, setShowJson] = useState(false);
+  const [sampleBranch, setSampleBranch] = useState("my-branch");
+  const [preview, setPreview] = useState<PlotPreview>();
+  const [tests, setTests] = useState<Record<number, ProvisionResult | "running">>(
+    {},
+  );
   const [saving, setSaving] = useState(false);
   const [failure, setFailure] = useState<string>();
 
@@ -72,6 +81,37 @@ export function RecipeDialog({
         setFailure(error instanceof Error ? error.message : String(error)),
       );
   }, [projectId]);
+
+  // The preview is computed by the main process using the same functions that
+  // creation uses, so what it shows is what will actually happen.
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void window.silvic
+        .previewPlot({ projectId, branch: sampleBranch })
+        .then(setPreview)
+        .catch(() => setPreview(undefined));
+    }, 150);
+    return () => window.clearTimeout(timer);
+  }, [projectId, sampleBranch, directory]);
+
+  const runTest = async (index: number, step: ShellStep) => {
+    setTests((current) => ({ ...current, [index]: "running" }));
+    try {
+      const result = await window.silvic.testProvisionStep({ projectId, step });
+      setTests((current) => ({ ...current, [index]: result }));
+    } catch (error) {
+      setTests((current) => ({
+        ...current,
+        [index]: {
+          label: step.label ?? "Step",
+          command: step.run,
+          exitCode: 1,
+          output: error instanceof Error ? error.message : String(error),
+          durationMs: 0,
+        },
+      }));
+    }
+  };
 
   const draft = useMemo<Recipe>(
     () => ({
@@ -375,27 +415,39 @@ export function RecipeDialog({
                         </p>
                       </div>
                     ) : (
-                      <div className="recipe-row">
-                        <input
-                          className="recipe-id"
-                          value={step.label ?? ""}
-                          placeholder={`Step ${index + 1}`}
-                          onChange={(event) =>
-                            patch(index, {
-                              ...step,
-                              label: event.target.value || undefined,
-                            })
-                          }
-                        />
-                        <input
-                          className="mono"
-                          value={step.run}
-                          placeholder="bun install"
-                          onChange={(event) =>
-                            patch(index, { ...step, run: event.target.value })
-                          }
-                        />
-                      </div>
+                      <>
+                        <div className="recipe-row">
+                          <input
+                            className="recipe-id"
+                            value={step.label ?? ""}
+                            placeholder={`Step ${index + 1}`}
+                            onChange={(event) =>
+                              patch(index, {
+                                ...step,
+                                label: event.target.value || undefined,
+                              })
+                            }
+                          />
+                          <input
+                            className="mono"
+                            value={step.run}
+                            placeholder="bun install"
+                            onChange={(event) =>
+                              patch(index, { ...step, run: event.target.value })
+                            }
+                          />
+                          <button
+                            type="button"
+                            aria-label="Test this step"
+                            title="Run once in the primary checkout"
+                            disabled={!step.run.trim() || tests[index] === "running"}
+                            onClick={() => void runTest(index, step)}
+                          >
+                            <Play size={12} />
+                          </button>
+                        </div>
+                        <StepTest result={tests[index]} />
+                      </>
                     )}
                   </div>
                 ))}
@@ -408,6 +460,60 @@ export function RecipeDialog({
               </>
             )}
           </div>
+          <aside className="recipe-preview">
+            <p className="micro">Next plot</p>
+            <label className="preview-branch">
+              <span className="micro">Branch</span>
+              <input
+                className="mono"
+                value={sampleBranch}
+                onChange={(event) => setSampleBranch(event.target.value)}
+              />
+            </label>
+            {preview ? (
+              <>
+                <div className="field">
+                  <span className="field-label">Name</span>
+                  <i className="field-leader" />
+                  <span className="field-value mono">{preview.name}</span>
+                </div>
+                <div className="field">
+                  <span className="field-label">Address</span>
+                  <i className="field-leader" />
+                  <span className="field-value mono">{preview.url}</span>
+                </div>
+                <p className="preview-path mono">{preview.path}</p>
+              </>
+            ) : (
+              <p className="section-empty">…</p>
+            )}
+            <p className="micro preview-heading">Will run</p>
+            {provision.length === 0 ? (
+              <p className="section-empty">Nothing. The plot gets its files.</p>
+            ) : (
+              <ol className="preview-steps">
+                {provision.map((step, index) => (
+                  <li key={index}>
+                    <span className="mono">{index + 1}</span>
+                    {isConvexStep(step) ? (
+                      <>
+                        <ConvexMark size={11} />
+                        {step.convex.name.replaceAll(
+                          "{plot}",
+                          preview?.name ?? "…",
+                        )}
+                      </>
+                    ) : (
+                      <>
+                        <Terminal size={11} />
+                        {step.label ?? step.run}
+                      </>
+                    )}
+                  </li>
+                ))}
+              </ol>
+            )}
+          </aside>
         </div>
 
         {showJson && (
@@ -425,7 +531,7 @@ export function RecipeDialog({
         <div className="dialog-actions">
           <button
             type="button"
-            className="ghost-button"
+            className="link-button"
             onClick={() => setShowJson(!showJson)}
           >
             {showJson ? "Hide" : "Review"} changes
@@ -452,6 +558,27 @@ export function RecipeDialog({
  * Most repositories describe themselves well enough to start from, so the
  * editor offers that rather than opening on a blank page.
  */
+function StepTest({
+  result,
+}: {
+  result: ProvisionResult | "running" | undefined;
+}) {
+  if (!result) return null;
+  if (result === "running") {
+    return <p className="recipe-hint">Running in the primary checkout…</p>;
+  }
+  return (
+    <div className="step-test" data-failed={result.exitCode !== 0 || undefined}>
+      <span className="mono">
+        {result.exitCode === 0
+          ? `ok · ${Math.round(result.durationMs / 100) / 10}s`
+          : `exit ${result.exitCode}`}
+      </span>
+      {result.output && <pre className="mono">{result.output.slice(-600)}</pre>}
+    </div>
+  );
+}
+
 function Suggestion({
   findings,
   onUse,
