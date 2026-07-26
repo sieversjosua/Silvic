@@ -107,11 +107,14 @@ export class Provisioner {
 }
 
 /**
- * A deployment per plot needs `convex deployment create`, which Convex added
- * in convex 1.34. `npx` runs the copy installed in the repository, so an older
- * pin fails with the CLI's own usage text and no hint of the real cause.
+ * `convex deployment create` arrived in convex 1.34, but naming the project in
+ * the reference — `team:project:dev/plot` — only arrived in 1.40. A plot needs
+ * that form: `.env.local` is git-ignored, so a fresh worktree carries no Convex
+ * configuration and a CLI that can only read the directory answers "No project
+ * configured". Verified against 1.34, 1.35, 1.37 and 1.39, which document only
+ * a bare reference, and 1.40 onwards, which document the team and project one.
  */
-const convexDeploymentMinimum = "1.34";
+const convexDeploymentMinimum = "1.40";
 
 /**
  * Failures Silvic understands better than the tool reporting them. A typed step
@@ -122,15 +125,34 @@ export function provisionDiagnosis(
   step: ProvisionStep,
   output: string,
 ): { advice: string; remedy?: ProvisionRemedy } | undefined {
+  const conflict = peerConflict(output);
+  if (conflict) {
+    return {
+      advice: `${conflict} holds Convex to a version this plot cannot use, so the package manager refused to install anything. Update that package to a release built for a newer Convex, or drop the Convex step from the recipe until you can.`,
+    };
+  }
   if (!isConvexStep(step)) return undefined;
-  if (!/unknown command '?deployment'?/i.test(output)) return undefined;
+  if (!/unknown command '?deployment'?|no project configured/i.test(output)) {
+    return undefined;
+  }
   return {
-    advice: `This plot's Convex CLI is too old to give it its own deployment: \`convex deployment create\` arrived in convex ${convexDeploymentMinimum}. Silvic installs exactly that version rather than the newest, so packages that pin an older Convex still resolve.`,
+    advice: `This plot's Convex CLI cannot create a deployment for a plot. A worktree carries no \`.env.local\`, so the project has to be named in the command, which convex ${convexDeploymentMinimum} was the first to accept. Silvic asks for exactly that version rather than the newest, so packages pinning an older Convex still resolve.`,
     remedy: {
       id: "convex-cli",
       label: `Install convex ${convexDeploymentMinimum} and provision again`,
     },
   };
+}
+
+/**
+ * npm refuses an install outright when a package peer-depends on a version
+ * range the tree cannot satisfy, and buries which package that is in a wall of
+ * text. Naming it is the difference between a dead end and a next step.
+ */
+function peerConflict(output: string): string | undefined {
+  if (!/ERESOLVE/.test(output)) return undefined;
+  const pinned = output.match(/peer convex@"[^"]+" from (\S+@\S+)/);
+  return pinned?.[1];
 }
 
 /**

@@ -168,7 +168,7 @@ describe("Provisioner", () => {
       "error: unknown command 'deployment'\n\nUsage: convex <command> [options]",
     );
 
-    expect(diagnosis?.advice).toContain("convex 1.34");
+    expect(diagnosis?.advice).toContain("convex 1.40");
     expect(diagnosis?.remedy?.id).toBe("convex-cli");
   });
 
@@ -186,12 +186,12 @@ describe("Provisioner", () => {
   });
 
   it("repairs with the package manager the repository uses", () => {
-    expect(remedyCommand("convex-cli", "pnpm")).toBe("pnpm add convex@1.34");
-    expect(remedyCommand("convex-cli", "bun")).toBe("bun add convex@1.34");
-    expect(remedyCommand("convex-cli", "yarn")).toBe("yarn add convex@1.34");
+    expect(remedyCommand("convex-cli", "pnpm")).toBe("pnpm add convex@1.40");
+    expect(remedyCommand("convex-cli", "bun")).toBe("bun add convex@1.40");
+    expect(remedyCommand("convex-cli", "yarn")).toBe("yarn add convex@1.40");
     // npm is the assumption when a repository has not said otherwise.
     expect(remedyCommand("convex-cli", undefined)).toBe(
-      "npm install convex@1.34",
+      "npm install convex@1.40",
     );
   });
 
@@ -199,7 +199,34 @@ describe("Provisioner", () => {
     // Reaching for @latest breaks a repository whose other packages peer-depend
     // on a Convex range: the CLI updates and nothing installs afterwards.
     expect(remedyCommand("convex-cli", "npm")).not.toContain("latest");
-    expect(remedyCommand("convex-cli", "npm")).toContain("@1.34");
+    // 1.40 is the first that accepts `team:project:ref`, which a plot needs:
+    // it has no .env.local naming the project.
+    expect(remedyCommand("convex-cli", "npm")).toContain("@1.40");
+  });
+
+  it("explains a CLI that cannot find the project a plot belongs to", () => {
+    const diagnosis = provisionDiagnosis(
+      { convex: { name: "dev/{plot}" } },
+      "- Creating dev deployment...\n✖ No project configured. Run `npx convex dev` to set up a project",
+    );
+
+    expect(diagnosis?.advice).toContain("1.40");
+    expect(diagnosis?.remedy?.id).toBe("convex-cli");
+  });
+
+  it("names the package that pins Convex when the install is refused", () => {
+    const diagnosis = provisionDiagnosis(
+      { run: "npm install" },
+      [
+        "npm error code ERESOLVE",
+        "npm error While resolving: @convex-dev/workflow@0.2.6",
+        'npm error   peer convex@">=1.25.0 <1.35.0" from @convex-dev/workflow@0.2.6',
+      ].join("\n"),
+    );
+
+    expect(diagnosis?.advice).toContain("@convex-dev/workflow@0.2.6");
+    // Silvic cannot pick another project's dependency versions for it.
+    expect(diagnosis?.remedy).toBeUndefined();
   });
 
   it("does nothing when a repository declares no provisioning", async () => {
