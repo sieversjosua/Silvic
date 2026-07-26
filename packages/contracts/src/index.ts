@@ -213,6 +213,24 @@ export interface ProvisionResult {
   durationMs: number;
 }
 
+export const recipeSaveRequestSchema = z
+  .object({
+    projectId: z.string().min(1).max(400),
+    recipe: recipeSchema,
+  })
+  .strict();
+export type RecipeSaveRequest = z.infer<typeof recipeSaveRequestSchema>;
+
+export interface RecipeDocument {
+  projectId: string;
+  /** Absolute path of the file Silvic reads and writes. */
+  path: string;
+  exists: boolean;
+  recipe: Recipe;
+  /** What the recipe resolves to once defaults are applied. */
+  resolved: { project: string; directory: string };
+}
+
 export const openLinkRequestSchema = z
   .object({
     url: z
@@ -319,6 +337,8 @@ export interface SilvicDesktopApi {
     request: ProjectActivationRequest,
   ): Promise<readonly string[]>;
   getHarnessIcons(): Promise<HarnessIcons>;
+  getRecipe(projectId: string): Promise<RecipeDocument>;
+  saveRecipe(request: RecipeSaveRequest): Promise<RecipeDocument>;
   onSnapshot(listener: (snapshot: SilvicSnapshot) => void): () => void;
 }
 
@@ -341,6 +361,8 @@ export const ipcChannels = {
   projectsActiveGet: "silvic:projects:active:get",
   projectsActiveSet: "silvic:projects:active:set",
   harnessIconsGet: "silvic:harness:icons:get",
+  recipeGet: "silvic:recipe:get",
+  recipeSave: "silvic:recipe:save",
 } as const;
 
 declare global {

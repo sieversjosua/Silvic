@@ -13,6 +13,7 @@ import {
   Plus,
   RefreshCw,
   Search,
+  SlidersHorizontal,
   SquareTerminal,
   Sun,
   Terminal,
@@ -34,6 +35,7 @@ import type {
 import { useAppearance } from "./appearance";
 import { Grove } from "./Grove";
 import { Mark } from "./Mark";
+import { RecipeDialog } from "./RecipeDialog";
 import {
   localChangeCount,
   locationLabel,
@@ -72,6 +74,7 @@ export function App() {
   const { appearance, preference, setPreference } = useAppearance();
   const [query, setQuery] = useState("");
   const [menuProjectId, setMenuProjectId] = useState<string>();
+  const [recipeProject, setRecipeProject] = useState<ProjectSnapshot>();
   const [showEnvironment, setShowEnvironment] = useState(false);
   const [deliveryWorkspace, setDeliveryWorkspace] =
     useState<WorkspaceSnapshot>();
@@ -144,6 +147,7 @@ export function App() {
                 onOpenMenu={() => setMenuProjectId(candidate.id)}
                 onCloseMenu={() => setMenuProjectId(undefined)}
                 onRemove={() => void setProjectActive(candidate.id, false)}
+                onEditRecipe={() => setRecipeProject(candidate)}
               />
             ))}
             {activeProjects.length === 0 && !loading && (
@@ -260,6 +264,13 @@ export function App() {
         )}
       </aside>
 
+      {recipeProject && (
+        <RecipeDialog
+          projectId={recipeProject.id}
+          projectName={recipeProject.name}
+          onClose={() => setRecipeProject(undefined)}
+        />
+      )}
       {error && <div className="error-toast">{error}</div>}
       {showEnvironment && project && (
         <NewPlotDialog
@@ -291,6 +302,7 @@ function ProjectButton({
   onOpenMenu,
   onCloseMenu,
   onRemove,
+  onEditRecipe,
 }: {
   project: ProjectSnapshot;
   active: boolean;
@@ -299,6 +311,7 @@ function ProjectButton({
   onOpenMenu(): void;
   onCloseMenu(): void;
   onRemove(): void;
+  onEditRecipe(): void;
 }) {
   const tone = projectTone(project.workspaces);
   const row = useRef<HTMLDivElement>(null);
@@ -383,6 +396,17 @@ function ProjectButton({
               width: anchor.width,
             }}
           >
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                onCloseMenu();
+                onEditRecipe();
+              }}
+            >
+              <SlidersHorizontal size={14} />
+              Recipe…
+            </button>
             <button
               type="button"
               role="menuitem"

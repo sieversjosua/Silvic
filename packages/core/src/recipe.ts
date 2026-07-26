@@ -1,7 +1,12 @@
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { basename, join, normalize, resolve } from "node:path";
 
-import { recipeSchema, type PlotCommand, type ProvisionStep } from "@silvic/contracts";
+import {
+  recipeSchema,
+  type PlotCommand,
+  type ProvisionStep,
+  type Recipe,
+} from "@silvic/contracts";
 
 export const recipeFileName = "silvic.json";
 
@@ -51,6 +56,40 @@ export async function readRecipe(rootPath: string): Promise<ResolvedRecipe> {
     provision: recipe.data.provision ?? [],
     configured: true,
   };
+}
+
+/**
+ * What the repository actually declares, without defaults folded in. Editing
+ * needs this: a field the user never set must stay unset rather than being
+ * written back as though it had been chosen.
+ */
+export async function readRecipeSource(rootPath: string): Promise<{
+  path: string;
+  exists: boolean;
+  recipe: Recipe;
+}> {
+  const path = join(normalize(rootPath), recipeFileName);
+  try {
+    const parsed: unknown = JSON.parse(await readFile(path, "utf8"));
+    const recipe = recipeSchema.safeParse(parsed);
+    return { path, exists: true, recipe: recipe.success ? recipe.data : {} };
+  } catch {
+    return { path, exists: false, recipe: {} };
+  }
+}
+
+/** Stable, diff-friendly output: a repository file a person will read. */
+export function serialiseRecipe(recipe: Recipe): string {
+  return `${JSON.stringify(recipe, undefined, 2)}\n`;
+}
+
+export async function writeRecipe(
+  rootPath: string,
+  recipe: Recipe,
+): Promise<string> {
+  const path = join(normalize(rootPath), recipeFileName);
+  await writeFile(path, serialiseRecipe(recipeSchema.parse(recipe)), "utf8");
+  return path;
 }
 
 function defaults(

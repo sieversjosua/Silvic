@@ -8,6 +8,7 @@ import {
   type OpenLinkRequest,
   type OpenWorkspaceRequest,
   type ProjectActivationRequest,
+  type RecipeSaveRequest,
   type SilvicDesktopApi,
   type SilvicSnapshot,
 } from "@silvic/contracts";
@@ -37,6 +38,10 @@ const api: SilvicDesktopApi = {
   setProjectActive: (request: ProjectActivationRequest) =>
     ipcRenderer.invoke(ipcChannels.projectsActiveSet, request),
   getHarnessIcons: () => ipcRenderer.invoke(ipcChannels.harnessIconsGet),
+  getRecipe: (projectId: string) =>
+    ipcRenderer.invoke(ipcChannels.recipeGet, projectId),
+  saveRecipe: (request: RecipeSaveRequest) =>
+    ipcRenderer.invoke(ipcChannels.recipeSave, request),
   onSnapshot: (listener: (snapshot: SilvicSnapshot) => void) => {
     const handler = (
       _event: Electron.IpcRendererEvent,

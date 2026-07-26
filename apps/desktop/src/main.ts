@@ -29,11 +29,13 @@ import {
   openLinkRequestSchema,
   openWorkspaceRequestSchema,
   projectActivationRequestSchema,
+  recipeSaveRequestSchema,
   workspacePathRequestSchema,
   type AppearancePreference,
   type CreateEnvironmentRequest,
   type HarnessIcons,
   type PlotCreationResult,
+  type RecipeDocument,
   type OpenWorkspaceRequest,
   type SilvicSnapshot,
 } from "@silvic/contracts";
@@ -48,7 +50,9 @@ import {
   plotPort,
   plotUrl,
   readRecipe,
+  readRecipeSource,
   readWorkCliNames,
+  writeRecipe,
   resolvedCommandPath,
   type WorkspaceRecord,
 } from "@silvic/core";
@@ -281,6 +285,17 @@ function registerIpc(): void {
     assertTrustedSender(event);
     return readHarnessIcons();
   });
+  ipcMain.handle(ipcChannels.recipeGet, async (event, projectId: unknown) => {
+    assertTrustedSender(event);
+    if (typeof projectId !== "string") throw new Error("Invalid project");
+    return recipeDocument(projectId);
+  });
+  ipcMain.handle(ipcChannels.recipeSave, async (event, request: unknown) => {
+    assertTrustedSender(event);
+    const parsed = recipeSaveRequestSchema.parse(request);
+    await writeRecipe(knownProjectRoot(parsed.projectId), parsed.recipe);
+    return recipeDocument(parsed.projectId);
+  });
   ipcMain.handle(ipcChannels.appearanceGet, (event) => {
     assertTrustedSender(event);
     return settings.get("appearance");
@@ -316,6 +331,30 @@ function adoptChosenProjects(chosenPaths: readonly string[]): void {
   settings.set("activeProjects", [
     ...new Set([...settings.get("activeProjects"), ...adopted]),
   ]);
+}
+
+async function recipeDocument(projectId: string): Promise<RecipeDocument> {
+  const rootPath = knownProjectRoot(projectId);
+  const [source, resolved] = await Promise.all([
+    readRecipeSource(rootPath),
+    readRecipe(rootPath),
+  ]);
+  return {
+    projectId,
+    path: source.path,
+    exists: source.exists,
+    recipe: source.recipe,
+    resolved: { project: resolved.project, directory: resolved.directory },
+  };
+}
+
+/** Silvic only reads or writes a recipe inside a project it has discovered. */
+function knownProjectRoot(projectId: string): string {
+  const project = latestSnapshot.projects.find(
+    (candidate) => candidate.id === projectId,
+  );
+  if (!project) throw new Error("Silvic can only configure a known project");
+  return project.rootPath;
 }
 
 function currentWindowBackground(): string {
