@@ -446,6 +446,8 @@ export interface PlotCreationResult {
   snapshot: SilvicSnapshot;
   plot: { name: string; path: string; port: number; url: string };
   provision: readonly ProvisionResult[];
+  /** What the recipe says can be run in a plot, so a new one can say so too. */
+  commands: Readonly<Record<string, PlotCommand>>;
 }
 
 export interface PlotProgressStep {

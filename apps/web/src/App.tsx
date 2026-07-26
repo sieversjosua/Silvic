@@ -34,6 +34,7 @@ import type {
   ProjectSnapshot,
   ProvisionRemedyId,
   ProvisionResult,
+  SilvicSnapshot,
   WorkspaceChanges,
   WorkspaceSnapshot,
 } from "@silvic/contracts";
@@ -306,8 +307,10 @@ export function App() {
         <NewPlotDialog
           source={workspace ?? project.workspaces[0]}
           defaultHarness={defaultHarness}
+          snapshot={snapshot}
           onCancel={() => setShowEnvironment(false)}
           onOpen={openWorkspace}
+          onSetDefaultHarness={(id) => void setDefaultHarness(id)}
           onCreate={createEnvironment}
         />
       )}
@@ -866,21 +869,22 @@ function CopyRow({
   }, [copied]);
 
   return (
-    <div className="copy-row">
-      <span className="micro">{label}</span>
-      <button
-        type="button"
-        className="copy-value mono"
-        title={`${value}\nClick to copy`}
-        onClick={() => {
-          void window.silvic.copyText(value);
-          setCopied(true);
-        }}
-      >
-        <span className="truncate">{display ?? value}</span>
+    <button
+      type="button"
+      className="field copy-field"
+      title={`${value}\nClick to copy`}
+      onClick={() => {
+        void window.silvic.copyText(value);
+        setCopied(true);
+      }}
+    >
+      <span className="field-label">{label}</span>
+      <i className="field-leader" />
+      <span className="field-value mono truncate">{display ?? value}</span>
+      <span className="copy-mark" data-copied={copied || undefined}>
         {copied ? <Check size={12} /> : <Copy size={12} />}
-      </button>
-    </div>
+      </span>
+    </button>
   );
 }
 
@@ -912,14 +916,19 @@ function Field({ label, value }: { label: string; value: string }) {
 function NewPlotDialog({
   source,
   defaultHarness,
+  snapshot,
   onCancel,
   onOpen,
+  onSetDefaultHarness,
   onCreate,
 }: {
   source: WorkspaceSnapshot | undefined;
   defaultHarness: HarnessId;
+  /** Live, so a deployment a connector finds afterwards still shows up. */
+  snapshot: SilvicSnapshot;
   onCancel(): void;
   onOpen(path: string, target: HarnessDefinition["id"]): void;
+  onSetDefaultHarness(id: HarnessId): void;
   onCreate(request: {
     sourcePath: string;
     branch: string;
@@ -930,6 +939,7 @@ function NewPlotDialog({
   const [mode, setMode] = useState<"worktree" | "clone">("worktree");
   const [creating, setCreating] = useState(false);
   const [repairing, setRepairing] = useState(false);
+  const [openMenu, setOpenMenu] = useState(false);
   const [steps, setSteps] = useState<readonly PlotProgressStep[]>([]);
   const [result, setResult] = useState<PlotCreationResult>();
   const [failure, setFailure] = useState<string>();
@@ -958,6 +968,24 @@ function NewPlotDialog({
 
   if (result) {
     const failed = result.provision.find((step) => step.exitCode !== 0);
+    const commands = Object.entries(result.commands);
+    // Connectors run after creation returns, so a deployment appears a moment
+    // later. Reading it from the live snapshot lets the screen fill in rather
+    // than freeze at whatever was known the instant the plot was made.
+    const attached =
+      snapshot.projects
+        .flatMap((candidate) => candidate.workspaces)
+        .find((candidate) => candidate.path === result.plot.path)
+        ?.observations.filter(
+          (observation) =>
+            observation.kind === "deployment" || observation.kind === "runtime",
+        ) ?? [];
+    const startAgain = () => {
+      setResult(undefined);
+      setSteps([]);
+      setFailure(undefined);
+      setBranch("");
+    };
     // The repair runs in the plot that already exists, so the dialog reports it
     // exactly as it reported creation: the same steps, live.
     const repair = (remedy: ProvisionRemedyId) => {
@@ -993,6 +1021,16 @@ function NewPlotDialog({
             </p>
           )}
           <h2>{result.plot.name}</h2>
+          <p className="ready-lineage">
+            <GitBranch size={11} />
+            <span className="mono">{branch.trim()}</span>
+            <i className="fact-sep" />
+            <span>branched from {source.name}</span>
+            <i className="fact-sep" />
+            <span>
+              {mode === "worktree" ? "linked worktree" : "independent clone"}
+            </span>
+          </p>
           <div className="plot-facts-block">
             <CopyRow label="Address" value={result.plot.url} />
             <CopyRow
@@ -1001,6 +1039,32 @@ function NewPlotDialog({
               display={pathTail(result.plot.path)}
             />
           </div>
+          {attached.length > 0 && (
+            <div className="ready-section">
+              <p className="micro">Attached</p>
+              {attached.map((observation) => (
+                <Observation
+                  key={`${observation.connectorId}:${observation.kind}:${observation.label}`}
+                  observation={observation}
+                />
+              ))}
+            </div>
+          )}
+          {commands.length > 0 && (
+            <div className="ready-section">
+              <p className="micro">Run here</p>
+              {commands.map(([name, command]) => (
+                <CopyRow
+                  key={name}
+                  label={name}
+                  value={command.run}
+                  display={
+                    command.url ? `${command.run}  → serves the address` : command.run
+                  }
+                />
+              ))}
+            </div>
+          )}
           {repairing ? (
             <ProgressSteps steps={steps} settled={!repairing} />
           ) : result.provision.length === 0 ? (
@@ -1012,24 +1076,46 @@ function NewPlotDialog({
           ) : failed ? (
             <ProvisionResults results={result.provision} onRemedy={repair} />
           ) : (
-            // Nothing went wrong, so the commands are trivia. The summary says
-            // it happened and how long it took; the detail is there if wanted.
-            <details className="step-output ready-steps">
-              <summary>
-                {result.provision.length} provisioning step
-                {result.provision.length === 1 ? "" : "s"} ·{" "}
+            <div className="ready-section">
+              <p className="micro">
+                Provisioned in{" "}
                 {secondsLabel(
                   result.provision.reduce(
                     (total, step) => total + step.durationMs,
                     0,
                   ),
                 )}
-              </summary>
-              <ProvisionResults results={result.provision} />
-            </details>
+              </p>
+              <ul className="ready-ran">
+                {result.provision.map((step) => (
+                  <li key={step.label}>
+                    <i className="dot" data-tone="ready" />
+                    <strong>{step.label}</strong>
+                    <i className="field-leader" />
+                    <span className="mono">{secondsLabel(step.durationMs)}</span>
+                  </li>
+                ))}
+              </ul>
+              {/* Nothing went wrong, so the commands are trivia — until they
+                  are not, and then they are the first thing anybody wants. */}
+              <details className="step-output">
+                <summary>What each command was</summary>
+                <ProvisionResults results={result.provision} />
+              </details>
+            </div>
           )}
           {failure && <p className="dialog-error">{failure}</p>}
-          <div className="dialog-actions">
+          <div className="dialog-actions ready-actions">
+            <button
+              type="button"
+              className="link-button"
+              onClick={startAgain}
+              disabled={repairing}
+            >
+              <Plus size={12} />
+              Another plot
+            </button>
+            <span className="dialog-spacer" />
             <button
               type="button"
               className="ghost-button"
@@ -1038,15 +1124,41 @@ function NewPlotDialog({
             >
               {repairing ? "Working…" : "Done"}
             </button>
-            <button
-              type="button"
-              className="primary-button"
-              onClick={() => void onOpen(result.plot.path, defaultHarness)}
-              disabled={repairing}
-            >
-              <HarnessMark id={defaultHarness} size={14} />
-              Open in {harnessLabel(defaultHarness)}
-            </button>
+            <div className="split-button ready-open">
+              <button
+                type="button"
+                onClick={() => void onOpen(result.plot.path, defaultHarness)}
+                disabled={repairing}
+              >
+                <HarnessMark id={defaultHarness} size={14} />
+                Open in {harnessLabel(defaultHarness)}
+              </button>
+              <button
+                type="button"
+                className="split-toggle"
+                aria-label="Choose another way in"
+                aria-expanded={openMenu}
+                onClick={() => setOpenMenu(!openMenu)}
+                disabled={repairing}
+              >
+                <ChevronDown size={13} />
+              </button>
+              {openMenu && (
+                <>
+                  <div className="menu-scrim" onClick={() => setOpenMenu(false)} />
+                  <div className="menu">
+                    <HarnessRows
+                      defaultHarness={defaultHarness}
+                      onOpen={(id) => {
+                        setOpenMenu(false);
+                        void onOpen(result.plot.path, id);
+                      }}
+                      onSetDefault={onSetDefaultHarness}
+                    />
+                  </div>
+                </>
+              )}
+            </div>
           </div>
         </section>
       </div>

@@ -631,6 +631,7 @@ async function createEnvironment(
       snapshot: latestSnapshot,
       plot: { name: plot, path: destinationPath, port, url },
       provision,
+      commands: recipe.commands,
     };
   } catch (error) {
     progress.stumbled(error instanceof Error ? error.message : String(error));

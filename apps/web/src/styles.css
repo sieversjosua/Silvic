@@ -2438,55 +2438,154 @@ button {
   background: color-mix(in srgb, var(--tone, var(--rule)) 10%, transparent);
 }
 
-/* What a finished plot is: an address and a place, both one click from the
-   clipboard rather than four lines of unselectable monospace. */
+/* The address and the location keep the leader rows the inspector uses, and
+   gain a copy on click. The row is the button, so the whole line is the
+   target rather than an icon at the end of it. */
 .plot-facts-block {
   display: flex;
   flex-direction: column;
-  gap: 2px;
   margin: 4px 0 2px;
 }
 
-.copy-row {
-  display: grid;
-  grid-template-columns: 74px 1fr;
-  gap: 10px;
-  align-items: center;
-}
-
-.copy-value {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-  justify-content: space-between;
+.copy-field {
   width: 100%;
-  padding: 7px 9px;
-  border: 1px solid transparent;
+  padding: 5px 8px;
+  margin-left: -8px;
   border-radius: var(--r-md);
-  color: var(--ink);
-  font-size: 11.5px;
-  text-align: left;
-  transition:
-    background 120ms var(--ease),
-    border-color 120ms var(--ease);
+  transition: background 120ms var(--ease);
 }
 
-.copy-value:hover {
-  border-color: var(--rule);
-  background: var(--surface-sunk);
+.copy-field:hover {
+  background: var(--surface-hover);
 }
 
-.copy-value svg {
+/* A path cannot wrap here without pushing the dialog wider than the window,
+   so its value truncates. `1fr` alone would not: a flex item refuses to
+   shrink past its content until told it may. */
+.copy-field .field-value {
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
+.copy-mark {
+  display: inline-flex;
   flex: 0 0 auto;
+  align-items: center;
   color: var(--ink-faint);
+  opacity: 0;
+  transition:
+    opacity 120ms var(--ease),
+    color 120ms var(--ease);
 }
 
-.copy-value:hover svg {
-  color: var(--accent);
+.copy-field:hover .copy-mark,
+.copy-field:focus-visible .copy-mark,
+.copy-mark[data-copied] {
+  opacity: 1;
+}
+
+.copy-mark[data-copied] {
+  color: var(--tone-ready);
 }
 
 .ready-steps summary {
   margin-top: 4px;
+}
+
+/* What was made, in one line under the name. */
+.ready-lineage {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+  margin-top: -4px;
+  color: var(--ink-faint);
+  font-size: 11.5px;
+}
+
+.ready-lineage svg {
+  flex: 0 0 auto;
+}
+
+.ready-lineage .mono {
+  color: var(--ink-muted);
+}
+
+.ready-section {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding-top: 9px;
+  border-top: 1px solid var(--rule);
+}
+
+.ready-section > .micro {
+  margin-bottom: 3px;
+}
+
+/* One line per step: what it was and what it cost, nothing else. */
+.ready-ran {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ready-ran li {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 12.5px;
+}
+
+.ready-ran strong {
+  flex: 0 0 auto;
+  font-weight: 520;
+}
+
+.ready-ran .mono {
+  flex: 0 0 auto;
+  color: var(--ink-faint);
+  font-size: 10.5px;
+}
+
+.ready-ran .dot {
+  align-self: center;
+}
+
+/* Finishing and starting are the same moment, so the way in is the primary
+   action and everything else arranges itself around it. */
+.ready-actions {
+  align-items: center;
+}
+
+.ready-actions .link-button {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  text-decoration: none;
+}
+
+.ready-actions .link-button:hover {
+  color: var(--accent);
+}
+
+.ready-open {
+  margin-top: 0;
+  flex: 0 0 auto;
+}
+
+.ready-open > button:first-child {
+  height: 30px;
+  padding: 0 13px;
+  flex: 0 0 auto;
+}
+
+/* Nothing in a dialog may push it sideways; a long path is not a reason to
+   scroll the whole surface. */
+.dialog {
+  overflow-x: hidden;
 }
 
 /* A refusal reported against the field that caused it. */
