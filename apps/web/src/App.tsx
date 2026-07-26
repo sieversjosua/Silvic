@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Bot,
+  Check,
   ChevronDown,
+  Copy,
   ExternalLink,
   FolderOpen,
   GitBranch,
@@ -303,7 +305,9 @@ export function App() {
       {showEnvironment && project && (
         <NewPlotDialog
           source={workspace ?? project.workspaces[0]}
+          defaultHarness={defaultHarness}
           onCancel={() => setShowEnvironment(false)}
+          onOpen={openWorkspace}
           onCreate={createEnvironment}
         />
       )}
@@ -839,6 +843,57 @@ function Observation({ observation }: { observation: ConnectorObservation }) {
   );
 }
 
+/**
+ * The address and the location are the two things worth taking away from a
+ * finished plot, so both are one click from the clipboard. A path is shown by
+ * its tail: the front of it is the same for every plot in the project.
+ */
+function CopyRow({
+  label,
+  value,
+  display,
+}: {
+  label: string;
+  value: string;
+  display?: string;
+}) {
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    if (!copied) return;
+    const timer = window.setTimeout(() => setCopied(false), 1_400);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
+
+  return (
+    <div className="copy-row">
+      <span className="micro">{label}</span>
+      <button
+        type="button"
+        className="copy-value mono"
+        title={`${value}\nClick to copy`}
+        onClick={() => {
+          void window.silvic.copyText(value);
+          setCopied(true);
+        }}
+      >
+        <span className="truncate">{display ?? value}</span>
+        {copied ? <Check size={12} /> : <Copy size={12} />}
+      </button>
+    </div>
+  );
+}
+
+/** Every plot in a project shares the front of its path; the tail names it. */
+function pathTail(path: string): string {
+  const parts = path.split("/").filter(Boolean);
+  return parts.length <= 2 ? path : `…/${parts.slice(-2).join("/")}`;
+}
+
+function secondsLabel(durationMs: number): string {
+  return `${Math.round(durationMs / 100) / 10}s`;
+}
+
 function Field({ label, value }: { label: string; value: string }) {
   return (
     <div className="field">
@@ -856,11 +911,15 @@ function Field({ label, value }: { label: string; value: string }) {
  */
 function NewPlotDialog({
   source,
+  defaultHarness,
   onCancel,
+  onOpen,
   onCreate,
 }: {
   source: WorkspaceSnapshot | undefined;
+  defaultHarness: HarnessId;
   onCancel(): void;
+  onOpen(path: string, target: HarnessDefinition["id"]): void;
   onCreate(request: {
     sourcePath: string;
     branch: string;
@@ -923,44 +982,70 @@ function NewPlotDialog({
           className="dialog"
           onMouseDown={(event) => event.stopPropagation()}
         >
-          <p className="micro">
-            {repairing
-              ? "Repairing"
-              : failed
-                ? "Provisioning failed"
-                : "Plot ready"}
-          </p>
+          {repairing ? (
+            <p className="micro">Repairing</p>
+          ) : failed ? (
+            <p className="micro">Provisioning failed</p>
+          ) : (
+            <p className="state-pill" data-tone="ready">
+              <Check size={12} />
+              Plot ready
+            </p>
+          )}
           <h2>{result.plot.name}</h2>
-          <div className="field">
-            <span className="field-label">Address</span>
-            <i className="field-leader" />
-            <span className="field-value mono">{result.plot.url}</span>
-          </div>
-          <div className="field">
-            <span className="field-label">Location</span>
-            <i className="field-leader" />
-            <span className="field-value mono">{result.plot.path}</span>
+          <div className="plot-facts-block">
+            <CopyRow label="Address" value={result.plot.url} />
+            <CopyRow
+              label="Location"
+              value={result.plot.path}
+              display={pathTail(result.plot.path)}
+            />
           </div>
           {repairing ? (
-            <ProgressSteps steps={steps} />
+            <ProgressSteps steps={steps} settled={!repairing} />
           ) : result.provision.length === 0 ? (
             <p className="dialog-copy">
               This repository declares no provisioning steps. Add a
               <code> silvic.json </code> to install dependencies, create a
               deployment or write environment files when a plot is made.
             </p>
-          ) : (
+          ) : failed ? (
             <ProvisionResults results={result.provision} onRemedy={repair} />
+          ) : (
+            // Nothing went wrong, so the commands are trivia. The summary says
+            // it happened and how long it took; the detail is there if wanted.
+            <details className="step-output ready-steps">
+              <summary>
+                {result.provision.length} provisioning step
+                {result.provision.length === 1 ? "" : "s"} ·{" "}
+                {secondsLabel(
+                  result.provision.reduce(
+                    (total, step) => total + step.durationMs,
+                    0,
+                  ),
+                )}
+              </summary>
+              <ProvisionResults results={result.provision} />
+            </details>
           )}
           {failure && <p className="dialog-error">{failure}</p>}
           <div className="dialog-actions">
             <button
               type="button"
-              className="primary-button"
+              className="ghost-button"
               onClick={onCancel}
               disabled={repairing}
             >
               {repairing ? "Working…" : "Done"}
+            </button>
+            <button
+              type="button"
+              className="primary-button"
+              onClick={() => void onOpen(result.plot.path, defaultHarness)}
+              disabled={repairing}
+            >
+              <HarnessMark id={defaultHarness} size={14} />
+              Open in {harnessLabel(defaultHarness)}
             </button>
           </div>
         </section>

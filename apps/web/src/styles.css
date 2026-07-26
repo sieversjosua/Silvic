@@ -2431,6 +2431,64 @@ button {
   white-space: pre;
 }
 
+/* The dialog is a column, so an inline pill would otherwise stretch across it. */
+.dialog > .state-pill {
+  align-self: flex-start;
+  border-color: color-mix(in srgb, var(--tone, var(--rule)) 40%, transparent);
+  background: color-mix(in srgb, var(--tone, var(--rule)) 10%, transparent);
+}
+
+/* What a finished plot is: an address and a place, both one click from the
+   clipboard rather than four lines of unselectable monospace. */
+.plot-facts-block {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 4px 0 2px;
+}
+
+.copy-row {
+  display: grid;
+  grid-template-columns: 74px 1fr;
+  gap: 10px;
+  align-items: center;
+}
+
+.copy-value {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 7px 9px;
+  border: 1px solid transparent;
+  border-radius: var(--r-md);
+  color: var(--ink);
+  font-size: 11.5px;
+  text-align: left;
+  transition:
+    background 120ms var(--ease),
+    border-color 120ms var(--ease);
+}
+
+.copy-value:hover {
+  border-color: var(--rule);
+  background: var(--surface-sunk);
+}
+
+.copy-value svg {
+  flex: 0 0 auto;
+  color: var(--ink-faint);
+}
+
+.copy-value:hover svg {
+  color: var(--accent);
+}
+
+.ready-steps summary {
+  margin-top: 4px;
+}
+
 /* A refusal reported against the field that caused it. */
 .field-error {
   margin-top: 2px;
