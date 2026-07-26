@@ -158,6 +158,25 @@ export function parseGitStatus(output: string): GitStatus {
   return status;
 }
 
+/**
+ * A browsable address for the origin, so the project can link to where it
+ * lives. SSH and HTTPS remotes both resolve; anything unrecognised gets
+ * nothing rather than a guess.
+ */
+export function remoteWebUrl(origin: string | undefined): string | undefined {
+  if (!origin) return undefined;
+  const trimmed = origin.trim().replace(/\.git$/, "");
+  const scp = trimmed.match(/^[^@]+@([^:]+):(.+)$/);
+  if (scp?.[1] && scp[2]) return `https://${scp[1]}/${scp[2]}`;
+  try {
+    const url = new URL(trimmed);
+    if (url.protocol !== "https:" && url.protocol !== "http:") return undefined;
+    return `https://${url.host}${url.pathname}`;
+  } catch {
+    return undefined;
+  }
+}
+
 export function projectIdentity(
   origin: string | undefined,
   rootPath: string,

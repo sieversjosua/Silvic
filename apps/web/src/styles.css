@@ -952,8 +952,34 @@ button {
   white-space: nowrap;
 }
 
-.plot-name {
+.plot-title {
   margin-top: 7px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.plot-remote {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: var(--r-sm);
+  color: var(--ink-faint);
+  transition:
+    color 120ms var(--ease),
+    background 120ms var(--ease);
+}
+
+.plot-remote:hover {
+  color: var(--ink);
+  background: var(--surface-hover);
+}
+
+.plot-name {
+  min-width: 0;
   overflow: hidden;
   font-size: 14px;
   font-weight: 600;
@@ -1065,6 +1091,23 @@ button {
 
 .plot-actions-gap {
   flex: 1;
+}
+
+/* Growing a new plot is the trunk's own action, so it stays out of the way
+   until the card is hovered. */
+.plot-new {
+  opacity: 0;
+  transition: opacity 120ms var(--ease);
+}
+
+.plot:hover .plot-new,
+.plot-new:focus-visible {
+  opacity: 1;
+}
+
+.plot-new:hover {
+  color: var(--accent);
+  border-color: var(--accent-edge);
 }
 
 /* Portalled out of the canvas, so it needs its own width rather than the

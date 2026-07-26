@@ -238,6 +238,7 @@ export function App() {
               onSelect={selectWorkspace}
               onOpen={openWorkspace}
               onEditRecipe={() => setRecipeProject(project)}
+              onNewPlot={() => setShowEnvironment(true)}
             />
 
           </>

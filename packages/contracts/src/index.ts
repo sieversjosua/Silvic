@@ -149,6 +149,8 @@ export interface ProjectSnapshot {
   name: string;
   rootPath: string;
   origin?: string;
+  /** Browsable address of the origin, when one can be derived. */
+  remoteUrl?: string;
   workspaces: readonly WorkspaceSnapshot[];
 }
 

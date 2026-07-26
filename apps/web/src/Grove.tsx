@@ -37,7 +37,12 @@ import type {
 } from "@silvic/contracts";
 
 import { substrate, type Appearance } from "./appearance";
-import { CodexMark, ConvexMark, HarnessMark } from "./providers";
+import {
+  CodexMark,
+  ConvexMark,
+  GitHubMark,
+  HarnessMark,
+} from "./providers";
 import {
   QUIET_FOLD_MIN,
   isQuiet,
@@ -60,11 +65,13 @@ interface WorkspaceNodeData extends Record<string, unknown> {
   selected: boolean;
   dimmed: boolean;
   menuOpen: boolean;
+  project: ProjectSnapshot;
   onSelect(id: string): void;
   onOpen(path: string, target: HarnessDefinition["id"]): void;
   onOpenMenu(id: string): void;
   onCloseMenu(): void;
   onEditRecipe(): void;
+  onNewPlot(): void;
 }
 
 interface QuietNodeData extends Record<string, unknown> {
@@ -84,6 +91,7 @@ interface GroveProps {
   onSelect(id: string): void;
   onOpen(path: string, target: HarnessDefinition["id"]): void;
   onEditRecipe(): void;
+  onNewPlot(): void;
 }
 
 const nodeTypes = { workspace: memo(WorkspaceNode), quiet: memo(QuietNode) };
@@ -104,6 +112,7 @@ function GroveCanvas({
   onSelect,
   onOpen,
   onEditRecipe,
+  onNewPlot,
 }: GroveProps) {
   const [nudges, setNudges] = useState<ProjectNudges>(() =>
     readNudges(project.id),
@@ -150,16 +159,19 @@ function GroveCanvas({
           selected: workspace.workspaceId === selectedWorkspaceId,
           dimmed: needle.length > 0 && !matches(workspace, needle),
           menuOpen: menuPlotId === workspace.workspaceId,
+          project,
           onSelect,
           onOpen,
           onOpenMenu: setMenuPlotId,
           onCloseMenu: () => setMenuPlotId(undefined),
           onEditRecipe,
+          onNewPlot,
         },
       } satisfies WorkspaceFlowNode;
     });
   }, [
     tidy,
+    project,
     nudges,
     query,
     menuPlotId,
@@ -167,6 +179,7 @@ function GroveCanvas({
     onSelect,
     onOpen,
     onEditRecipe,
+    onNewPlot,
   ]);
 
   const quietTotal = project.workspaces.filter(isQuiet).length;
@@ -334,6 +347,7 @@ function WorkspaceNode({ data }: NodeProps<WorkspaceFlowNode>) {
   const { ahead, behind } = workspace.git;
   const signals = cardSignals(workspace);
   const menuButton = useRef<HTMLButtonElement>(null);
+  const { remoteUrl } = data.project;
   const runtimeUrl = workspace.observations.find(
     (observation) => observation.kind === "runtime" && observation.url,
   )?.url;
@@ -360,14 +374,34 @@ function WorkspaceNode({ data }: NodeProps<WorkspaceFlowNode>) {
       <span className="plot-ticks" aria-hidden="true" />
 
       <header className="plot-head">
-        <span className="micro">{locationLabel(workspace)}</span>
+        <span className="micro">
+          {workspace.isPrimary ? "Project" : locationLabel(workspace)}
+        </span>
         <span className="plot-state">
           <i className="dot" />
           {state.label}
         </span>
       </header>
 
-      <h3 className="plot-name">{workspace.name}</h3>
+      <div className="plot-title">
+        <h3 className="plot-name">
+          {workspace.isPrimary ? data.project.name : workspace.name}
+        </h3>
+        {workspace.isPrimary && remoteUrl && (
+          <button
+            type="button"
+            className="plot-remote"
+            aria-label="Open the repository"
+            title={remoteUrl}
+            onClick={(event) => {
+              event.stopPropagation();
+              void window.silvic.openLink({ url: remoteUrl });
+            }}
+          >
+            <GitHubMark size={14} />
+          </button>
+        )}
+      </div>
       <p className="plot-branch">
         <GitBranch size={11} />
         <span>{workspace.branch || "Detached"}</span>
@@ -379,6 +413,12 @@ function WorkspaceNode({ data }: NodeProps<WorkspaceFlowNode>) {
         <span>
           ↑{ahead} ↓{behind}
         </span>
+        {workspace.isPrimary && (
+          <>
+            <i className="fact-sep" />
+            <span>{plotSummary(data.project)}</span>
+          </>
+        )}
       </p>
 
       {signals.length > 0 && (
@@ -415,6 +455,20 @@ function WorkspaceNode({ data }: NodeProps<WorkspaceFlowNode>) {
           <Terminal size={12} />
         </button>
         <span className="plot-actions-gap" />
+        {workspace.isPrimary && (
+          <button
+            type="button"
+            className="icon plot-new"
+            aria-label="New plot from here"
+            title="New plot"
+            onClick={(event) => {
+              event.stopPropagation();
+              data.onNewPlot();
+            }}
+          >
+            <Plus size={14} />
+          </button>
+        )}
         <button
           type="button"
           className="icon"
@@ -575,6 +629,16 @@ function QuietNode({ data }: NodeProps<QuietFlowNode>) {
       <span className="quiet-action">Show them</span>
     </article>
   );
+}
+
+/** How the project's plots are doing, in one line. */
+function plotSummary(project: ProjectSnapshot): string {
+  const plots = project.workspaces.filter((workspace) => !workspace.isPrimary);
+  if (plots.length === 0) return "no plots";
+  const busy = plots.filter((workspace) => !isQuiet(workspace)).length;
+  return busy > 0
+    ? `${plots.length} plots · ${busy} busy`
+    : `${plots.length} plots · all quiet`;
 }
 
 function signalIcon(kind: ConnectorObservation["kind"]) {

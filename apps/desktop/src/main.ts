@@ -126,6 +126,7 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   app.whenReady().then(async () => {
+    setDevelopmentDockIcon();
     await migrateLegacySettings();
     nativeTheme.themeSource = settings.get("appearance");
     nativeTheme.on("updated", () => {
@@ -145,6 +146,16 @@ if (!app.requestSingleInstanceLock()) {
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
+
+function setDevelopmentDockIcon(): void {
+  if (process.platform !== "darwin" || app.isPackaged) return;
+
+  const iconPath = join(
+    app.getAppPath(),
+    "../../Resources/Brand/Silvic-Electron-AppIcon-1024.png",
+  );
+  if (existsSync(iconPath)) app.dock?.setIcon(iconPath);
+}
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -589,10 +600,12 @@ async function openWorkspace(request: OpenWorkspaceRequest): Promise<void> {
  * never hand the browser an arbitrary address.
  */
 function knownObservationUrl(url: string): string {
-  const known = latestSnapshot.projects.some((project) =>
-    project.workspaces.some((workspace) =>
-      workspace.observations.some((observation) => observation.url === url),
-    ),
+  const known = latestSnapshot.projects.some(
+    (project) =>
+      project.remoteUrl === url ||
+      project.workspaces.some((workspace) =>
+        workspace.observations.some((observation) => observation.url === url),
+      ),
   );
   if (!known) throw new Error("Silvic can only open a discovered link");
   return url;

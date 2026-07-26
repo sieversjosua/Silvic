@@ -10,11 +10,16 @@ import type {
 
 import type { CommandRunner } from "./command-runner";
 import type { ConnectorRegistry } from "./connector-registry";
-import { readRepository } from "./git";
+import { readRepository, remoteWebUrl } from "./git";
 
 export interface ProjectServiceOptions {
   runner: CommandRunner;
   connectors: ConnectorRegistry;
+}
+
+function remoteUrlFor(origin: string | undefined): { remoteUrl?: string } {
+  const remoteUrl = remoteWebUrl(origin);
+  return remoteUrl ? { remoteUrl } : {};
 }
 
 export class ProjectService {
@@ -86,6 +91,7 @@ export class ProjectService {
           name: preferred.name,
           rootPath: preferred.rootPath,
           ...(preferred.origin ? { origin: preferred.origin } : {}),
+          ...remoteUrlFor(preferred.origin),
           workspaces: enriched.sort(
             (left, right) =>
               Number(right.isPrimary) - Number(left.isPrimary) ||
