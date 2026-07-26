@@ -8,6 +8,7 @@ import { pathToFileURL } from "node:url";
 import {
   app,
   BrowserWindow,
+  clipboard,
   dialog,
   ipcMain,
   nativeTheme,
@@ -284,6 +285,13 @@ function registerIpc(): void {
   ipcMain.handle(ipcChannels.harnessIconsGet, (event) => {
     assertTrustedSender(event);
     return readHarnessIcons();
+  });
+  ipcMain.handle(ipcChannels.clipboardWrite, (event, text: unknown) => {
+    assertTrustedSender(event);
+    if (typeof text !== "string" || text.length > 8_000) {
+      throw new Error("Invalid text to copy");
+    }
+    clipboard.writeText(text);
   });
   ipcMain.handle(ipcChannels.recipeGet, async (event, projectId: unknown) => {
     assertTrustedSender(event);

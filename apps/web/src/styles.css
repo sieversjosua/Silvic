@@ -1070,6 +1070,19 @@ button {
   padding: 0;
 }
 
+.plot-actions-gap {
+  flex: 1;
+}
+
+/* Portalled out of the canvas, so it needs its own width rather than the
+   inspector menu's inherited one. */
+.menu.plot-menu {
+  position: fixed;
+  right: auto;
+  width: 200px;
+  min-width: 0;
+}
+
 /* A stack of paper: several environments filed behind one card. */
 .quiet-stack {
   position: relative;

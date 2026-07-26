@@ -337,6 +337,7 @@ export interface SilvicDesktopApi {
     request: ProjectActivationRequest,
   ): Promise<readonly string[]>;
   getHarnessIcons(): Promise<HarnessIcons>;
+  copyText(text: string): Promise<void>;
   getRecipe(projectId: string): Promise<RecipeDocument>;
   saveRecipe(request: RecipeSaveRequest): Promise<RecipeDocument>;
   onSnapshot(listener: (snapshot: SilvicSnapshot) => void): () => void;
@@ -361,6 +362,7 @@ export const ipcChannels = {
   projectsActiveGet: "silvic:projects:active:get",
   projectsActiveSet: "silvic:projects:active:set",
   harnessIconsGet: "silvic:harness:icons:get",
+  clipboardWrite: "silvic:clipboard:write",
   recipeGet: "silvic:recipe:get",
   recipeSave: "silvic:recipe:save",
 } as const;

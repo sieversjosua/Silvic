@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   Background,
   BackgroundVariant,
@@ -15,13 +16,19 @@ import {
 import {
   Bot,
   Cloud,
+  Copy,
+  FolderOpen,
   GitBranch,
   GitPullRequest,
+  Link2,
   Maximize2,
   Minus,
+  MoreHorizontal,
   Play,
   Plus,
   Radio,
+  SlidersHorizontal,
+  SquareTerminal,
   Terminal,
 } from "lucide-react";
 
@@ -54,9 +61,13 @@ interface WorkspaceNodeData extends Record<string, unknown> {
   workspace: WorkspaceSnapshot;
   selected: boolean;
   dimmed: boolean;
+  menuOpen: boolean;
   harnessIcons: Readonly<Record<string, string>>;
   onSelect(id: string): void;
   onOpen(path: string, target: HarnessDefinition["id"]): void;
+  onOpenMenu(id: string): void;
+  onCloseMenu(): void;
+  onEditRecipe(): void;
 }
 
 interface QuietNodeData extends Record<string, unknown> {
@@ -76,6 +87,7 @@ interface GroveProps {
   selectedWorkspaceId: string | undefined;
   onSelect(id: string): void;
   onOpen(path: string, target: HarnessDefinition["id"]): void;
+  onEditRecipe(): void;
 }
 
 const nodeTypes = { workspace: memo(WorkspaceNode), quiet: memo(QuietNode) };
@@ -96,12 +108,14 @@ function GroveCanvas({
   selectedWorkspaceId,
   onSelect,
   onOpen,
+  onEditRecipe,
 }: GroveProps) {
   const [nudges, setNudges] = useState<ProjectNudges>(() =>
     readNudges(project.id),
   );
   const [showLegend, setShowLegend] = useState(true);
   const [showQuiet, setShowQuiet] = useState(false);
+  const [menuPlotId, setMenuPlotId] = useState<string>();
   const dragging = useRef(false);
   const { zoomIn, zoomOut, fitView } = useReactFlow();
 
@@ -140,13 +154,27 @@ function GroveCanvas({
           workspace,
           selected: workspace.workspaceId === selectedWorkspaceId,
           dimmed: needle.length > 0 && !matches(workspace, needle),
+          menuOpen: menuPlotId === workspace.workspaceId,
           harnessIcons,
           onSelect,
           onOpen,
+          onOpenMenu: setMenuPlotId,
+          onCloseMenu: () => setMenuPlotId(undefined),
+          onEditRecipe,
         },
       } satisfies WorkspaceFlowNode;
     });
-  }, [tidy, nudges, query, harnessIcons, selectedWorkspaceId, onSelect, onOpen]);
+  }, [
+    tidy,
+    nudges,
+    query,
+    harnessIcons,
+    menuPlotId,
+    selectedWorkspaceId,
+    onSelect,
+    onOpen,
+    onEditRecipe,
+  ]);
 
   const quietTotal = project.workspaces.filter(isQuiet).length;
   const foldable = quietTotal >= QUIET_FOLD_MIN;
@@ -216,6 +244,7 @@ function GroveCanvas({
           dragging.current = true;
         }}
         onNodeDragStop={onNodeDragStop}
+        onMoveStart={() => setMenuPlotId(undefined)}
         fitView
         fitViewOptions={{ padding: 0.24, maxZoom: 1 }}
         minZoom={0.3}
@@ -311,6 +340,10 @@ function WorkspaceNode({ data }: NodeProps<WorkspaceFlowNode>) {
   const state = workspaceState(workspace);
   const { ahead, behind } = workspace.git;
   const signals = cardSignals(workspace);
+  const menuButton = useRef<HTMLButtonElement>(null);
+  const runtimeUrl = workspace.observations.find(
+    (observation) => observation.kind === "runtime" && observation.url,
+  )?.url;
 
   return (
     <article
@@ -398,9 +431,141 @@ function WorkspaceNode({ data }: NodeProps<WorkspaceFlowNode>) {
         >
           <Terminal size={12} />
         </button>
+        <span className="plot-actions-gap" />
+        <button
+          type="button"
+          className="icon"
+          aria-label={`Actions for ${workspace.name}`}
+          aria-haspopup="menu"
+          aria-expanded={data.menuOpen}
+          ref={menuButton}
+          onClick={(event) => {
+            event.stopPropagation();
+            data.menuOpen
+              ? data.onCloseMenu()
+              : data.onOpenMenu(workspace.workspaceId);
+          }}
+        >
+          <MoreHorizontal size={13} />
+        </button>
       </footer>
+      {data.menuOpen && (
+        <PlotMenu
+          anchor={menuButton.current}
+          workspace={workspace}
+          runtimeUrl={runtimeUrl}
+          onClose={data.onCloseMenu}
+          onOpen={data.onOpen}
+          onEditRecipe={data.onEditRecipe}
+        />
+      )}
       <Handle id="out-right" type="source" position={Position.Right} />
     </article>
+  );
+}
+
+const plotHarnesses = [
+  ["codex", "Codex", <Bot size={14} key="codex" />],
+  ["claude", "Claude Code", <Bot size={14} key="claude" />],
+  ["t3-code", "T3 Code", <SquareTerminal size={14} key="t3" />],
+  ["opencode", "OpenCode", <SquareTerminal size={14} key="opencode" />],
+  ["terminal", "Terminal", <Terminal size={14} key="terminal" />],
+] as const;
+
+/**
+ * React Flow puts nodes inside a transformed viewport, so a menu rendered in
+ * place would scale with the zoom and position against the transform rather
+ * than the screen. Portalling to the body keeps it a normal-sized menu anchored
+ * to where the button actually is.
+ */
+function PlotMenu({
+  anchor,
+  workspace,
+  runtimeUrl,
+  onClose,
+  onOpen,
+  onEditRecipe,
+}: {
+  anchor: HTMLElement | null;
+  workspace: WorkspaceSnapshot;
+  runtimeUrl: string | undefined;
+  onClose(): void;
+  onOpen(path: string, target: HarnessDefinition["id"]): void;
+  onEditRecipe(): void;
+}) {
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const rect = anchor?.getBoundingClientRect();
+  if (!rect) return null;
+  const run = (action: () => void) => () => {
+    onClose();
+    action();
+  };
+
+  return createPortal(
+    <>
+      <div className="menu-scrim" onClick={onClose} />
+      <div
+        className="menu plot-menu"
+        role="menu"
+        style={{ top: rect.bottom + 6, left: Math.max(8, rect.right - 200) }}
+      >
+        {plotHarnesses.map(([id, label, glyph]) => (
+          <button
+            type="button"
+            role="menuitem"
+            key={id}
+            onClick={run(() => onOpen(workspace.path, id))}
+          >
+            {glyph}
+            Open in {label}
+          </button>
+        ))}
+        <div className="menu-rule" />
+        <button
+          type="button"
+          role="menuitem"
+          onClick={run(() => onOpen(workspace.path, "finder"))}
+        >
+          <FolderOpen size={14} />
+          Reveal in Finder
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          onClick={run(() => void window.silvic.copyText(workspace.path))}
+        >
+          <Copy size={14} />
+          Copy path
+        </button>
+        {runtimeUrl && (
+          <button
+            type="button"
+            role="menuitem"
+            onClick={run(() => void window.silvic.copyText(runtimeUrl))}
+          >
+            <Link2 size={14} />
+            Copy address
+          </button>
+        )}
+        {workspace.isPrimary && (
+          <>
+            <div className="menu-rule" />
+            <button type="button" role="menuitem" onClick={run(onEditRecipe)}>
+              <SlidersHorizontal size={14} />
+              Recipe…
+            </button>
+          </>
+        )}
+      </div>
+    </>,
+    window.document.body,
   );
 }
 

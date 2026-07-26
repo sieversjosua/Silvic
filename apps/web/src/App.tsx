@@ -239,6 +239,7 @@ export function App() {
               selectedWorkspaceId={workspace?.workspaceId}
               onSelect={selectWorkspace}
               onOpen={openWorkspace}
+              onEditRecipe={() => setRecipeProject(project)}
             />
 
           </>
