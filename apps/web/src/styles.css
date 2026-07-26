@@ -396,7 +396,7 @@ button {
   gap: 9px;
   align-items: center;
   margin-bottom: 1px;
-  padding: 7px 30px 7px 9px;
+  padding: 7px 34px 7px 9px;
   border-radius: var(--r-md);
   color: var(--ink-muted);
   text-align: left;
@@ -423,10 +423,19 @@ button {
   transition: opacity 110ms var(--ease);
 }
 
+/*
+ * The count shares a cell with the overflow button, so leaving it hit-testable
+ * meant an invisible label swallowed nearly every click meant for the button.
+ * It is a label; it never needs events.
+ */
+.project-count {
+  pointer-events: none;
+}
+
 .project-overflow {
   display: grid;
-  width: 22px;
-  height: 22px;
+  width: 26px;
+  height: 26px;
   place-items: center;
   border-radius: var(--r-sm);
   color: var(--ink-faint);
