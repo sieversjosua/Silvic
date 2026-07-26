@@ -170,13 +170,54 @@ export type OpenWorkspaceRequest = z.infer<typeof openWorkspaceRequestSchema>;
  * The optional `silvic.json` at a repository root. Every field has a working
  * default, so a repository with no recipe still produces a usable Plot.
  */
-export const provisionStepSchema = z
+export const shellStepSchema = z
   .object({
     run: z.string().min(1).max(2_000),
     label: z.string().min(1).max(120).optional(),
   })
   .strict();
+
+/**
+ * A typed step Silvic understands well enough to show and validate, rather than
+ * an opaque shell string. Team and project are optional: when absent they are
+ * read from the source checkout's CONVEX_DEPLOYMENT comment.
+ */
+export const convexStepSchema = z
+  .object({
+    convex: z
+      .object({
+        team: z.string().min(1).max(120).optional(),
+        project: z.string().min(1).max(120).optional(),
+        /** Deployment name; `{plot}` is replaced with the plot's name. */
+        name: z.string().min(1).max(200).default("dev/{plot}"),
+      })
+      .strict(),
+    label: z.string().min(1).max(120).optional(),
+  })
+  .strict();
+
+export const provisionStepSchema = z.union([
+  shellStepSchema,
+  convexStepSchema,
+]);
+export type ShellStep = z.infer<typeof shellStepSchema>;
+export type ConvexStep = z.infer<typeof convexStepSchema>;
 export type ProvisionStep = z.infer<typeof provisionStepSchema>;
+
+export function isConvexStep(step: ProvisionStep): step is ConvexStep {
+  return "convex" in step;
+}
+
+export const packageManagerSchema = z.enum(["bun", "pnpm", "npm", "yarn"]);
+export type PackageManager = z.infer<typeof packageManagerSchema>;
+
+export interface RepositoryFindings {
+  packageManager?: PackageManager;
+  devScript?: string;
+  convex: boolean;
+  workConfig: boolean;
+  envExample?: string;
+}
 
 export const plotCommandSchema = z
   .object({
@@ -190,6 +231,7 @@ export type PlotCommand = z.infer<typeof plotCommandSchema>;
 export const recipeSchema = z
   .object({
     project: z.string().min(1).max(120).optional(),
+    packageManager: packageManagerSchema.optional(),
     plots: z
       .object({ directory: z.string().min(1).max(400).optional() })
       .strict()
@@ -339,6 +381,7 @@ export interface SilvicDesktopApi {
   getHarnessIcons(): Promise<HarnessIcons>;
   copyText(text: string): Promise<void>;
   getRecipe(projectId: string): Promise<RecipeDocument>;
+  inspectProject(projectId: string): Promise<RepositoryFindings>;
   saveRecipe(request: RecipeSaveRequest): Promise<RecipeDocument>;
   onSnapshot(listener: (snapshot: SilvicSnapshot) => void): () => void;
 }
@@ -364,6 +407,7 @@ export const ipcChannels = {
   harnessIconsGet: "silvic:harness:icons:get",
   clipboardWrite: "silvic:clipboard:write",
   recipeGet: "silvic:recipe:get",
+  projectInspect: "silvic:project:inspect",
   recipeSave: "silvic:recipe:save",
 } as const;
 

@@ -11,6 +11,7 @@ import {
 export const recipeFileName = "silvic.json";
 
 export interface ResolvedRecipe {
+  packageManager?: import("@silvic/contracts").PackageManager;
   /** Slug used in plot names, ports and URLs. */
   project: string;
   /** Absolute directory new plots are created in. */
@@ -52,6 +53,9 @@ export async function readRecipe(rootPath: string): Promise<ResolvedRecipe> {
   return {
     project,
     directory,
+    ...(recipe.data.packageManager
+      ? { packageManager: recipe.data.packageManager }
+      : {}),
     commands: recipe.data.commands ?? {},
     provision: recipe.data.provision ?? [],
     configured: true,

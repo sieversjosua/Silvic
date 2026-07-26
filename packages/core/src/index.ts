@@ -1,6 +1,7 @@
 export * from "./command-runner";
 export * from "./connector-registry";
 export * from "./delivery-service";
+export * from "./detect";
 export * from "./environment-service";
 export * from "./git";
 export * from "./ports";

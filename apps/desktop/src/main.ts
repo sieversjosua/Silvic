@@ -47,6 +47,7 @@ import {
   LocalCommandRunner,
   ProjectService,
   Provisioner,
+  inspectRepository,
   WorkspaceRegistry,
   plotPort,
   plotUrl,
@@ -298,6 +299,11 @@ function registerIpc(): void {
     if (typeof projectId !== "string") throw new Error("Invalid project");
     return recipeDocument(projectId);
   });
+  ipcMain.handle(ipcChannels.projectInspect, async (event, projectId: unknown) => {
+    assertTrustedSender(event);
+    if (typeof projectId !== "string") throw new Error("Invalid project");
+    return inspectRepository(knownProjectRoot(projectId));
+  });
   ipcMain.handle(ipcChannels.recipeSave, async (event, request: unknown) => {
     assertTrustedSender(event);
     const parsed = recipeSaveRequestSchema.parse(request);
@@ -485,6 +491,9 @@ async function createEnvironment(
     plot,
     branch: request.branch,
     url,
+    ...(recipe.packageManager
+      ? { packageManager: recipe.packageManager }
+      : {}),
   });
 
   await paintFromGit([project.rootPath, destinationPath]);

@@ -1,11 +1,15 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
 import { LocalCommandRunner } from "./command-runner";
-import { Provisioner, provisionEnvironment } from "./provisioner";
+import {
+  Provisioner,
+  provisionEnvironment,
+  readConvexTarget,
+} from "./provisioner";
 
 const temporaryDirectories: string[] = [];
 
@@ -127,5 +131,80 @@ describe("Provisioner", () => {
     const root = await plotRoot();
 
     await expect(provisioner.run([], context(root))).resolves.toEqual([]);
+  });
+});
+
+describe("Convex provisioning step", () => {
+  const provisioner = new Provisioner(new LocalCommandRunner());
+
+  it("reads the team and project from the source checkout", async () => {
+    const source = await plotRoot();
+    await writeFile(
+      join(source, ".env.local"),
+      "CONVEX_DEPLOYMENT=dev:brazen-labrador-831 # team: syntwin, project: mono\n",
+    );
+
+    await expect(readConvexTarget(source)).resolves.toEqual({
+      team: "syntwin",
+      project: "mono",
+    });
+  });
+
+  it("builds a deployment reference from the plot name", async () => {
+    const root = await plotRoot();
+    const source = await plotRoot();
+    await writeFile(
+      join(source, ".env.local"),
+      "CONVEX_DEPLOYMENT=dev:x # team: syntwin, project: mono\n",
+    );
+
+    // `echo` stands in for the convex CLI so the command itself is observable.
+    const [step] = await provisioner.run(
+      [{ convex: { name: "dev/{plot}" } }],
+      {
+        root,
+        sourceRoot: source,
+        project: "syntwin-mono",
+        plot: "owner-onboarding",
+        packageManager: "bun",
+      },
+    );
+
+    expect(step?.label).toBe("Convex deployment");
+    expect(step?.command).toBe(
+      "bunx convex deployment create 'syntwin:mono:dev/owner-onboarding' --type dev --select",
+    );
+  });
+
+  it("prefers explicit team and project over the source checkout", async () => {
+    const root = await plotRoot();
+    const source = await plotRoot();
+    await writeFile(
+      join(source, ".env.local"),
+      "CONVEX_DEPLOYMENT=dev:x # team: ignored, project: ignored\n",
+    );
+
+    const [step] = await provisioner.run(
+      [{ convex: { team: "chosen", project: "explicitly", name: "dev/{plot}" } }],
+      { root, sourceRoot: source, project: "p", plot: "a" },
+    );
+
+    expect(step?.command).toContain("'chosen:explicitly:dev/a'");
+    // No package manager set, so the neutral runner is used.
+    expect(step?.command.startsWith("npx convex")).toBe(true);
+  });
+
+  it("fails clearly when there is no Convex target to be found", async () => {
+    const root = await plotRoot();
+    const source = await plotRoot();
+
+    await expect(
+      provisioner.run([{ convex: { name: "dev/{plot}" } }], {
+        root,
+        sourceRoot: source,
+        project: "p",
+        plot: "a",
+      }),
+    ).rejects.toThrow(/no Convex team and project/i);
   });
 });
