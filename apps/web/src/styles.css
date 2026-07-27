@@ -1098,7 +1098,9 @@ button {
 
 .plot-facts {
   display: flex;
-  gap: 8px;
+  flex-wrap: wrap;
+  column-gap: 8px;
+  row-gap: 3px;
   align-items: center;
   margin-top: 9px;
   padding-top: 8px;
@@ -1107,6 +1109,24 @@ button {
   font-family: var(--font-mono);
   font-size: 10px;
   font-variant-numeric: tabular-nums;
+}
+
+.plot-facts .fact {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  white-space: nowrap;
+}
+
+/* What the project holds is a different kind of fact from what Git counts, and
+   the two together are wider than a card. It takes its own line deliberately,
+   rather than being pushed there mid-phrase at some particular plot count. */
+.plot[data-primary] .plot-facts .fact:last-child {
+  flex-basis: 100%;
+}
+
+.plot[data-primary] .plot-facts .fact:last-child .fact-sep {
+  display: none;
 }
 
 .fact-sep {

@@ -428,17 +428,18 @@ function WorkspaceNode({ data }: NodeProps<WorkspaceFlowNode>) {
         <span>{workspace.branch || "Detached"}</span>
       </p>
 
+      {/* Each fact carries its own leading separator, so a line that has to
+          wrap breaks between facts and never inside one. */}
       <p className="plot-facts">
-        <span>{workingTreeLabel(workspace)}</span>
-        <i className="fact-sep" />
-        <span>
-          ↑{ahead} ↓{behind}
+        <span className="fact">{workingTreeLabel(workspace)}</span>
+        <span className="fact">
+          <i className="fact-sep" />↑{ahead} ↓{behind}
         </span>
         {workspace.isPrimary && (
-          <>
+          <span className="fact">
             <i className="fact-sep" />
-            <span>{plotSummary(data.project)}</span>
-          </>
+            {plotSummary(data.project)}
+          </span>
         )}
       </p>
 
