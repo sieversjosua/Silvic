@@ -992,20 +992,19 @@ function NewPlotDialog({
   // remote ones with no local counterpart yet. Nobody recalls these by heart,
   // so the field filters the list rather than asking to be matched exactly.
   const held = new Set(sources.map((candidate) => candidate.git.branch));
-  const candidates = [
+  const openable = [
     ...branches
       .filter((name) => !held.has(name))
       .map((name) => ({ ref: name, name, remote: false })),
     ...remoteBranches
       .filter((ref) => !branches.includes(localBranchName(ref)))
       .map((ref) => ({ ref, name: localBranchName(ref), remote: true })),
-  ]
-    .filter(
-      (candidate) =>
-        wanted === "" ||
-        candidate.ref.toLowerCase().includes(wanted.toLowerCase()),
-    )
-    .slice(0, 6);
+  ];
+  const candidates = openable.filter(
+    (candidate) =>
+      wanted === "" ||
+      candidate.ref.toLowerCase().includes(wanted.toLowerCase()),
+  );
   const projectId = source?.projectId;
   // A refused branch name is a fault of the field, not of the dialog, so it is
   // reported there and the general area is left for everything else.
@@ -1341,7 +1340,11 @@ function NewPlotDialog({
               if (steps.length > 0) setSteps([]);
               if (adopt) setAdopt(undefined);
             }}
-            placeholder="feature/agent-task"
+            placeholder={
+              openable.length > 0
+                ? "Name a new branch, or filter the list"
+                : "feature/agent-task"
+            }
             disabled={creating}
             aria-invalid={branchFailure !== undefined}
             aria-errormessage={branchFailure ? "branch-failure" : undefined}
@@ -1372,9 +1375,23 @@ function NewPlotDialog({
             </button>
           </p>
         ) : (
-          candidates.length > 0 && (
+          openable.length > 0 && (
             <div className="branch-candidates">
-              <p className="micro">Or take up one that exists</p>
+              <p className="micro">
+                Or take up one that exists
+                <span className="micro-value">
+                  {wanted === ""
+                    ? openable.length
+                    : `${candidates.length} of ${openable.length}`}
+                </span>
+              </p>
+              {candidates.length === 0 && (
+                <p className="candidates-empty">
+                  Nothing here matches. <span className="mono">{wanted}</span>{" "}
+                  will be cut as a new branch.
+                </p>
+              )}
+              <div className="branch-candidate-list">
               {candidates.map((candidate) => (
                 <button
                   key={candidate.ref}
@@ -1395,6 +1412,7 @@ function NewPlotDialog({
                   )}
                 </button>
               ))}
+              </div>
             </div>
           )
         )}

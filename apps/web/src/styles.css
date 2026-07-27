@@ -2729,15 +2729,36 @@ button {
 }
 
 .branch-candidates > .micro {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
   margin-bottom: 3px;
+}
+
+/* Every branch that could be opened is reachable: the list scrolls rather
+   than stopping at some number with the rest left unsaid. */
+.branch-candidate-list {
+  display: flex;
+  max-height: 156px;
+  flex-direction: column;
+  gap: 1px;
+  overflow-y: auto;
+  margin: 0 -8px;
+  padding: 0 8px;
+}
+
+.candidates-empty {
+  padding: 4px 0 2px;
+  color: var(--ink-faint);
+  font-size: 11.5px;
 }
 
 .branch-candidate {
   display: flex;
+  flex: 0 0 auto;
   gap: 8px;
   align-items: center;
   padding: 6px 8px;
-  margin: 0 -8px;
   border-radius: var(--r-md);
   color: var(--ink);
   font-size: 12px;
