@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  AlertTriangle,
   Bot,
   Check,
   ChevronDown,
@@ -1360,13 +1361,21 @@ function NewPlotDialog({
             aria-invalid={branchFailure !== undefined}
             aria-errormessage={branchFailure ? "branch-failure" : undefined}
           />
-          <p className="field-error" id="branch-failure">
-            {branchFailure ?? ""}
-          </p>
         </label>
-        <p className="adopted" data-taken={adopt !== undefined || undefined}>
-          <GitBranch size={11} />
-          {adopt ? (
+        {/* What pressing Create will do, in one slot of fixed height: a
+            branch cut, a branch taken up, or the reason for neither. Three
+            things to say and one place to say them, so none of them arrives
+            by pushing the others down. */}
+        <p
+          className="adopted"
+          id="branch-failure"
+          data-taken={(adopt !== undefined && !branchFailure) || undefined}
+          data-refused={branchFailure !== undefined || undefined}
+        >
+          {branchFailure ? <AlertTriangle size={11} /> : <GitBranch size={11} />}
+          {branchFailure ? (
+            <span>{branchFailure}</span>
+          ) : adopt ? (
             <span>
               Takes up <span className="mono">{adopt.ref}</span>
               {adopt.ref === adopt.name ? "" : ", following it from here on"}
@@ -1374,7 +1383,7 @@ function NewPlotDialog({
           ) : (
             <span>A new branch, cut from {source.name}</span>
           )}
-          {adopt && (
+          {adopt && !branchFailure && (
             <button
               type="button"
               className="link-button"

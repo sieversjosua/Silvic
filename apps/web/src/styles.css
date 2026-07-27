@@ -2804,6 +2804,16 @@ button {
   background: var(--accent-wash);
 }
 
+.adopted[data-refused] {
+  border-color: color-mix(in srgb, var(--tone-attention) 45%, transparent);
+  color: var(--tone-attention);
+  background: color-mix(in srgb, var(--tone-attention) 8%, transparent);
+}
+
+.adopted[data-refused] svg {
+  color: var(--tone-attention);
+}
+
 .adopted > span {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2835,11 +2845,8 @@ button {
   color: var(--accent);
 }
 
-/* A refusal reported against the field that caused it. It holds its line
-   whether or not there is one, so a name being refused does not shove the
-   rest of the dialog down while it is still being typed. */
+/* Used by dialogs that report a field's own problem beside it. */
 .field-error {
-  min-height: 17px;
   margin-top: 2px;
   color: var(--tone-attention);
   font-size: 11.5px;
@@ -2847,7 +2854,7 @@ button {
 }
 
 .destination[data-empty] {
-  color: transparent;
+  visibility: hidden;
 }
 
 .dialog-field input[aria-invalid="true"] {
