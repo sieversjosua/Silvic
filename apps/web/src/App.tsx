@@ -951,6 +951,14 @@ function NewPlotDialog({
   const [openMenu, setOpenMenu] = useState(false);
   const [steps, setSteps] = useState<readonly PlotProgressStep[]>([]);
   const [result, setResult] = useState<PlotCreationResult>();
+  // What it was actually cut from, kept from the moment it was asked for. The
+  // list of sources gains the new plot the instant it exists, so reading the
+  // source back out of it afterwards describes the wrong thing.
+  const [createdFrom, setCreatedFrom] = useState<{
+    name: string;
+    branch: string;
+    mode: "worktree" | "clone";
+  }>();
   const [failure, setFailure] = useState<string>();
   // The branch being created, so progress from an abandoned attempt cannot
   // paint over the one the dialog is waiting on.
@@ -1030,16 +1038,20 @@ function NewPlotDialog({
             </p>
           )}
           <h2>{result.plot.name}</h2>
-          <p className="ready-lineage">
-            <GitBranch size={11} />
-            <span className="mono">{branch.trim()}</span>
-            <i className="fact-sep" />
-            <span>branched from {source.name}</span>
-            <i className="fact-sep" />
-            <span>
-              {mode === "worktree" ? "linked worktree" : "independent clone"}
-            </span>
-          </p>
+          {createdFrom && (
+            <p className="ready-lineage">
+              <GitBranch size={11} />
+              <span className="mono">{createdFrom.branch}</span>
+              <i className="fact-sep" />
+              <span>from {createdFrom.name}</span>
+              <i className="fact-sep" />
+              <span>
+                {createdFrom.mode === "worktree"
+                  ? "linked worktree"
+                  : "independent clone"}
+              </span>
+            </p>
+          )}
           <div className="plot-facts-block">
             <CopyRow label="Address" value={result.plot.url} />
             <CopyRow
@@ -1087,13 +1099,15 @@ function NewPlotDialog({
           ) : (
             <div className="ready-section">
               <p className="micro">
-                Provisioned in{" "}
-                {secondsLabel(
-                  result.provision.reduce(
-                    (total, step) => total + step.durationMs,
-                    0,
-                  ),
-                )}
+                Provisioned in
+                <span className="micro-value">
+                  {secondsLabel(
+                    result.provision.reduce(
+                      (total, step) => total + step.durationMs,
+                      0,
+                    ),
+                  )}
+                </span>
               </p>
               <ul className="ready-ran">
                 {result.provision.map((step) => (
@@ -1186,6 +1200,7 @@ function NewPlotDialog({
           setFailure(undefined);
           setSteps([]);
           setCreating(true);
+          setCreatedFrom({ name: source.name, branch: requested, mode });
           creatingBranch.current = requested;
           void onCreate({ sourcePath: source.path, branch: requested, mode })
             .then(setResult)

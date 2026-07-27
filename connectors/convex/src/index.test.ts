@@ -56,4 +56,26 @@ describe("convexConnector", () => {
     ]);
     expect(JSON.stringify(observations)).not.toContain("secret-value");
   });
+
+  it("keeps the deployment name clean when the line carries a team comment", async () => {
+    const path = await mkdtemp(join(tmpdir(), "silvic-convex-"));
+    temporaryDirectories.push(path);
+    // What `npx convex deployment create --select` actually writes.
+    await writeFile(
+      join(path, ".env.local"),
+      "CONVEX_DEPLOYMENT=dev:reliable-curlew-319 # team: josua-sievers, project: sievate-attributes\n",
+    );
+    const target: WorkspaceTarget = {
+      workspaceId: "workspace-1",
+      projectId: "project-1",
+      path,
+      repositoryName: "silvic",
+      branch: "main",
+    };
+
+    const [observation] = await convexConnector.observe(target);
+
+    expect(observation?.label).toBe("reliable-curlew-319");
+    expect(observation?.detail).toBe("dev");
+  });
 });

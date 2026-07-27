@@ -2647,6 +2647,35 @@ button {
   flex: 0 0 auto;
 }
 
+/* The dialog scrolls, which clips anything hanging out of it. This menu sits
+   at the very bottom, so it opens upward into the room it has. */
+.ready-open .menu {
+  top: auto;
+  bottom: calc(100% + 5px);
+}
+
+/* Long enough to scroll now, and the way out must not scroll away with it. */
+.dialog .ready-actions {
+  position: sticky;
+  bottom: -22px;
+  z-index: 2;
+  padding: 10px 0 0;
+  margin-bottom: -22px;
+  padding-bottom: 22px;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    var(--surface-raised) 14px
+  );
+}
+
+/* A measurement inside an uppercased label reads as shouting: 11.6S. */
+.micro-value {
+  margin-left: 5px;
+  font-family: var(--font-mono);
+  text-transform: none;
+}
+
 /* Nothing in a dialog may push it sideways; a long path is not a reason to
    scroll the whole surface. */
 .dialog {

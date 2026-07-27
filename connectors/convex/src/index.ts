@@ -27,7 +27,16 @@ async function discoverDeployments(
         const values = parseEnvironmentFile(await readFile(file, "utf8"));
         const deployment = values.CONVEX_DEPLOYMENT;
         if (!deployment) return undefined;
-        const [kind = "unknown", name = deployment] = deployment.split(":", 2);
+        // `dev:reliable-curlew-319 # team: syntwin, project: mono` — the
+        // comment carries the team and project, and belongs to neither the
+        // kind nor the name. Splitting on a limit would keep half of it.
+        const separator = deployment.indexOf(":");
+        const kind =
+          separator > 0 ? deployment.slice(0, separator) : "unknown";
+        const name =
+          (separator > 0 ? deployment.slice(separator + 1) : deployment)
+            .split("#")[0]
+            ?.trim() || deployment;
         const url = values.NEXT_PUBLIC_CONVEX_URL ?? values.CONVEX_URL;
         return {
           connectorId: "convex",
