@@ -1768,6 +1768,29 @@ button {
   resize: vertical;
 }
 
+/* Where a plot is cut from, said plainly, because it decides both the code it
+   starts with and where it hangs on the canvas. */
+.dialog-select {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--rule);
+  border-radius: var(--r-md);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 12.5px;
+  background: var(--surface-sunk);
+  outline: none;
+}
+
+.dialog-select:focus {
+  border-color: var(--accent-edge);
+  box-shadow: 0 0 0 3px var(--accent-wash);
+}
+
+.dialog-select:disabled {
+  color: var(--ink-faint);
+}
+
 .dialog-field input:focus,
 .dialog-field textarea:focus {
   border-color: var(--accent-edge);

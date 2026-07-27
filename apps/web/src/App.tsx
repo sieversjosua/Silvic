@@ -305,7 +305,7 @@ export function App() {
       {error && <div className="error-toast">{error}</div>}
       {showEnvironment && project && (
         <NewPlotDialog
-          source={workspace ?? project.workspaces[0]}
+          sources={project.workspaces}
           defaultHarness={defaultHarness}
           snapshot={snapshot}
           onCancel={() => setShowEnvironment(false)}
@@ -914,7 +914,7 @@ function Field({ label, value }: { label: string; value: string }) {
  * rather than closing and leaving the result invisible.
  */
 function NewPlotDialog({
-  source,
+  sources,
   defaultHarness,
   snapshot,
   onCancel,
@@ -922,7 +922,8 @@ function NewPlotDialog({
   onSetDefaultHarness,
   onCreate,
 }: {
-  source: WorkspaceSnapshot | undefined;
+  /** Everything in the project a plot could be branched from. */
+  sources: readonly WorkspaceSnapshot[];
   defaultHarness: HarnessId;
   /** Live, so a deployment a connector finds afterwards still shows up. */
   snapshot: SilvicSnapshot;
@@ -935,6 +936,14 @@ function NewPlotDialog({
     mode: "worktree" | "clone";
   }): Promise<PlotCreationResult>;
 }) {
+  // What a plot is cut from. It defaults to the project's own checkout: the
+  // ways in here are all project-level, and inheriting whichever card happened
+  // to be selected made parentage a thing that happened to you.
+  const trunk =
+    sources.find((candidate) => candidate.isPrimary) ?? sources[0];
+  const [sourceId, setSourceId] = useState(trunk?.workspaceId ?? "");
+  const source =
+    sources.find((candidate) => candidate.workspaceId === sourceId) ?? trunk;
   const [branch, setBranch] = useState("");
   const [mode, setMode] = useState<"worktree" | "clone">("worktree");
   const [creating, setCreating] = useState(false);
@@ -1195,6 +1204,35 @@ function NewPlotDialog({
           Silvic creates the worktree, assigns a stable address, then runs
           whatever this repository declares as provisioning.
         </p>
+        {sources.length > 1 && (
+          <label className="dialog-field">
+            <span className="micro">Branch from</span>
+            <select
+              className="dialog-select"
+              value={source.workspaceId}
+              onChange={(event) => setSourceId(event.target.value)}
+              disabled={creating}
+            >
+              {[...sources]
+                .sort((left, right) =>
+                  left.isPrimary === right.isPrimary
+                    ? left.name.localeCompare(right.name)
+                    : left.isPrimary
+                      ? -1
+                      : 1,
+                )
+                .map((candidate) => (
+                  <option
+                    key={candidate.workspaceId}
+                    value={candidate.workspaceId}
+                  >
+                    {candidate.name}
+                    {candidate.isPrimary ? " · the project itself" : ""}
+                  </option>
+                ))}
+            </select>
+          </label>
+        )}
         <label className="dialog-field">
           <span className="micro">Branch</span>
           <input
