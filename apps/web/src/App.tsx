@@ -890,6 +890,16 @@ function CopyRow({
   );
 }
 
+/**
+ * Exactly as tall as the list can be, so searching it cannot resize it. Rows
+ * are a fixed 30px with a pixel between them; five is as many as the dialog
+ * gives up before the rest scroll.
+ */
+function candidateListHeight(count: number): number {
+  const rows = Math.min(count, 5);
+  return rows * 30 + (rows - 1);
+}
+
 /** `origin/feature-x` becomes the local `feature-x` that follows it. */
 function localBranchName(remoteRef: string): string {
   const separator = remoteRef.indexOf("/");
@@ -1298,14 +1308,15 @@ function NewPlotDialog({
           Silvic creates the worktree, assigns a stable address, then runs
           whatever this repository declares as provisioning.
         </p>
-        {sources.length > 1 && !adopt && (
+        {sources.length > 1 && (
           <label className="dialog-field">
             <span className="micro">Branch from</span>
             <select
               className="dialog-select"
               value={source.workspaceId}
               onChange={(event) => setSourceId(event.target.value)}
-              disabled={creating}
+              // A branch that exists already knows where it starts.
+              disabled={creating || adopt !== undefined}
             >
               {[...sources]
                 .sort((left, right) =>
@@ -1353,13 +1364,17 @@ function NewPlotDialog({
             {branchFailure ?? ""}
           </p>
         </label>
-        {adopt ? (
-          <p className="adopted">
-            <GitBranch size={11} />
+        <p className="adopted" data-taken={adopt !== undefined || undefined}>
+          <GitBranch size={11} />
+          {adopt ? (
             <span>
               Takes up <span className="mono">{adopt.ref}</span>
               {adopt.ref === adopt.name ? "" : ", following it from here on"}
             </span>
+          ) : (
+            <span>A new branch, cut from {source.name}</span>
+          )}
+          {adopt && (
             <button
               type="button"
               className="link-button"
@@ -1371,9 +1386,9 @@ function NewPlotDialog({
             >
               Cut a new branch instead
             </button>
-          </p>
-        ) : (
-          openable.length > 0 && (
+          )}
+        </p>
+        {openable.length > 0 && (
             <div className="branch-candidates">
               <p className="micro">
                 Or take up one that exists
@@ -1388,9 +1403,7 @@ function NewPlotDialog({
                   dialog under the field being typed in. */}
               <div
                 className="branch-candidate-list"
-                style={{
-                  minHeight: `${Math.min(openable.length, 5) * 30}px`,
-                }}
+                style={{ height: candidateListHeight(openable.length) }}
               >
               {candidates.length === 0 && (
                 <p className="candidates-empty">
@@ -1403,6 +1416,7 @@ function NewPlotDialog({
                   key={candidate.ref}
                   type="button"
                   className="branch-candidate"
+                  data-selected={adopt?.ref === candidate.ref || undefined}
                   disabled={creating}
                   onClick={() => {
                     setAdopt({ ref: candidate.ref, name: candidate.name });
@@ -1420,7 +1434,6 @@ function NewPlotDialog({
               ))}
               </div>
             </div>
-          )
         )}
         <fieldset className="choices" disabled={creating}>
           <legend className="micro">Location</legend>
