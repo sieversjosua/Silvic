@@ -344,6 +344,8 @@ export const teardownRequestSchema = z
     path: z.string().min(1),
     scope: teardownScopeSchema,
     deleteBranch: z.boolean(),
+    /** Throw away uncommitted work rather than refusing to remove the plot. */
+    discardChanges: z.boolean().default(false),
   })
   .strict();
 export type TeardownRequestPayload = z.infer<typeof teardownRequestSchema>;

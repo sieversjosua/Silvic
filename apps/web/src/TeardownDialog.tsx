@@ -36,6 +36,7 @@ export function TeardownDialog({
 }) {
   const [scope, setScope] = useState<Scope>("archive");
   const [deleteBranch, setDeleteBranch] = useState(false);
+  const [discardChanges, setDiscardChanges] = useState(false);
   const [plan, setPlan] = useState<TeardownPlanPayload>();
   const [result, setResult] = useState<TeardownRunResult>();
   const [working, setWorking] = useState(false);
@@ -43,12 +44,12 @@ export function TeardownDialog({
 
   useEffect(() => {
     void window.silvic
-      .planTeardown({ path: workspace.path, scope, deleteBranch })
+      .planTeardown({ path: workspace.path, scope, deleteBranch, discardChanges })
       .then(setPlan)
       .catch((error: unknown) =>
         setFailure(failureMessage(error)),
       );
-  }, [workspace.path, scope, deleteBranch]);
+  }, [workspace.path, scope, deleteBranch, discardChanges]);
 
   const run = async () => {
     setWorking(true);
@@ -59,6 +60,7 @@ export function TeardownDialog({
           path: workspace.path,
           scope,
           deleteBranch,
+          discardChanges,
         }),
       );
       onDone();
@@ -69,6 +71,11 @@ export function TeardownDialog({
     }
   };
 
+  const uncommitted =
+    workspace.git.staged +
+    workspace.git.unstaged +
+    workspace.git.untracked +
+    workspace.git.conflicted;
   const blocked = (plan?.blockers.length ?? 0) > 0;
   const actionable = plan?.steps.filter((step) => !step.manual) ?? [];
 
@@ -126,6 +133,18 @@ export function TeardownDialog({
                   onChange={(event) => setDeleteBranch(event.target.checked)}
                 />
                 Also delete the branch <code>{workspace.branch}</code>
+              </label>
+            )}
+
+            {scope === "remove" && uncommitted > 0 && (
+              <label className="teardown-branch">
+                <input
+                  type="checkbox"
+                  checked={discardChanges}
+                  onChange={(event) => setDiscardChanges(event.target.checked)}
+                />
+                Discard {uncommitted} uncommitted change
+                {uncommitted === 1 ? "" : "s"}, including untracked files
               </label>
             )}
 

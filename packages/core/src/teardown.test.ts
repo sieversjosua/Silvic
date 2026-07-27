@@ -182,3 +182,48 @@ describe("planTeardown", () => {
     expect(step?.manual).toMatch(/independent clone/i);
   });
 });
+
+describe("discarding uncommitted work", () => {
+  const dirty = () =>
+    plot({ git: { ...plot().git, unstaged: 2 } });
+
+  it("refuses by default, and says the way through", () => {
+    const plan = planTeardown({
+      workspace: dirty(),
+      scope: "remove",
+      deleteBranch: false,
+    });
+
+    expect(plan.blockers.join(" ")).toMatch(/2 uncommitted changes/);
+    expect(plan.blockers.join(" ")).toMatch(/discard them here/i);
+  });
+
+  it("clears the way when asked, and says what that costs", () => {
+    const plan = planTeardown({
+      workspace: dirty(),
+      scope: "remove",
+      deleteBranch: false,
+      discardChanges: true,
+    });
+
+    expect(plan.blockers).toEqual([]);
+    const discard = plan.steps.find((step) => step.id === "discard");
+    expect(discard?.label).toMatch(/discard 2 uncommitted changes/i);
+    expect(discard?.detail).toMatch(/not tracking/i);
+    // The discard has to happen before the removal it exists to allow.
+    expect(plan.steps.findIndex((step) => step.id === "discard")).toBeLessThan(
+      plan.steps.findIndex((step) => step.id === "worktree"),
+    );
+  });
+
+  it("has nothing to discard when the tree is clean", () => {
+    const plan = planTeardown({
+      workspace: plot(),
+      scope: "remove",
+      deleteBranch: false,
+      discardChanges: true,
+    });
+
+    expect(plan.steps.some((step) => step.id === "discard")).toBe(false);
+  });
+});

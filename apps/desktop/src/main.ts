@@ -384,6 +384,7 @@ function registerIpc(): void {
       workspace,
       scope: parsed.scope,
       deleteBranch: parsed.deleteBranch,
+      discardChanges: parsed.discardChanges,
       heldOnlyHere: await commitsHeldOnlyHere(workspace),
     });
   });
@@ -401,6 +402,7 @@ function registerIpc(): void {
       workspace,
       scope: parsed.scope,
       deleteBranch: parsed.deleteBranch,
+      discardChanges: parsed.discardChanges,
       heldOnlyHere: await commitsHeldOnlyHere(workspace),
     });
     const results = await teardownService.execute(plan, {

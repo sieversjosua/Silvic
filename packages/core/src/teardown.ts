@@ -38,6 +38,8 @@ export interface TeardownRequest {
   workspace: WorkspaceSnapshot;
   scope: TeardownScope;
   deleteBranch: boolean;
+  /** Asked for explicitly: uncommitted work is thrown away with the plot. */
+  discardChanges?: boolean;
   /**
    * Commits reachable from this branch and from no other ref, local or remote.
    * Zero means deleting the branch discards nothing, however it was set up.
@@ -50,6 +52,7 @@ export function planTeardown({
   workspace,
   scope,
   deleteBranch,
+  discardChanges,
   heldOnlyHere,
 }: TeardownRequest): TeardownPlan {
   const steps: TeardownStep[] = [];
@@ -110,10 +113,20 @@ export function planTeardown({
     workspace.git.unstaged +
     workspace.git.untracked +
     workspace.git.conflicted;
-  if (uncommitted > 0) {
+  // Refusing is right by default, but a dead end is not: provisioning itself
+  // leaves changes behind — an install rewrites a lockfile — and a plot made
+  // to be thrown away should be throwable away from here.
+  if (uncommitted > 0 && !discardChanges) {
     blockers.push(
-      `${uncommitted} uncommitted change${uncommitted === 1 ? "" : "s"} would be lost. Commit or discard them first.`,
+      `${uncommitted} uncommitted change${uncommitted === 1 ? "" : "s"} would be lost. Discard them here, or commit them first.`,
     );
+  }
+  if (uncommitted > 0 && discardChanges) {
+    steps.push({
+      id: "discard",
+      label: `Discard ${uncommitted} uncommitted change${uncommitted === 1 ? "" : "s"}`,
+      detail: "Including files Git is not tracking",
+    });
   }
   // Unpushed commits are not at risk here: removing a worktree deletes no
   // commits, and the branch still holds them unless it is deleted too.
@@ -193,7 +206,20 @@ export class TeardownService {
         continue;
       }
       try {
-        if (step.id === "worktree") {
+        if (step.id === "discard") {
+          // Both halves, or the removal that follows still finds the worktree
+          // dirty: tracked files go back, untracked ones go away.
+          await requireSuccess(this.runner, {
+            executable: "git",
+            arguments: ["reset", "--hard", "HEAD"],
+            cwd: context.path,
+          });
+          await requireSuccess(this.runner, {
+            executable: "git",
+            arguments: ["clean", "-fd"],
+            cwd: context.path,
+          });
+        } else if (step.id === "worktree") {
           await requireSuccess(this.runner, {
             executable: "git",
             arguments: ["worktree", "remove", context.path],
