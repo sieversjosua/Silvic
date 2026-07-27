@@ -37,7 +37,8 @@ async function discoverDeployments(
           (separator > 0 ? deployment.slice(separator + 1) : deployment)
             .split("#")[0]
             ?.trim() || deployment;
-        const url = values.NEXT_PUBLIC_CONVEX_URL ?? values.CONVEX_URL;
+        const deploymentUrl = values.NEXT_PUBLIC_CONVEX_URL ?? values.CONVEX_URL;
+        const dashboard = dashboardUrl(kind, name);
         return {
           connectorId: "convex",
           workspaceId: target.workspaceId,
@@ -45,9 +46,13 @@ async function discoverDeployments(
           state: "active",
           label: name,
           detail: kind,
-          ...(url ? { url } : {}),
+          // Somewhere worth arriving. The deployment's own address answers
+          // clients, not people: opening it in a browser shows nothing you
+          // could do anything with. It is kept for whoever needs to call it.
+          ...(dashboard ?? deploymentUrl ? { url: dashboard ?? deploymentUrl } : {}),
           metadata: {
             source: relative(target.path, file),
+            ...(deploymentUrl ? { deploymentUrl } : {}),
           },
         } satisfies ConnectorObservation;
       } catch {
@@ -62,6 +67,17 @@ async function discoverDeployments(
     seen.add(key);
     return true;
   });
+}
+
+/**
+ * Where a person can actually act on a deployment. This is the address the
+ * Convex CLI itself opens for `npx convex dashboard`. Only cloud deployments
+ * live there: a local or anonymous one is served from the machine it runs on,
+ * and pointing at the cloud dashboard for it would be a dead end.
+ */
+function dashboardUrl(kind: string, name: string): string | undefined {
+  if (kind !== "dev" && kind !== "prod") return undefined;
+  return `https://dashboard.convex.dev/d/${encodeURIComponent(name)}`;
 }
 
 async function findEnvironmentFiles(

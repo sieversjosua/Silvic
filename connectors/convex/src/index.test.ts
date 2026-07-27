@@ -48,9 +48,11 @@ describe("convexConnector", () => {
         state: "active",
         label: "helpful-otter-123",
         detail: "dev",
-        url: "https://helpful-otter-123.convex.cloud",
+        // Where a person can act on it, not the address clients call.
+        url: "https://dashboard.convex.dev/d/helpful-otter-123",
         metadata: {
           source: ".env.local",
+          deploymentUrl: "https://helpful-otter-123.convex.cloud",
         },
       },
     ]);
@@ -77,5 +79,28 @@ describe("convexConnector", () => {
 
     expect(observation?.label).toBe("reliable-curlew-319");
     expect(observation?.detail).toBe("dev");
+  });
+
+  it("leaves a local deployment pointing at itself, since the cloud has no page for it", async () => {
+    const path = await mkdtemp(join(tmpdir(), "silvic-convex-"));
+    temporaryDirectories.push(path);
+    await writeFile(
+      join(path, ".env.local"),
+      [
+        "CONVEX_DEPLOYMENT=local:local-quiet-badger-77",
+        "CONVEX_URL=http://127.0.0.1:3210",
+      ].join("\n"),
+    );
+    const target: WorkspaceTarget = {
+      workspaceId: "workspace-1",
+      projectId: "project-1",
+      path,
+      repositoryName: "silvic",
+      branch: "main",
+    };
+
+    const [observation] = await convexConnector.observe(target);
+
+    expect(observation?.url).toBe("http://127.0.0.1:3210");
   });
 });
