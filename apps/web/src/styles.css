@@ -858,6 +858,9 @@ button {
 
 /* --- plot node ------------------------------------------------------------ */
 
+/* A plot is a stake in the ground: paper, flat, hairline. The project it was
+   cut from is the parcel itself, and reads as the thing everything else hangs
+   off — wider, lifted, surveyed at the corners. */
 .plot {
   position: relative;
   display: flex;
@@ -867,7 +870,7 @@ button {
   padding: 11px 13px 10px;
   border: 1px solid var(--rule);
   border-radius: var(--r-xl);
-  background: var(--surface-raised);
+  background: var(--surface);
   box-shadow: var(--shadow-card);
   transition:
     border-color 140ms var(--ease),
@@ -880,10 +883,49 @@ button {
   border-color: var(--rule-strong);
 }
 
+/* The width is the layout's, not the card's, so the parcel says what it is by
+   weight rather than by size: lifted off the paper, banded at the head. */
 .plot[data-primary] {
-  box-shadow:
-    var(--shadow-card),
-    inset 0 0 0 1px var(--rule);
+  min-height: 182px;
+  border-color: var(--rule-strong);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-float);
+}
+
+.plot[data-primary] .plot-head {
+  margin: -11px -13px 0;
+  padding: 9px 13px 8px;
+  border-bottom: 1px solid var(--rule);
+  border-radius: var(--r-xl) var(--r-xl) 0 0;
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+
+.plot[data-primary] .plot-title {
+  margin-top: 10px;
+}
+
+/* The parcel keeps its survey marks; a plot only shows them when selected. */
+.plot[data-primary] .plot-ticks {
+  --t: var(--rule-strong);
+  opacity: 1;
+}
+
+.plot[data-primary][data-selected] .plot-ticks {
+  --t: var(--accent);
+}
+
+.plot[data-primary] .plot-head > .micro {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.plot[data-primary] .plot-name {
+  font-size: 16.5px;
+  letter-spacing: -0.022em;
+}
+
+.plot[data-primary] .plot-branch {
+  color: var(--ink-muted);
 }
 
 .plot[data-selected] {
