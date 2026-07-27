@@ -111,4 +111,51 @@ describe("EnvironmentService", () => {
     ).rejects.toThrow("already exists");
     await expect(access(destination)).rejects.toThrow();
   });
+
+  it("answers what stands in the way before anything is attempted", async () => {
+    const runner = new LocalCommandRunner();
+    const directory = await mkdtemp(join(tmpdir(), "silvic-environment-"));
+    const repository = join(directory, "project");
+
+    await requireSuccess(runner, {
+      executable: "git",
+      arguments: ["init", "--initial-branch=main", repository],
+    });
+    await requireSuccess(runner, {
+      executable: "git",
+      arguments: [
+        "-c",
+        "user.email=silvic@example.test",
+        "-c",
+        "user.name=Silvic Test",
+        "commit",
+        "--allow-empty",
+        "-m",
+        "Initial",
+      ],
+      cwd: repository,
+    });
+
+    const service = new EnvironmentService(runner);
+    const ask = (branch: string) =>
+      service.conflict({
+        sourcePath: repository,
+        branch,
+        destinationPath: join(directory, "project-anything"),
+      });
+
+    // The same sentences creation would have thrown, without creating.
+    await expect(ask("main")).resolves.toBe("Branch main already exists");
+    await expect(ask("feature/..bad")).resolves.toMatch(/valid Git branch/i);
+    await expect(ask("feature/fine")).resolves.toBeUndefined();
+
+    // And the destination, which is what a repeated plot name collides with.
+    await expect(
+      service.conflict({
+        sourcePath: repository,
+        branch: "feature/fine",
+        destinationPath: repository,
+      }),
+    ).resolves.toMatch(/destination already exists/i);
+  });
 });

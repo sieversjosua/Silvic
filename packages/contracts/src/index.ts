@@ -327,6 +327,8 @@ export interface PlotPreview {
   path: string;
   port: number;
   url: string;
+  /** Why this plot cannot be created, asked of the repository before trying. */
+  conflict?: string;
 }
 
 export const testStepRequestSchema = z

@@ -18,7 +18,8 @@ export class EnvironmentService {
   constructor(private readonly runner: CommandRunner) {}
 
   async create(request: EnvironmentCreationOptions): Promise<void> {
-    await this.validate(request);
+    const conflict = await this.conflict(request);
+    if (conflict) throw new Error(conflict);
 
     if (request.mode === "worktree") {
       await requireSuccess(this.runner, {
@@ -71,14 +72,24 @@ export class EnvironmentService {
     }
   }
 
-  private async validate(request: EnvironmentCreationOptions): Promise<void> {
+  /**
+   * What stands in the way of creating this plot, said the way a person would
+   * be told. Answering instead of throwing lets the same question be asked
+   * before anything is attempted, so a name that cannot work is refused while
+   * it is still being typed rather than halfway through a creation.
+   */
+  async conflict(
+    request: Pick<
+      EnvironmentCreationOptions,
+      "sourcePath" | "branch" | "destinationPath"
+    >,
+  ): Promise<string | undefined> {
     const branchResult = await this.runner.run({
       executable: "git",
       arguments: ["check-ref-format", "--branch", request.branch],
       cwd: request.sourcePath,
     });
-    if (branchResult.exitCode !== 0)
-      throw new Error("Enter a valid Git branch name");
+    if (branchResult.exitCode !== 0) return "Enter a valid Git branch name";
 
     const existingBranch = await this.runner.run({
       executable: "git",
@@ -91,18 +102,14 @@ export class EnvironmentService {
       cwd: request.sourcePath,
     });
     if (existingBranch.exitCode === 0) {
-      throw new Error(`Branch ${request.branch} already exists`);
+      return `Branch ${request.branch} already exists`;
     }
 
     try {
       await access(request.destinationPath);
-      throw new Error("The destination already exists");
-    } catch (error) {
-      if (
-        error instanceof Error &&
-        error.message === "The destination already exists"
-      )
-        throw error;
+      return "The destination already exists";
+    } catch {
+      return undefined;
     }
   }
 }

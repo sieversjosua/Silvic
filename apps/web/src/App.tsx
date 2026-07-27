@@ -960,13 +960,14 @@ function NewPlotDialog({
     mode: "worktree" | "clone";
   }>();
   const [failure, setFailure] = useState<string>();
+  const [conflict, setConflict] = useState<string>();
   // The branch being created, so progress from an abandoned attempt cannot
   // paint over the one the dialog is waiting on.
   const creatingBranch = useRef<string | undefined>(undefined);
   // A refused branch name is a fault of the field, not of the dialog, so it is
   // reported there and the general area is left for everything else.
   const branchFailure =
-    failure && concernsBranch(failure) ? failure : undefined;
+    conflict ?? (failure && concernsBranch(failure) ? failure : undefined);
   const plotName = branch
     .trim()
     .replaceAll("/", "-")
@@ -980,6 +981,34 @@ function NewPlotDialog({
       }),
     [],
   );
+
+  // Asked of the repository while the name is being typed, so a branch that
+  // already exists is refused here instead of halfway through a creation.
+  const wanted = branch.trim();
+  const projectId = source?.projectId;
+  useEffect(() => {
+    if (!wanted || !projectId) {
+      setConflict(undefined);
+      return;
+    }
+    let current = true;
+    const timer = window.setTimeout(() => {
+      void window.silvic
+        .previewPlot({ projectId, branch: wanted })
+        .then((preview) => {
+          if (current) setConflict(preview.conflict);
+        })
+        .catch(() => {
+          // A preview that cannot be taken must not block a creation that
+          // might still work; creation asks the same question again anyway.
+          if (current) setConflict(undefined);
+        });
+    }, 250);
+    return () => {
+      current = false;
+      window.clearTimeout(timer);
+    };
+  }, [wanted, projectId]);
 
   if (!source) return null;
 
@@ -1195,7 +1224,7 @@ function NewPlotDialog({
         onMouseDown={(event) => event.stopPropagation()}
         onSubmit={(event) => {
           event.preventDefault();
-          if (!plotName || creating) return;
+          if (!plotName || creating || conflict) return;
           const requested = branch.trim();
           setFailure(undefined);
           setSteps([]);
@@ -1255,8 +1284,10 @@ function NewPlotDialog({
             value={branch}
             onChange={(event) => {
               setBranch(event.target.value);
-              // The name is what was refused, so editing it clears the refusal.
+              // The name is what was refused, so editing it clears the refusal
+              // and the dead plan left behind by the attempt that failed.
               if (branchFailure) setFailure(undefined);
+              if (steps.length > 0) setSteps([]);
             }}
             placeholder="feature/agent-task"
             disabled={creating}
@@ -1307,7 +1338,7 @@ function NewPlotDialog({
           <button
             type="submit"
             className="primary-button"
-            disabled={creating || !plotName}
+            disabled={creating || !plotName || conflict !== undefined}
           >
             {creating ? "Creating…" : "Create plot"}
           </button>

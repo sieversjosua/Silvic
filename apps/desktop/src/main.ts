@@ -350,11 +350,22 @@ function registerIpc(): void {
     const recipe = await readRecipe(rootPath);
     const plot = safePathSegment(parsed.branch) || "my-branch";
     const port = plotPort(recipe.project, plot, takenPlotPorts());
+    const destinationPath = join(recipe.directory, `${recipe.project}-${plot}`);
+    // The same question creation asks, asked while the name is still being
+    // typed, so a plot that cannot be made is never offered.
+    const conflict = parsed.branch.trim()
+      ? await environmentService.conflict({
+          sourcePath: rootPath,
+          branch: parsed.branch.trim(),
+          destinationPath,
+        })
+      : undefined;
     return {
       name: plot,
-      path: join(recipe.directory, `${recipe.project}-${plot}`),
+      path: destinationPath,
       port,
       url: plotUrl(port),
+      ...(conflict ? { conflict } : {}),
     };
   });
   ipcMain.handle(ipcChannels.stepTest, async (event, request: unknown) => {
