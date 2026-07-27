@@ -41,6 +41,7 @@ function project(workspaces: readonly WorkspaceSnapshot[]): ProjectSnapshot {
     name: "mono",
     rootPath: "/repos/main",
     workspaces,
+    branches: [],
   };
 }
 

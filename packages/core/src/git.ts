@@ -19,6 +19,8 @@ export interface RepositoryReadResult {
   origin?: string;
   projectId: string;
   workspaces: readonly WorkspaceSnapshot[];
+  /** Every local branch, so a name can be refused as it is typed. */
+  branches: readonly string[];
 }
 
 export async function readRepository(
@@ -27,7 +29,7 @@ export async function readRepository(
   signal?: AbortSignal,
 ): Promise<RepositoryReadResult> {
   const discoveryPath = normalize(repositoryPath);
-  const [worktreeOutput, originResult] = await Promise.all([
+  const [worktreeOutput, originResult, branchResult] = await Promise.all([
     requireSuccess(runner, {
       executable: "git",
       arguments: ["worktree", "list", "--porcelain"],
@@ -42,7 +44,18 @@ export async function readRepository(
       environment: { GIT_OPTIONAL_LOCKS: "0" },
       ...(signal ? { signal } : {}),
     }),
+    runner.run({
+      executable: "git",
+      arguments: ["for-each-ref", "--format=%(refname:short)", "refs/heads"],
+      cwd: discoveryPath,
+      environment: { GIT_OPTIONAL_LOCKS: "0" },
+      ...(signal ? { signal } : {}),
+    }),
   ]);
+  const branches =
+    branchResult.exitCode === 0
+      ? branchResult.stdout.split("\n").filter(Boolean)
+      : [];
   const origin =
     originResult.exitCode === 0
       ? originResult.stdout.trim() || undefined
@@ -101,6 +114,7 @@ export async function readRepository(
     ...(origin ? { origin } : {}),
     projectId,
     workspaces,
+    branches,
   };
 }
 

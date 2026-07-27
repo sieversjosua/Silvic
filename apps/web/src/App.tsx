@@ -306,6 +306,7 @@ export function App() {
       {showEnvironment && project && (
         <NewPlotDialog
           sources={project.workspaces}
+          branches={project.branches}
           defaultHarness={defaultHarness}
           snapshot={snapshot}
           onCancel={() => setShowEnvironment(false)}
@@ -915,6 +916,7 @@ function Field({ label, value }: { label: string; value: string }) {
  */
 function NewPlotDialog({
   sources,
+  branches,
   defaultHarness,
   snapshot,
   onCancel,
@@ -924,6 +926,8 @@ function NewPlotDialog({
 }: {
   /** Everything in the project a plot could be branched from. */
   sources: readonly WorkspaceSnapshot[];
+  /** Local branch names, so a taken one is refused without asking main. */
+  branches: readonly string[];
   defaultHarness: HarnessId;
   /** Live, so a deployment a connector finds afterwards still shows up. */
   snapshot: SilvicSnapshot;
@@ -964,10 +968,17 @@ function NewPlotDialog({
   // The branch being created, so progress from an abandoned attempt cannot
   // paint over the one the dialog is waiting on.
   const creatingBranch = useRef<string | undefined>(undefined);
+  // The branches came with the snapshot, so the answer to the question asked
+  // on every keystroke is already here. Waiting on a round trip to say what is
+  // known locally is a delay with nothing on the other end of it.
+  const wanted = branch.trim();
+  const taken = wanted !== "" && branches.includes(wanted);
+  const projectId = source?.projectId;
   // A refused branch name is a fault of the field, not of the dialog, so it is
   // reported there and the general area is left for everything else.
   const branchFailure =
-    conflict ?? (failure && concernsBranch(failure) ? failure : undefined);
+    (taken ? `Branch ${wanted} already exists` : conflict) ??
+    (failure && concernsBranch(failure) ? failure : undefined);
   const plotName = branch
     .trim()
     .replaceAll("/", "-")
@@ -982,16 +993,14 @@ function NewPlotDialog({
     [],
   );
 
-  // Asked of the repository while the name is being typed, so a branch that
-  // already exists is refused here instead of halfway through a creation.
-  const wanted = branch.trim();
-  const projectId = source?.projectId;
   useEffect(() => {
-    if (!wanted || !projectId) {
+    if (!wanted || !projectId || taken) {
       setConflict(undefined);
       return;
     }
     let current = true;
+    // Everything the interface cannot answer itself — a name Git will not
+    // take, a directory already standing where the plot would go.
     const timer = window.setTimeout(() => {
       void window.silvic
         .previewPlot({ projectId, branch: wanted })
@@ -1003,12 +1012,12 @@ function NewPlotDialog({
           // might still work; creation asks the same question again anyway.
           if (current) setConflict(undefined);
         });
-    }, 250);
+    }, 120);
     return () => {
       current = false;
       window.clearTimeout(timer);
     };
-  }, [wanted, projectId]);
+  }, [wanted, projectId, taken]);
 
   if (!source) return null;
 
@@ -1224,7 +1233,7 @@ function NewPlotDialog({
         onMouseDown={(event) => event.stopPropagation()}
         onSubmit={(event) => {
           event.preventDefault();
-          if (!plotName || creating || conflict) return;
+          if (!plotName || creating || branchFailure) return;
           const requested = branch.trim();
           setFailure(undefined);
           setSteps([]);
@@ -1338,7 +1347,7 @@ function NewPlotDialog({
           <button
             type="submit"
             className="primary-button"
-            disabled={creating || !plotName || conflict !== undefined}
+            disabled={creating || !plotName || branchFailure !== undefined}
           >
             {creating ? "Creating…" : "Create plot"}
           </button>

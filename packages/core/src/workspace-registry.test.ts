@@ -58,6 +58,7 @@ function fixture(featurePath: string): SilvicSnapshot {
         id: "github.com/example/app",
         name: "app",
         rootPath: "/projects/app",
+        branches: [],
         workspaces: [
           {
             workspaceId: "transient-main",

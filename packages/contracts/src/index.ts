@@ -154,6 +154,12 @@ export interface ProjectSnapshot {
   /** Browsable address of the origin, when one can be derived. */
   remoteUrl?: string;
   workspaces: readonly WorkspaceSnapshot[];
+  /**
+   * Every local branch. Carried so naming a new plot can be answered in the
+   * interface as it is typed, rather than by asking Git across a process
+   * boundary between one keystroke and the next.
+   */
+  branches: readonly string[];
 }
 
 export interface SilvicSnapshot {

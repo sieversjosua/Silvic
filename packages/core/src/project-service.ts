@@ -92,6 +92,11 @@ export class ProjectService {
           rootPath: preferred.rootPath,
           ...(preferred.origin ? { origin: preferred.origin } : {}),
           ...remoteUrlFor(preferred.origin),
+          // A project's branches live in one ref store however many worktrees
+          // are checked out of it, so any member answers for all of them.
+          branches: [
+            ...new Set(members.flatMap((member) => member.branches)),
+          ].sort(),
           workspaces: enriched.sort(
             (left, right) =>
               Number(right.isPrimary) - Number(left.isPrimary) ||
