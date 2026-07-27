@@ -581,8 +581,14 @@ async function createEnvironment(
       destinationPath,
       branch: request.branch,
       mode: request.mode,
+      // A branch taken up starts where it already is, so the source's revision
+      // is not a start point for it.
+      ...(request.adopt
+        ? { adopt: request.adopt }
+        : source.git.revision
+          ? { startPoint: source.git.revision }
+          : {}),
       ...(project.origin ? { origin: project.origin } : {}),
-      ...(source.git.revision ? { startPoint: source.git.revision } : {}),
     });
     if (request.mode === "clone") {
       settings.set(

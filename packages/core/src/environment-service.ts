@@ -12,6 +12,30 @@ export interface EnvironmentCreationOptions extends CreateEnvironmentRequest {
   destinationPath: string;
   origin?: string;
   startPoint?: string;
+  /** Remote names, so `origin/feature-x` is told apart from a local branch. */
+  remotes?: readonly string[];
+}
+
+/** A remote-tracking ref names its remote first: `origin/feature-x`. */
+function isRemoteRef(ref: string, remotes: readonly string[]): boolean {
+  return remotes.some((remote) => ref.startsWith(`${remote}/`));
+}
+
+/**
+ * Three ways a worktree can come to hold a branch, and Git spells each
+ * differently: cut a new one, take up a local one nothing has checked out, or
+ * make a local one that follows somebody else's.
+ */
+function worktreeTarget(request: EnvironmentCreationOptions): string[] {
+  if (!request.adopt) return ["-b", request.branch];
+  return isRemoteRef(request.adopt, request.remotes ?? ["origin"])
+    ? ["--track", "-b", request.branch]
+    : [];
+}
+
+function worktreeStart(request: EnvironmentCreationOptions): string[] {
+  if (!request.adopt) return [request.startPoint ?? "HEAD"];
+  return [request.adopt];
 }
 
 export class EnvironmentService {
@@ -27,10 +51,9 @@ export class EnvironmentService {
         arguments: [
           "worktree",
           "add",
-          "-b",
-          request.branch,
+          ...worktreeTarget(request),
           request.destinationPath,
-          request.startPoint ?? "HEAD",
+          ...worktreeStart(request),
         ],
         cwd: request.sourcePath,
       });
@@ -81,7 +104,7 @@ export class EnvironmentService {
   async conflict(
     request: Pick<
       EnvironmentCreationOptions,
-      "sourcePath" | "branch" | "destinationPath"
+      "sourcePath" | "branch" | "destinationPath" | "adopt" | "remotes"
     >,
   ): Promise<string | undefined> {
     const branchResult = await this.runner.run({
@@ -101,7 +124,23 @@ export class EnvironmentService {
       ],
       cwd: request.sourcePath,
     });
-    if (existingBranch.exitCode === 0) {
+    const exists = existingBranch.exitCode === 0;
+
+    if (request.adopt) {
+      // Taking up a branch, so its existing is the point. What would stand in
+      // the way is Git's own rule: one branch, at most one worktree.
+      const remote = isRemoteRef(request.adopt, request.remotes ?? ["origin"]);
+      if (remote && exists) {
+        return `Branch ${request.branch} already exists here, so open that one rather than ${request.adopt}`;
+      }
+      const holder = await this.worktreeHolding(
+        request.sourcePath,
+        remote ? request.branch : request.adopt,
+      );
+      if (holder) {
+        return `${request.adopt} is already open in ${holder}`;
+      }
+    } else if (exists) {
       return `Branch ${request.branch} already exists`;
     }
 
@@ -111,5 +150,25 @@ export class EnvironmentService {
     } catch {
       return undefined;
     }
+  }
+
+  /** Which worktree holds a branch, since Git allows only one to. */
+  private async worktreeHolding(
+    sourcePath: string,
+    branch: string,
+  ): Promise<string | undefined> {
+    const result = await this.runner.run({
+      executable: "git",
+      arguments: ["worktree", "list", "--porcelain"],
+      cwd: sourcePath,
+      environment: { GIT_OPTIONAL_LOCKS: "0" },
+    });
+    if (result.exitCode !== 0) return undefined;
+    let path: string | undefined;
+    for (const line of result.stdout.split("\n")) {
+      if (line.startsWith("worktree ")) path = line.slice("worktree ".length);
+      if (line === `branch refs/heads/${branch}`) return path;
+    }
+    return undefined;
   }
 }

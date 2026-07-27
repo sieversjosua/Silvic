@@ -42,6 +42,7 @@ function project(workspaces: readonly WorkspaceSnapshot[]): ProjectSnapshot {
     rootPath: "/repos/main",
     workspaces,
     branches: [],
+    remoteBranches: [],
   };
 }
 

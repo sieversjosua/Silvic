@@ -97,6 +97,9 @@ export class ProjectService {
           branches: [
             ...new Set(members.flatMap((member) => member.branches)),
           ].sort(),
+          remoteBranches: [
+            ...new Set(members.flatMap((member) => member.remoteBranches)),
+          ].sort(),
           workspaces: enriched.sort(
             (left, right) =>
               Number(right.isPrimary) - Number(left.isPrimary) ||

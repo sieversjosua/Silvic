@@ -307,6 +307,7 @@ export function App() {
         <NewPlotDialog
           sources={project.workspaces}
           branches={project.branches}
+          remoteBranches={project.remoteBranches}
           defaultHarness={defaultHarness}
           snapshot={snapshot}
           onCancel={() => setShowEnvironment(false)}
@@ -889,6 +890,12 @@ function CopyRow({
   );
 }
 
+/** `origin/feature-x` becomes the local `feature-x` that follows it. */
+function localBranchName(remoteRef: string): string {
+  const separator = remoteRef.indexOf("/");
+  return separator > 0 ? remoteRef.slice(separator + 1) : remoteRef;
+}
+
 /** Every plot in a project shares the front of its path; the tail names it. */
 function pathTail(path: string): string {
   const parts = path.split("/").filter(Boolean);
@@ -917,6 +924,7 @@ function Field({ label, value }: { label: string; value: string }) {
 function NewPlotDialog({
   sources,
   branches,
+  remoteBranches,
   defaultHarness,
   snapshot,
   onCancel,
@@ -928,6 +936,8 @@ function NewPlotDialog({
   sources: readonly WorkspaceSnapshot[];
   /** Local branch names, so a taken one is refused without asking main. */
   branches: readonly string[];
+  /** Remote-tracking branches, as `origin/feature-x`. */
+  remoteBranches: readonly string[];
   defaultHarness: HarnessId;
   /** Live, so a deployment a connector finds afterwards still shows up. */
   snapshot: SilvicSnapshot;
@@ -938,6 +948,7 @@ function NewPlotDialog({
     sourcePath: string;
     branch: string;
     mode: "worktree" | "clone";
+    adopt?: string;
   }): Promise<PlotCreationResult>;
 }) {
   // What a plot is cut from. It defaults to the project's own checkout: the
@@ -965,6 +976,10 @@ function NewPlotDialog({
   }>();
   const [failure, setFailure] = useState<string>();
   const [conflict, setConflict] = useState<string>();
+  // Set when the plot is to take up a branch that already exists rather than
+  // cut a new one. The ref is what Git is pointed at; the name is the local
+  // branch that ends up in the worktree.
+  const [adopt, setAdopt] = useState<{ ref: string; name: string }>();
   // The branch being created, so progress from an abandoned attempt cannot
   // paint over the one the dialog is waiting on.
   const creatingBranch = useRef<string | undefined>(undefined);
@@ -972,7 +987,25 @@ function NewPlotDialog({
   // on every keystroke is already here. Waiting on a round trip to say what is
   // known locally is a delay with nothing on the other end of it.
   const wanted = branch.trim();
-  const taken = wanted !== "" && branches.includes(wanted);
+  const taken = !adopt && wanted !== "" && branches.includes(wanted);
+  // Branches somebody could open as a plot: local ones no worktree holds, and
+  // remote ones with no local counterpart yet. Nobody recalls these by heart,
+  // so the field filters the list rather than asking to be matched exactly.
+  const held = new Set(sources.map((candidate) => candidate.git.branch));
+  const candidates = [
+    ...branches
+      .filter((name) => !held.has(name))
+      .map((name) => ({ ref: name, name, remote: false })),
+    ...remoteBranches
+      .filter((ref) => !branches.includes(localBranchName(ref)))
+      .map((ref) => ({ ref, name: localBranchName(ref), remote: true })),
+  ]
+    .filter(
+      (candidate) =>
+        wanted === "" ||
+        candidate.ref.toLowerCase().includes(wanted.toLowerCase()),
+    )
+    .slice(0, 6);
   const projectId = source?.projectId;
   // A refused branch name is a fault of the field, not of the dialog, so it is
   // reported there and the general area is left for everything else.
@@ -994,7 +1027,7 @@ function NewPlotDialog({
   );
 
   useEffect(() => {
-    if (!wanted || !projectId || taken) {
+    if (!wanted || !projectId || taken || adopt) {
       setConflict(undefined);
       return;
     }
@@ -1017,7 +1050,7 @@ function NewPlotDialog({
       current = false;
       window.clearTimeout(timer);
     };
-  }, [wanted, projectId, taken]);
+  }, [wanted, projectId, taken, adopt]);
 
   if (!source) return null;
 
@@ -1238,9 +1271,18 @@ function NewPlotDialog({
           setFailure(undefined);
           setSteps([]);
           setCreating(true);
-          setCreatedFrom({ name: source.name, branch: requested, mode });
+          setCreatedFrom({
+            name: adopt ? adopt.ref : source.name,
+            branch: requested,
+            mode,
+          });
           creatingBranch.current = requested;
-          void onCreate({ sourcePath: source.path, branch: requested, mode })
+          void onCreate({
+            sourcePath: source.path,
+            branch: requested,
+            mode,
+            ...(adopt ? { adopt: adopt.ref } : {}),
+          })
             .then(setResult)
             .catch((error: unknown) =>
               setFailure(failureMessage(error)),
@@ -1257,7 +1299,7 @@ function NewPlotDialog({
           Silvic creates the worktree, assigns a stable address, then runs
           whatever this repository declares as provisioning.
         </p>
-        {sources.length > 1 && (
+        {sources.length > 1 && !adopt && (
           <label className="dialog-field">
             <span className="micro">Branch from</span>
             <select
@@ -1297,6 +1339,7 @@ function NewPlotDialog({
               // and the dead plan left behind by the attempt that failed.
               if (branchFailure) setFailure(undefined);
               if (steps.length > 0) setSteps([]);
+              if (adopt) setAdopt(undefined);
             }}
             placeholder="feature/agent-task"
             disabled={creating}
@@ -1309,6 +1352,52 @@ function NewPlotDialog({
             </p>
           )}
         </label>
+        {adopt ? (
+          <p className="adopted">
+            <GitBranch size={11} />
+            <span>
+              Takes up <span className="mono">{adopt.ref}</span>
+              {adopt.ref === adopt.name ? "" : ", following it from here on"}
+            </span>
+            <button
+              type="button"
+              className="link-button"
+              onClick={() => {
+                setAdopt(undefined);
+                setBranch("");
+              }}
+              disabled={creating}
+            >
+              Cut a new branch instead
+            </button>
+          </p>
+        ) : (
+          candidates.length > 0 && (
+            <div className="branch-candidates">
+              <p className="micro">Or take up one that exists</p>
+              {candidates.map((candidate) => (
+                <button
+                  key={candidate.ref}
+                  type="button"
+                  className="branch-candidate"
+                  disabled={creating}
+                  onClick={() => {
+                    setAdopt({ ref: candidate.ref, name: candidate.name });
+                    setBranch(candidate.name);
+                    setFailure(undefined);
+                    setSteps([]);
+                  }}
+                >
+                  <GitBranch size={11} />
+                  <span className="truncate">{candidate.name}</span>
+                  {candidate.remote && (
+                    <span className="branch-origin mono">{candidate.ref}</span>
+                  )}
+                </button>
+              ))}
+            </div>
+          )
+        )}
         <fieldset className="choices" disabled={creating}>
           <legend className="micro">Location</legend>
           <label data-selected={mode === "worktree" || undefined}>

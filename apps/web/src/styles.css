@@ -2719,6 +2719,78 @@ button {
   overflow-x: hidden;
 }
 
+/* Branches worth opening as a plot. Reading beats recalling: the field filters
+   this list rather than asking for a name nobody has memorised. */
+.branch-candidates {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-top: -4px;
+}
+
+.branch-candidates > .micro {
+  margin-bottom: 3px;
+}
+
+.branch-candidate {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 8px;
+  margin: 0 -8px;
+  border-radius: var(--r-md);
+  color: var(--ink);
+  font-size: 12px;
+  text-align: left;
+  transition: background 110ms var(--ease);
+}
+
+.branch-candidate:hover {
+  background: var(--surface-hover);
+}
+
+.branch-candidate svg {
+  flex: 0 0 auto;
+  color: var(--ink-faint);
+}
+
+.branch-origin {
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: var(--ink-faint);
+  font-size: 10px;
+}
+
+.adopted {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 10px;
+  margin-top: -2px;
+  border: 1px solid var(--accent-edge);
+  border-radius: var(--r-md);
+  color: var(--ink-muted);
+  font-size: 11.5px;
+  background: var(--accent-wash);
+}
+
+.adopted svg {
+  flex: 0 0 auto;
+  color: var(--accent);
+}
+
+.adopted .link-button {
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: var(--ink-faint);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.adopted .link-button:hover {
+  color: var(--accent);
+}
+
 /* A refusal reported against the field that caused it. */
 .field-error {
   margin-top: 2px;

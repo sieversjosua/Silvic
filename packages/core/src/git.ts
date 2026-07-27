@@ -21,6 +21,8 @@ export interface RepositoryReadResult {
   workspaces: readonly WorkspaceSnapshot[];
   /** Every local branch, so a name can be refused as it is typed. */
   branches: readonly string[];
+  /** Every remote-tracking branch, as `origin/feature-x`. */
+  remoteBranches: readonly string[];
 }
 
 export async function readRepository(
@@ -46,16 +48,32 @@ export async function readRepository(
     }),
     runner.run({
       executable: "git",
-      arguments: ["for-each-ref", "--format=%(refname:short)", "refs/heads"],
+      arguments: [
+        "for-each-ref",
+        // The full ref, because a local branch is allowed slashes too and
+        // `feat/x` is indistinguishable from `origin/x` once shortened.
+        "--format=%(refname)",
+        "refs/heads",
+        "refs/remotes",
+      ],
       cwd: discoveryPath,
       environment: { GIT_OPTIONAL_LOCKS: "0" },
       ...(signal ? { signal } : {}),
     }),
   ]);
-  const branches =
+  const refs =
     branchResult.exitCode === 0
       ? branchResult.stdout.split("\n").filter(Boolean)
       : [];
+  const branches = refs
+    .filter((ref) => ref.startsWith("refs/heads/"))
+    .map((ref) => ref.slice("refs/heads/".length));
+  const remoteBranches = refs
+    .filter((ref) => ref.startsWith("refs/remotes/"))
+    .map((ref) => ref.slice("refs/remotes/".length))
+    // `origin/HEAD` points at whatever the remote calls default; it is not a
+    // branch anybody means to check out.
+    .filter((ref) => !ref.endsWith("/HEAD"));
   const origin =
     originResult.exitCode === 0
       ? originResult.stdout.trim() || undefined
@@ -115,6 +133,7 @@ export async function readRepository(
     projectId,
     workspaces,
     branches,
+    remoteBranches,
   };
 }
 

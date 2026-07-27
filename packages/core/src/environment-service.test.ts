@@ -158,4 +158,52 @@ describe("EnvironmentService", () => {
       }),
     ).resolves.toMatch(/destination already exists/i);
   });
+
+  it("takes up a branch that already exists instead of cutting a new one", async () => {
+    const runner = new LocalCommandRunner();
+    const directory = await mkdtemp(join(tmpdir(), "silvic-environment-"));
+    const repository = join(directory, "project");
+    const destination = join(directory, "project-existing");
+
+    await requireSuccess(runner, {
+      executable: "git",
+      arguments: ["init", "--initial-branch=main", repository],
+    });
+    const commit = ["-c", "user.email=silvic@example.test", "-c", "user.name=Silvic Test"];
+    await requireSuccess(runner, {
+      executable: "git",
+      arguments: [...commit, "commit", "--allow-empty", "-m", "Initial"],
+      cwd: repository,
+    });
+    // Somebody else's branch, already in the repository.
+    await requireSuccess(runner, {
+      executable: "git",
+      arguments: ["branch", "colleague/work"],
+      cwd: repository,
+    });
+
+    await new EnvironmentService(runner).create({
+      sourcePath: repository,
+      destinationPath: destination,
+      branch: "colleague/work",
+      mode: "worktree",
+      adopt: "colleague/work",
+    });
+
+    const head = await requireSuccess(runner, {
+      executable: "git",
+      arguments: ["rev-parse", "--abbrev-ref", "HEAD"],
+      cwd: destination,
+    });
+    expect(head.trim()).toBe("colleague/work");
+    // And Git's one-worktree-per-branch rule is now what stands in the way.
+    await expect(
+      new EnvironmentService(runner).conflict({
+        sourcePath: repository,
+        branch: "colleague/work",
+        destinationPath: join(directory, "project-again"),
+        adopt: "colleague/work",
+      }),
+    ).resolves.toMatch(/already open in/i);
+  });
 });

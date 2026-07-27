@@ -160,6 +160,11 @@ export interface ProjectSnapshot {
    * boundary between one keystroke and the next.
    */
   branches: readonly string[];
+  /**
+   * Every remote-tracking branch, as `origin/feature-x`. Somebody else's work
+   * is a plot waiting to happen, and nobody remembers its exact name.
+   */
+  remoteBranches: readonly string[];
 }
 
 export interface SilvicSnapshot {
@@ -373,6 +378,12 @@ export const createEnvironmentRequestSchema = z
     sourcePath: z.string().min(1),
     branch: z.string().min(1).max(240),
     mode: z.enum(["worktree", "clone"]),
+    /**
+     * A branch that already exists, taken up rather than cut: either a local
+     * one nothing has checked out, or `origin/feature-x`, which becomes a
+     * local branch tracking it. Absent means a new branch, as before.
+     */
+    adopt: z.string().min(1).max(280).optional(),
   })
   .strict();
 export type CreateEnvironmentRequest = z.infer<
