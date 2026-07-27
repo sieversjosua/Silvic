@@ -2812,12 +2812,19 @@ button {
   color: var(--accent);
 }
 
-/* A refusal reported against the field that caused it. */
+/* A refusal reported against the field that caused it. It holds its line
+   whether or not there is one, so a name being refused does not shove the
+   rest of the dialog down while it is still being typed. */
 .field-error {
+  min-height: 17px;
   margin-top: 2px;
   color: var(--tone-attention);
   font-size: 11.5px;
   line-height: 1.4;
+}
+
+.destination[data-empty] {
+  color: transparent;
 }
 
 .dialog-field input[aria-invalid="true"] {

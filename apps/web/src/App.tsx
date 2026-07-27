@@ -1349,11 +1349,9 @@ function NewPlotDialog({
             aria-invalid={branchFailure !== undefined}
             aria-errormessage={branchFailure ? "branch-failure" : undefined}
           />
-          {branchFailure && (
-            <p className="field-error" id="branch-failure">
-              {branchFailure}
-            </p>
-          )}
+          <p className="field-error" id="branch-failure">
+            {branchFailure ?? ""}
+          </p>
         </label>
         {adopt ? (
           <p className="adopted">
@@ -1385,13 +1383,21 @@ function NewPlotDialog({
                     : `${candidates.length} of ${openable.length}`}
                 </span>
               </p>
+              {/* Sized by what could be listed, not by what the typing has
+                  left, so filtering empties the box instead of resizing the
+                  dialog under the field being typed in. */}
+              <div
+                className="branch-candidate-list"
+                style={{
+                  minHeight: `${Math.min(openable.length, 5) * 30}px`,
+                }}
+              >
               {candidates.length === 0 && (
                 <p className="candidates-empty">
                   Nothing here matches. <span className="mono">{wanted}</span>{" "}
                   will be cut as a new branch.
                 </p>
               )}
-              <div className="branch-candidate-list">
               {candidates.map((candidate) => (
                 <button
                   key={candidate.ref}
@@ -1439,7 +1445,11 @@ function NewPlotDialog({
             <span>Fully isolated Git directory</span>
           </label>
         </fieldset>
-        {plotName && <p className="destination mono">{plotName}</p>}
+        {/* Present from the start, holding its place: a preview that appears
+            on the first keystroke moves everything under it. */}
+        <p className="destination mono" data-empty={!plotName || undefined}>
+          {plotName || "—"}
+        </p>
         {steps.length > 0 && <ProgressSteps steps={steps} settled={!creating} />}
         {failure && !branchFailure && <p className="dialog-error">{failure}</p>}
         <div className="dialog-actions">
