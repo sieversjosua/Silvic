@@ -244,48 +244,13 @@ export function RecipeDialog({
                 )}
                 {provision.map((step, index) => (
                   <div className="recipe-step" key={index}>
-                    <div className="recipe-step-head">
-                      <span className="micro">
-                        {isConvexStep(step) ? (
-                          <>
-                            <ConvexMark size={12} /> Convex deployment
-                          </>
-                        ) : (
-                          <>
-                            <Terminal size={11} /> Command
-                          </>
-                        )}
-                      </span>
-                      <div className="recipe-step-tools">
-                        <button
-                          type="button"
-                          aria-label="Move earlier"
-                          disabled={index === 0}
-                          onClick={() => move(index, -1)}
-                        >
-                          <ChevronUp size={12} />
-                        </button>
-                        <button
-                          type="button"
-                          aria-label="Move later"
-                          disabled={index === provision.length - 1}
-                          onClick={() => move(index, 1)}
-                        >
-                          <ChevronDown size={12} />
-                        </button>
-                        <button
-                          type="button"
-                          aria-label="Remove step"
-                          onClick={() =>
-                            setProvision(
-                              provision.filter((_, at) => at !== index),
-                            )
-                          }
-                        >
-                          <X size={12} />
-                        </button>
-                      </div>
-                    </div>
+                    <span className="recipe-step-kind" aria-hidden="true">
+                      {isConvexStep(step) ? (
+                        <ConvexMark size={13} />
+                      ) : (
+                        <Terminal size={12} />
+                      )}
+                    </span>
                     {isConvexStep(step) ? (
                       <div className="recipe-grid">
                         <label>
@@ -369,9 +334,38 @@ export function RecipeDialog({
                             <Play size={12} />
                           </button>
                         </div>
-                        <StepTest result={tests[index]} />
                       </>
                     )}
+                    <div className="recipe-step-tools">
+                        <button
+                          type="button"
+                          aria-label="Move earlier"
+                          disabled={index === 0}
+                          onClick={() => move(index, -1)}
+                        >
+                          <ChevronUp size={12} />
+                        </button>
+                        <button
+                          type="button"
+                          aria-label="Move later"
+                          disabled={index === provision.length - 1}
+                          onClick={() => move(index, 1)}
+                        >
+                          <ChevronDown size={12} />
+                        </button>
+                        <button
+                          type="button"
+                          aria-label="Remove step"
+                          onClick={() =>
+                            setProvision(
+                              provision.filter((_, at) => at !== index),
+                            )
+                          }
+                        >
+                          <X size={12} />
+                        </button>
+                    </div>
+                    <StepTest result={tests[index]} />
                   </div>
                 ))}
                 <p className="recipe-hint">

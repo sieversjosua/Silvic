@@ -1979,7 +1979,7 @@ button {
 }
 
 .dialog.recipe {
-  width: min(820px, 100%);
+  width: min(980px, 100%);
   gap: 14px;
 }
 
@@ -2030,8 +2030,11 @@ button {
 .recipe-body {
   display: grid;
   min-height: 300px;
-  grid-template-columns: minmax(0, 1fr) 210px;
-  gap: 18px;
+  grid-template-columns: minmax(0, 1fr) 244px;
+  gap: 22px;
+  /* The preview keeps its own height rather than being stretched down the
+     side of a long recipe. */
+  align-items: start;
 }
 
 .recipe-part {
@@ -2081,9 +2084,6 @@ button {
   flex-direction: column;
   gap: 18px;
   min-width: 0;
-  max-height: 440px;
-  overflow-y: auto;
-  padding-right: 4px;
 }
 
 .recipe-add {
@@ -2091,24 +2091,59 @@ button {
   gap: 4px;
 }
 
+/* A step is a line in a sequence, not a form of its own. The kind is said by
+   its mark, the handles sit at the end and keep quiet until the row is under
+   the pointer. */
 .recipe-step {
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-  padding: 10px 11px;
-  border: 1px solid var(--rule);
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 9px;
+  align-items: center;
+  padding: 7px 9px;
+  border: 1px solid transparent;
   border-radius: var(--r-md);
+  transition:
+    border-color 120ms var(--ease),
+    background 120ms var(--ease);
 }
 
-.recipe-step-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
+.recipe-step:hover,
+.recipe-step:focus-within {
+  border-color: var(--rule);
+  background: var(--surface-sunk);
+}
+
+.recipe-step-kind {
+  display: inline-flex;
+  color: var(--ink-faint);
 }
 
 .recipe-step-tools {
   display: flex;
   gap: 2px;
+  opacity: 0;
+  transition: opacity 120ms var(--ease);
+}
+
+.recipe-step:hover .recipe-step-tools,
+.recipe-step:focus-within .recipe-step-tools {
+  opacity: 1;
+}
+
+/* A Convex step's three fields fit the row now that the dialog is wide. */
+.recipe-step .recipe-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+}
+
+.recipe-step .recipe-grid .micro {
+  display: none;
+}
+
+/* The test's result belongs under the row it belongs to, across all columns. */
+.recipe-step .step-test {
+  grid-column: 1 / -1;
 }
 
 .recipe-step-tools button {
@@ -2275,6 +2310,8 @@ button {
 /* --- recipe preview ------------------------------------------------------- */
 
 .recipe-preview {
+  position: sticky;
+  top: 0;
   display: flex;
   flex-direction: column;
   gap: 7px;
