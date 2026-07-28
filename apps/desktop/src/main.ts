@@ -77,6 +77,7 @@ import {
   readWorkCliNames,
   writeRecipe,
   resolvedCommandPath,
+  type SupervisedCommand,
   type WorkspaceRecord,
 } from "@silvic/core";
 
@@ -95,6 +96,8 @@ interface Settings {
   plotProvisioning: Record<string, PlotProvisioning>;
   /** Whether a plot's commands outlive the window that started them. */
   keepCommandsRunning: boolean;
+  /** What was left running, so a new window can take it back. */
+  runningCommands: SupervisedCommand[];
 }
 
 /** Enough of a failure to show and act on, without keeping whole build logs. */
@@ -127,8 +130,12 @@ const teardownService = new TeardownService(runner);
 const workspaceRegistry = new WorkspaceRegistry();
 const supervisor = new CommandSupervisor({
   logDirectory: join(app.getPath("userData"), "command-logs"),
-  onChange: (processes) =>
-    mainWindow?.webContents.send(ipcChannels.plotCommandsChanged, processes),
+  onChange: (processes) => {
+    // Written down as it changes, so a window that closes does not take the
+    // knowledge of what is running with it.
+    settings.set("runningCommands", [...processes]);
+    mainWindow?.webContents.send(ipcChannels.plotCommandsChanged, processes);
+  },
 });
 const settings = new Store<Settings>({
   name: "settings",
@@ -142,6 +149,7 @@ const settings = new Store<Settings>({
     plotPorts: {},
     plotProvisioning: {},
     keepCommandsRunning: true,
+    runningCommands: [],
   },
 });
 
@@ -176,6 +184,7 @@ if (!app.requestSingleInstanceLock()) {
     nativeTheme.on("updated", () => {
       mainWindow?.setBackgroundColor(currentWindowBackground());
     });
+    supervisor.adopt(settings.get("runningCommands"));
     registerIpc();
     createWindow();
     await paintFromGit(settings.get("roots"));
@@ -296,6 +305,16 @@ function registerIpc(): void {
   ipcMain.handle(ipcChannels.plotCommandsGet, (event) => {
     assertTrustedSender(event);
     return supervisor.list();
+  });
+  ipcMain.handle(ipcChannels.keepRunningGet, (event) => {
+    assertTrustedSender(event);
+    return settings.get("keepCommandsRunning");
+  });
+  ipcMain.handle(ipcChannels.keepRunningSet, (event, keep: unknown) => {
+    assertTrustedSender(event);
+    if (typeof keep !== "boolean") throw new Error("Invalid setting");
+    settings.set("keepCommandsRunning", keep);
+    return keep;
   });
   ipcMain.handle(ipcChannels.plotCommandStart, async (event, request) => {
     assertTrustedSender(event);
@@ -433,6 +452,7 @@ function registerIpc(): void {
       scope: parsed.scope,
       deleteBranch: parsed.deleteBranch,
       discardChanges: parsed.discardChanges,
+      supervised: supervisedIn(workspace.path),
       heldOnlyHere: await commitsHeldOnlyHere(workspace),
     });
   });
@@ -451,12 +471,14 @@ function registerIpc(): void {
       scope: parsed.scope,
       deleteBranch: parsed.deleteBranch,
       discardChanges: parsed.discardChanges,
+      supervised: supervisedIn(workspace.path),
       heldOnlyHere: await commitsHeldOnlyHere(workspace),
     });
     const results = await teardownService.execute(plan, {
       path: workspace.path,
       branch: workspace.branch,
       projectRoot: project.rootPath,
+      stopCommand: (id) => supervisor.stop(workspace.path, id),
     });
     await paintFromGit([project.rootPath], "merge");
     void refreshSnapshot(true);
@@ -689,6 +711,16 @@ async function createEnvironment(
     progress.began(surveyStepId);
     await paintFromGit([project.rootPath, destinationPath]);
     progress.finished(surveyStepId);
+    // The recipe said these should be up; the plot is handed over running.
+    for (const [id, command] of Object.entries(recipe.commands)) {
+      if (!command.autoStart) continue;
+      try {
+        await startPlotCommand(destinationPath, id);
+      } catch {
+        // A command that will not start is not a reason to fail a plot that
+        // was made. It shows as stopped, with its output kept.
+      }
+    }
     void refreshSnapshot(true);
     return {
       snapshot: latestSnapshot,
@@ -938,6 +970,18 @@ async function startPlotCommand(path: string, id: string): Promise<void> {
     canRoute: await portlessAvailable(),
     detached: settings.get("keepCommandsRunning"),
   });
+}
+
+/** The commands Silvic has running in a plot, by their recipe ids. */
+function supervisedIn(plotPath: string): readonly string[] {
+  return supervisor
+    .list()
+    .filter(
+      (entry) =>
+        entry.status === "running" &&
+        normalize(entry.plotPath) === normalize(plotPath),
+    )
+    .map((entry) => entry.id);
 }
 
 /** Asked once: whether this machine can publish a command under a name. */

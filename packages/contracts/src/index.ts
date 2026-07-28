@@ -573,6 +573,9 @@ export interface SilvicDesktopApi {
   refresh(): Promise<SilvicSnapshot>;
   createEnvironment(request: CreateEnvironmentRequest): Promise<PlotCreationResult>;
   getPlotProcesses(): Promise<readonly PlotProcess[]>;
+  /** Whether a plot's commands outlive the window that started them. */
+  getKeepCommandsRunning(): Promise<boolean>;
+  setKeepCommandsRunning(keep: boolean): Promise<boolean>;
   startPlotCommand(request: PlotCommandRequest): Promise<void>;
   stopPlotCommand(request: PlotCommandRequest): Promise<void>;
   readPlotCommandOutput(request: PlotCommandRequest): Promise<string>;
@@ -634,6 +637,8 @@ export const ipcChannels = {
   plotProgress: "silvic:plot:progress",
   plotProvision: "silvic:plot:provision",
   plotCommandsGet: "silvic:plot:commands:get",
+  keepRunningGet: "silvic:commands:keep:get",
+  keepRunningSet: "silvic:commands:keep:set",
   plotCommandStart: "silvic:plot:command:start",
   plotCommandStop: "silvic:plot:command:stop",
   plotCommandOutput: "silvic:plot:command:output",

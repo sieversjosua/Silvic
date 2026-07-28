@@ -40,6 +40,8 @@ export interface TeardownRequest {
   deleteBranch: boolean;
   /** Asked for explicitly: uncommitted work is thrown away with the plot. */
   discardChanges?: boolean;
+  /** Commands Silvic started here, which it can therefore end itself. */
+  supervised?: readonly string[];
   /**
    * Commits reachable from this branch and from no other ref, local or remote.
    * Zero means deleting the branch discards nothing, however it was set up.
@@ -53,6 +55,7 @@ export function planTeardown({
   scope,
   deleteBranch,
   discardChanges,
+  supervised,
   heldOnlyHere,
 }: TeardownRequest): TeardownPlan {
   const steps: TeardownStep[] = [];
@@ -67,6 +70,14 @@ export function planTeardown({
     );
   }
 
+  // What Silvic started, it can end. Everything else it can only point at.
+  for (const id of supervised ?? []) {
+    steps.push({
+      id: `command:${id}`,
+      label: `Stop ${id}`,
+      detail: "Started by Silvic, in this plot",
+    });
+  }
   const running = workspace.observations.filter(
     (observation) => observation.kind === "runtime" && observation.state === "active",
   );
@@ -75,9 +86,9 @@ export function planTeardown({
       id: `stop:${process.connectorId}:${process.label}`,
       label: `Stop ${process.label}`,
       detail: process.detail ?? "Running process",
-      // Silvic has no process supervision yet, so it did not start this and
-      // cannot end it.
-      manual: "Silvic did not start this process and cannot stop it yet",
+      // Something else started this one — a terminal, work, an agent — and
+      // Silvic holds no handle on it.
+      manual: "Silvic did not start this process, so it cannot end it",
       ...(process.url ? { url: process.url } : {}),
     });
   }
@@ -189,7 +200,13 @@ export class TeardownService {
    */
   async execute(
     plan: TeardownPlan,
-    context: { path: string; branch: string; projectRoot: string },
+    context: {
+      path: string;
+      branch: string;
+      projectRoot: string;
+      /** Ends a command Silvic started; only the caller holds those. */
+      stopCommand?: (id: string) => void;
+    },
   ): Promise<TeardownStepResult[]> {
     if (plan.blockers.length > 0) {
       throw new Error(plan.blockers[0] ?? "This teardown is not safe to run");
@@ -206,7 +223,9 @@ export class TeardownService {
         continue;
       }
       try {
-        if (step.id === "discard") {
+        if (step.id.startsWith("command:")) {
+          context.stopCommand?.(step.id.slice("command:".length));
+        } else if (step.id === "discard") {
           // Both halves, or the removal that follows still finds the worktree
           // dirty: tracked files go back, untracked ones go away.
           await requireSuccess(this.runner, {

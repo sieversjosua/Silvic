@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { createWriteStream, type WriteStream } from "node:fs";
 import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -18,6 +18,12 @@ export interface SupervisedCommand {
   url?: string;
   startedAt?: string;
   exitCode?: number;
+  /**
+   * Part of the command line it was started with. Process ids are reused, so
+   * finding one alive is not proof it is the same process; this is what makes
+   * it proof.
+   */
+  signature?: string;
 }
 
 export interface StartRequest {
@@ -57,6 +63,21 @@ export class CommandSupervisor {
     return [...this.running.values()];
   }
 
+  /**
+   * Takes back the commands a previous window left running. Without this they
+   * would hold their ports and their published names while Silvic offered to
+   * start them again — the worst of both, since it neither owns them nor says
+   * they exist.
+   */
+  adopt(entries: readonly SupervisedCommand[]): void {
+    for (const entry of entries) {
+      if (entry.status !== "running" || entry.processId === undefined) continue;
+      if (!stillRunning(entry.processId, entry.signature)) continue;
+      this.running.set(keyFor(entry.plotPath, entry.id), entry);
+    }
+    if (this.running.size > 0) this.announce();
+  }
+
   async start(request: StartRequest): Promise<void> {
     const key = keyFor(request.plotPath, request.id);
     if (this.running.get(key)?.status === "running") return;
@@ -86,6 +107,7 @@ export class CommandSupervisor {
       id: request.id,
       status: "running",
       startedAt: new Date().toISOString(),
+      signature: request.command.run,
       ...(child.pid === undefined ? {} : { processId: child.pid }),
       ...(routed ? { url: `https://${request.routeName}.localhost` } : {}),
     };
@@ -197,4 +219,22 @@ export function routeNameFor(
 
 function keyFor(plotPath: string, id: string): string {
   return `${plotPath}::${id}`;
+}
+
+/**
+ * Whether that process id is still the process it was. Asking the system what
+ * is running under it costs one call and settles the question; asking only
+ * whether something is there would let a reused id be mistaken for a dev
+ * server, and then stopping it would end whatever had inherited the number.
+ */
+function stillRunning(processId: number, signature: string | undefined): boolean {
+  try {
+    const line = execFileSync("ps", ["-p", String(processId), "-o", "command="], {
+      encoding: "utf8",
+      timeout: 2_000,
+    });
+    return signature ? line.includes(signature) : line.trim().length > 0;
+  } catch {
+    return false;
+  }
 }

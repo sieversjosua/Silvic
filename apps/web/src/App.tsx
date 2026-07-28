@@ -202,6 +202,7 @@ export function App() {
 
         <div className="rail-foot">
           <AppearanceControl value={preference} onChange={setPreference} />
+          <KeepRunningToggle />
           <button type="button" className="rail-action" onClick={() => void addRoot()}>
             <Plus size={13} />
             Add location
@@ -598,6 +599,42 @@ function ConnectorHealth({
         {failures.length} connector{failures.length === 1 ? "" : "s"} idle
       </button>
     </div>
+  );
+}
+
+/**
+ * What happens to a plot's commands when the window closes. Silvic starts dev
+ * servers now, so it has to say what becomes of them — and letting them run is
+ * the habit `work` set, where a daemon holds them and closing a terminal costs
+ * nothing.
+ */
+function KeepRunningToggle() {
+  const [keep, setKeep] = useState<boolean>();
+
+  useEffect(() => {
+    let current = true;
+    void window.silvic
+      .getKeepCommandsRunning()
+      .then((value) => current && setKeep(value))
+      .catch(() => current && setKeep(true));
+    return () => {
+      current = false;
+    };
+  }, []);
+
+  if (keep === undefined) return null;
+  return (
+    <label className="keep-running">
+      <input
+        type="checkbox"
+        checked={keep}
+        onChange={(event) => {
+          setKeep(event.target.checked);
+          void window.silvic.setKeepCommandsRunning(event.target.checked);
+        }}
+      />
+      Keep commands running when Silvic quits
+    </label>
   );
 }
 
