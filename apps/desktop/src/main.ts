@@ -33,6 +33,7 @@ import {
   projectActivationRequestSchema,
   teardownRequestSchema,
   plotPreviewRequestSchema,
+  plotCommandRequestSchema,
   plotProvisionRequestSchema,
   testStepRequestSchema,
   recipeSaveRequestSchema,
@@ -50,6 +51,7 @@ import {
   type WorkspaceSnapshot,
 } from "@silvic/contracts";
 import {
+  CommandSupervisor,
   ConnectorRegistry,
   DeliveryService,
   EnvironmentService,
@@ -65,8 +67,10 @@ import {
   WorkspaceRegistry,
   plotPort,
   plotUrl,
+  provisionEnvironment,
   provisionStepLabel,
   readRecipe,
+  routeNameFor,
   readRecipeSource,
   readWorkCliNames,
   writeRecipe,
@@ -87,6 +91,8 @@ interface Settings {
   plotPorts: Record<string, number>;
   /** Plot path to the outcome of the last provisioning run there. */
   plotProvisioning: Record<string, PlotProvisioning>;
+  /** Whether a plot's commands outlive the window that started them. */
+  keepCommandsRunning: boolean;
 }
 
 /** Enough of a failure to show and act on, without keeping whole build logs. */
@@ -117,6 +123,11 @@ const deliveryService = new DeliveryService(runner);
 const provisioner = new Provisioner(runner);
 const teardownService = new TeardownService(runner);
 const workspaceRegistry = new WorkspaceRegistry();
+const supervisor = new CommandSupervisor({
+  logDirectory: join(app.getPath("userData"), "command-logs"),
+  onChange: (processes) =>
+    mainWindow?.webContents.send(ipcChannels.plotCommandsChanged, processes),
+});
 const settings = new Store<Settings>({
   name: "settings",
   defaults: {
@@ -128,6 +139,7 @@ const settings = new Store<Settings>({
     defaultHarness: "codex",
     plotPorts: {},
     plotProvisioning: {},
+    keepCommandsRunning: true,
   },
 });
 
@@ -172,6 +184,10 @@ if (!app.requestSingleInstanceLock()) {
     });
   });
 }
+
+app.on("before-quit", () => {
+  if (!settings.get("keepCommandsRunning")) supervisor.stopAll();
+});
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
@@ -274,6 +290,25 @@ function registerIpc(): void {
   ipcMain.handle(ipcChannels.plotProvision, async (event, request: unknown) => {
     assertTrustedSender(event);
     return provisionPlot(plotProvisionRequestSchema.parse(request));
+  });
+  ipcMain.handle(ipcChannels.plotCommandsGet, (event) => {
+    assertTrustedSender(event);
+    return supervisor.list();
+  });
+  ipcMain.handle(ipcChannels.plotCommandStart, async (event, request) => {
+    assertTrustedSender(event);
+    const parsed = plotCommandRequestSchema.parse(request);
+    return startPlotCommand(parsed.path, parsed.id);
+  });
+  ipcMain.handle(ipcChannels.plotCommandStop, (event, request) => {
+    assertTrustedSender(event);
+    const parsed = plotCommandRequestSchema.parse(request);
+    supervisor.stop(knownWorkspacePath(parsed.path), parsed.id);
+  });
+  ipcMain.handle(ipcChannels.plotCommandOutput, (event, request) => {
+    assertTrustedSender(event);
+    const parsed = plotCommandRequestSchema.parse(request);
+    return supervisor.output(knownWorkspacePath(parsed.path), parsed.id);
   });
   ipcMain.handle(ipcChannels.githubConnect, async (event) => {
     assertTrustedSender(event);
@@ -842,6 +877,70 @@ async function commitsHeldOnlyHere(
   return Number.isNaN(count) ? undefined : count;
 }
 
+/**
+ * Starts one of the commands a recipe declares, in the plot. A command that
+ * serves the plot's address is published under a name by portless, which owns
+ * the certificate, the port and the proxy; Silvic owns only the naming, so the
+ * address reads the same as the one `work` gives and stays put.
+ */
+async function startPlotCommand(path: string, id: string): Promise<void> {
+  const workspace = knownWorkspace(path);
+  const project = latestSnapshot.projects.find((candidate) =>
+    candidate.workspaces.some(
+      (entry) => entry.workspaceId === workspace.workspaceId,
+    ),
+  );
+  if (!project) throw new Error("That plot belongs to no known project");
+
+  const recipe = await readRecipe(project.rootPath);
+  const command = recipe.commands[id];
+  if (!command) {
+    throw new Error(`This repository declares no command called ${id}`);
+  }
+  const plot = plotNameIn(workspace.path, recipe.project);
+  const port =
+    storedPlotPort(workspace.path) ??
+    plotPort(recipe.project, plot, takenPlotPorts());
+
+  await supervisor.start({
+    plotPath: workspace.path,
+    id,
+    command,
+    routeName: routeNameFor(
+      { id, ...(command.routeName ? { routeName: command.routeName } : {}) },
+      plot,
+      recipe.project,
+    ),
+    environment: {
+      ...provisionEnvironment({
+        root: workspace.path,
+        sourceRoot: project.rootPath,
+        project: recipe.project,
+        plot,
+        branch: workspace.git.branch,
+        url: plotUrl(port),
+        ...(recipe.packageManager
+          ? { packageManager: recipe.packageManager }
+          : {}),
+      }),
+      // Ignored by a routed command: portless hands out its own.
+      PORT: String(port),
+    },
+    canRoute: await portlessAvailable(),
+    detached: settings.get("keepCommandsRunning"),
+  });
+}
+
+/** Asked once: whether this machine can publish a command under a name. */
+let portlessCheck: Promise<boolean> | undefined;
+function portlessAvailable(): Promise<boolean> {
+  portlessCheck ??= runner
+    .run({ executable: "which", arguments: ["portless"] })
+    .then((result) => result.exitCode === 0)
+    .catch(() => false);
+  return portlessCheck;
+}
+
 /** Plots are directories named `<project>-<plot>`; older ones are `<plot>`. */
 function plotNameIn(path: string, project: string): string {
   const folder = basename(path);
@@ -990,13 +1089,17 @@ async function openWorkspace(request: OpenWorkspaceRequest): Promise<void> {
  * never hand the browser an arbitrary address.
  */
 function knownObservationUrl(url: string): string {
-  const known = latestSnapshot.projects.some(
-    (project) =>
-      project.remoteUrl === url ||
-      project.workspaces.some((workspace) =>
-        workspace.observations.some((observation) => observation.url === url),
-      ),
-  );
+  const known =
+    latestSnapshot.projects.some(
+      (project) =>
+        project.remoteUrl === url ||
+        project.workspaces.some((workspace) =>
+          workspace.observations.some((observation) => observation.url === url),
+        ),
+    ) ||
+    // An address Silvic published itself by starting a command. It was never
+    // observed, because it exists on Silvic's say-so.
+    supervisor.list().some((entry) => entry.url === url);
   if (!known) throw new Error("Silvic can only open a discovered link");
   return url;
 }

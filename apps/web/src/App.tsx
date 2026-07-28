@@ -29,7 +29,9 @@ import type {
   DeliveryDraft,
   HarnessDefinition,
   HarnessId,
+  PlotCommand,
   PlotCreationResult,
+  PlotProcess,
   PlotProgressStep,
   PlotProvisioning,
   ProjectSnapshot,
@@ -80,6 +82,7 @@ export function App() {
     createEnvironment,
     selectProject,
     selectWorkspace,
+    processes,
   } = useSilvic();
   const { appearance, preference, setPreference } = useAppearance();
   const [query, setQuery] = useState("");
@@ -122,6 +125,26 @@ export function App() {
     },
     [],
   );
+  // A project's recipe says what can be run in its plots. It is read here so
+  // every plot of the project answers from the same reading.
+  const [commands, setCommands] = useState<
+    readonly (readonly [string, PlotCommand])[]
+  >([]);
+  useEffect(() => {
+    if (!project) return;
+    let current = true;
+    void window.silvic
+      .getRecipe(project.id)
+      .then((document) => {
+        if (current) setCommands(Object.entries(document.recipe.commands ?? {}));
+      })
+      .catch(() => {
+        if (current) setCommands([]);
+      });
+    return () => {
+      current = false;
+    };
+  }, [project?.id, project]);
 
   return (
     <main className="shell">
@@ -268,6 +291,8 @@ export function App() {
           <WorkspaceInspector
             key={workspace.workspaceId}
             workspace={workspace}
+            commands={commands}
+            processes={processes}
             defaultHarness={defaultHarness}
             onSetDefaultHarness={(id) => void setDefaultHarness(id)}
             onOpen={openWorkspace}
@@ -609,6 +634,8 @@ function AppearanceControl({
 
 function WorkspaceInspector({
   workspace,
+  commands,
+  processes,
   defaultHarness,
   onSetDefaultHarness,
   onOpen,
@@ -616,6 +643,9 @@ function WorkspaceInspector({
   onProvision,
 }: {
   workspace: WorkspaceSnapshot;
+  /** What the recipe says can be run here. */
+  commands: readonly (readonly [string, PlotCommand])[];
+  processes: readonly PlotProcess[];
   defaultHarness: HarnessId;
   onSetDefaultHarness(id: HarnessId): void;
   onOpen(path: string, target: HarnessDefinition["id"]): void;
@@ -718,12 +748,34 @@ function WorkspaceInspector({
             </button>
           </Section>
         )}
-        <Observations
-          icon={<Terminal size={12} />}
-          title="Runtime"
-          observations={grouped.get("runtime") ?? []}
-          empty="No local runtime detected"
-        />
+        <Section icon={<Terminal size={12} />} title="Runtime">
+          {commands.length === 0 ? (
+            <p className="section-empty">
+              This repository declares no commands to run. Add them to
+              <code> silvic.json </code> and they appear here.
+            </p>
+          ) : (
+            commands.map(([id, command]) => (
+              <PlotCommandRow
+                key={id}
+                path={workspace.path}
+                id={id}
+                command={command}
+                process={processes.find(
+                  (candidate) =>
+                    candidate.plotPath === workspace.path &&
+                    candidate.id === id,
+                )}
+              />
+            ))
+          )}
+          {(grouped.get("runtime") ?? []).map((observation) => (
+            <Observation
+              key={`${observation.connectorId}:${observation.label}`}
+              observation={observation}
+            />
+          ))}
+        </Section>
         <Observations
           icon={<ConvexMark size={12} />}
           title="Deployment"
@@ -768,6 +820,69 @@ function shortDate(iso: string): string {
   return Number.isNaN(date.getTime())
     ? "unknown"
     : date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+/**
+ * A command the recipe declares, and the state Silvic has it in. Starting is
+ * the point: an address nothing serves is a promise the tool did not keep.
+ */
+function PlotCommandRow({
+  path,
+  id,
+  command,
+  process,
+}: {
+  path: string;
+  id: string;
+  command: PlotCommand;
+  process: PlotProcess | undefined;
+}) {
+  const [working, setWorking] = useState(false);
+  const [failure, setFailure] = useState<string>();
+  const running = process?.status === "running";
+  const address = process?.url;
+  const act = (start: boolean) => {
+    setWorking(true);
+    setFailure(undefined);
+    const request = { path, id };
+    void (start
+      ? window.silvic.startPlotCommand(request)
+      : window.silvic.stopPlotCommand(request)
+    )
+      .catch((error: unknown) => setFailure(failureMessage(error)))
+      .finally(() => setWorking(false));
+  };
+
+  return (
+    <div className="command-row" data-running={running || undefined}>
+      <i className="dot" data-tone={running ? "active" : "quiet"} />
+      <div className="command-body">
+        <strong>{id}</strong>
+        {running && address ? (
+          <button
+            type="button"
+            className="command-url mono truncate"
+            title={address}
+            onClick={() => void window.silvic.openLink({ url: address })}
+          >
+            {address.replace(/^https?:\/\//, "")}
+          </button>
+        ) : (
+          <span className="command-run mono truncate" title={failure ?? command.run}>
+            {failure ?? command.run}
+          </span>
+        )}
+      </div>
+      <button
+        type="button"
+        className="ghost-button command-action"
+        disabled={working}
+        onClick={() => act(!running)}
+      >
+        {running ? "Stop" : "Start"}
+      </button>
+    </div>
+  );
 }
 
 function Section({

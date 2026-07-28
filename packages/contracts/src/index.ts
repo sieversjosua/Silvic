@@ -256,8 +256,13 @@ export interface RepositoryFindings {
 export const plotCommandSchema = z
   .object({
     run: z.string().min(1).max(2_000),
+    /** Serves the plot's address, so it is published under a name. */
     url: z.boolean().optional(),
     autoStart: z.boolean().optional(),
+    /** First segment of that name; the command's id when left out. */
+    routeName: z.string().min(1).max(60).optional(),
+    /** Set false to run a serving command where it is, unpublished. */
+    portless: z.boolean().optional(),
   })
   .strict();
 export type PlotCommand = z.infer<typeof plotCommandSchema>;
@@ -485,6 +490,23 @@ export interface PlotProgressStep {
  * halfway is still a plot, so it has to be able to say so long after the
  * dialog that created it has been closed.
  */
+/** A command a plot can run, and what it is doing. */
+export interface PlotProcess {
+  plotPath: string;
+  id: string;
+  status: "running" | "stopped" | "failed";
+  processId?: number;
+  /** Where it can be reached, when it was published under a name. */
+  url?: string;
+  startedAt?: string;
+  exitCode?: number;
+}
+
+export const plotCommandRequestSchema = z
+  .object({ path: z.string().min(1), id: z.string().min(1).max(60) })
+  .strict();
+export type PlotCommandRequest = z.infer<typeof plotCommandRequestSchema>;
+
 export interface PlotProvisioning {
   status: "complete" | "failed";
   /** When the run finished, ISO 8601. */
@@ -527,6 +549,13 @@ export interface SilvicDesktopApi {
   removeRoot(root: string): Promise<readonly string[]>;
   refresh(): Promise<SilvicSnapshot>;
   createEnvironment(request: CreateEnvironmentRequest): Promise<PlotCreationResult>;
+  getPlotProcesses(): Promise<readonly PlotProcess[]>;
+  startPlotCommand(request: PlotCommandRequest): Promise<void>;
+  stopPlotCommand(request: PlotCommandRequest): Promise<void>;
+  readPlotCommandOutput(request: PlotCommandRequest): Promise<string>;
+  onPlotProcesses(
+    listener: (processes: readonly PlotProcess[]) => void,
+  ): () => void;
   /** Runs the recipe in an existing plot, after a named repair when given. */
   provisionPlot(
     request: PlotProvisionRequest,
@@ -581,6 +610,11 @@ export const ipcChannels = {
   plotPreview: "silvic:plot:preview",
   plotProgress: "silvic:plot:progress",
   plotProvision: "silvic:plot:provision",
+  plotCommandsGet: "silvic:plot:commands:get",
+  plotCommandStart: "silvic:plot:command:start",
+  plotCommandStop: "silvic:plot:command:stop",
+  plotCommandOutput: "silvic:plot:command:output",
+  plotCommandsChanged: "silvic:plot:commands:changed",
   stepTest: "silvic:step:test",
   teardownPlan: "silvic:teardown:plan",
   teardownRun: "silvic:teardown:run",

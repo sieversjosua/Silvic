@@ -3050,3 +3050,59 @@ button {
     animation-duration: 1ms !important;
   }
 }
+
+/* --- running a plot ------------------------------------------------------- */
+
+/* A command the recipe declares, with the state Silvic has it in. The address
+   takes the place of the command once it is being served: what you want then
+   is somewhere to go, not the line that got you there. */
+.command-row {
+  display: flex;
+  gap: 9px;
+  align-items: center;
+  padding: 5px 0;
+}
+
+.command-row .dot {
+  flex: 0 0 auto;
+}
+
+.command-body {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.command-body strong {
+  font-size: 12.5px;
+  font-weight: 540;
+}
+
+.command-run,
+.command-url {
+  color: var(--ink-faint);
+  font-size: 10.5px;
+  text-align: left;
+}
+
+.command-url {
+  color: var(--accent);
+}
+
+.command-url:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.command-action {
+  flex: 0 0 auto;
+  height: 24px;
+  padding: 0 10px;
+  font-size: 11.5px;
+}
+
+.command-row[data-running] .command-action {
+  color: var(--tone-attention);
+}

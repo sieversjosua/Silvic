@@ -11,6 +11,8 @@ import {
   type ProjectActivationRequest,
   type RecipeSaveRequest,
   type PlotPreviewRequest,
+  type PlotCommandRequest,
+  type PlotProcess,
   type PlotProgress,
   type PlotProvisionRequest,
   type TestStepRequest,
@@ -29,6 +31,22 @@ const api: SilvicDesktopApi = {
     ipcRenderer.invoke(ipcChannels.environmentCreate, request),
   provisionPlot: (request: PlotProvisionRequest) =>
     ipcRenderer.invoke(ipcChannels.plotProvision, request),
+  getPlotProcesses: () => ipcRenderer.invoke(ipcChannels.plotCommandsGet),
+  startPlotCommand: (request: PlotCommandRequest) =>
+    ipcRenderer.invoke(ipcChannels.plotCommandStart, request),
+  stopPlotCommand: (request: PlotCommandRequest) =>
+    ipcRenderer.invoke(ipcChannels.plotCommandStop, request),
+  readPlotCommandOutput: (request: PlotCommandRequest) =>
+    ipcRenderer.invoke(ipcChannels.plotCommandOutput, request),
+  onPlotProcesses: (listener: (processes: readonly PlotProcess[]) => void) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      processes: readonly PlotProcess[],
+    ) => listener(processes);
+    ipcRenderer.on(ipcChannels.plotCommandsChanged, handler);
+    return () =>
+      ipcRenderer.removeListener(ipcChannels.plotCommandsChanged, handler);
+  },
   getChanges: (request) => ipcRenderer.invoke(ipcChannels.changesGet, request),
   draftDelivery: (request) =>
     ipcRenderer.invoke(ipcChannels.deliveryDraft, request),

@@ -1,4 +1,5 @@
 export * from "./command-runner";
+export * from "./command-supervisor";
 export * from "./connector-registry";
 export * from "./delivery-service";
 export * from "./detect";

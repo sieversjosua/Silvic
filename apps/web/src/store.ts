@@ -6,6 +6,7 @@ import type {
   CreateEnvironmentRequest,
   HarnessId,
   PlotCreationResult,
+  PlotProcess,
   SilvicSnapshot,
 } from "@silvic/contracts";
 
@@ -18,6 +19,8 @@ interface SilvicState {
   selectedWorkspaceId: string | undefined;
   loading: boolean;
   error: string | undefined;
+  /** What Silvic has running in each plot, pushed as it changes. */
+  processes: readonly PlotProcess[];
   initialize(): Promise<() => void>;
   refresh(): Promise<void>;
   addRoot(): Promise<void>;
@@ -43,22 +46,31 @@ export const useSilvic = create<SilvicState>((set, get) => ({
   selectedWorkspaceId: undefined,
   loading: true,
   error: undefined,
+  processes: [],
   initialize: async () => {
     try {
-      const [snapshot, roots, activeProjectIds, defaultHarness] =
+      const [snapshot, roots, activeProjectIds, defaultHarness, processes] =
         await Promise.all([
           window.silvic.getSnapshot(),
           window.silvic.getRoots(),
           window.silvic.getActiveProjects(),
           window.silvic.getDefaultHarness(),
+          window.silvic.getPlotProcesses(),
         ]);
-      set({ activeProjectIds, defaultHarness });
+      set({ activeProjectIds, defaultHarness, processes });
       setSelectionForSnapshot(set, get, snapshot);
       set({ snapshot, roots, loading: false });
-      return window.silvic.onSnapshot((nextSnapshot) => {
+      const stopWatchingSnapshot = window.silvic.onSnapshot((nextSnapshot) => {
         setSelectionForSnapshot(set, get, nextSnapshot);
         set({ snapshot: nextSnapshot, loading: false });
       });
+      const stopWatchingProcesses = window.silvic.onPlotProcesses((next) =>
+        set({ processes: next }),
+      );
+      return () => {
+        stopWatchingSnapshot();
+        stopWatchingProcesses();
+      };
     } catch (error) {
       set({ error: message(error), loading: false });
       return () => undefined;
