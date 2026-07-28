@@ -3,7 +3,7 @@ import { join, normalize } from "node:path";
 
 import type {
   PackageManager,
-  ProvisionStep,
+  RecipeSuggestion,
   Recipe,
   RepositoryFindings,
 } from "@silvic/contracts";
@@ -37,6 +37,7 @@ export async function inspectRepository(
   const scripts = await readScripts(join(root, "package.json"));
   const devScript = ["dev", "develop", "start"].find((name) => scripts?.[name]);
   if (devScript) findings.devScript = devScript;
+  if (scripts) findings.scripts = scripts;
   if (findings.packageManager === undefined && scripts) {
     findings.packageManager = "npm";
   }
@@ -61,41 +62,146 @@ export async function inspectRepository(
  * content the user can edit or delete before saving.
  */
 export function suggestRecipe(findings: RepositoryFindings): Recipe {
+  const provision = suggestedSteps(findings)
+    .map((suggestion) => suggestion.step)
+    .filter((step) => step !== undefined);
+  const commands = Object.fromEntries(
+    suggestedCommands(findings)
+      .filter((suggestion) => suggestion.command !== undefined)
+      .map((suggestion) => [suggestion.command!.id, suggestion.command!.command]),
+  );
+
+  const recipe: Recipe = {};
+  if (findings.packageManager) recipe.packageManager = findings.packageManager;
+  if (provision.length > 0) recipe.provision = provision;
+  if (Object.keys(commands).length > 0) recipe.commands = commands;
+  return recipe;
+}
+
+/** How a package manager is asked to run one of a repository's own scripts. */
+function runScript(manager: PackageManager | undefined, script: string): string {
+  return manager === "npm" || manager === undefined
+    ? `npm run ${script}`
+    : `${manager} run ${script}`;
+}
+
+/**
+ * What usually belongs in this repository's provisioning, in its own words:
+ * its package manager, its scripts, the tools it actually uses. Offering a
+ * blank field instead would be asking the user to tell Silvic what Silvic has
+ * already read.
+ */
+export function suggestedSteps(
+  findings: RepositoryFindings,
+): readonly RecipeSuggestion[] {
   const manager = findings.packageManager;
-  const provision: ProvisionStep[] = [];
+  const suggestions: RecipeSuggestion[] = [];
 
   if (manager) {
-    provision.push({
+    suggestions.push({
+      id: "install",
       label: "Install dependencies",
-      run: `${manager} install`,
+      detail: `${manager} install`,
+      step: { label: "Install dependencies", run: `${manager} install` },
     });
   }
   if (findings.envExample) {
-    provision.push({
+    const run = `cp "$SILVIC_SOURCE_ROOT/.env.local" .env.local 2>/dev/null || cp ${findings.envExample} .env.local`;
+    suggestions.push({
+      id: "environment",
       label: "Environment file",
-      run: `cp "$SILVIC_SOURCE_ROOT/.env.local" .env.local 2>/dev/null || cp ${findings.envExample} .env.local`,
+      detail: `From the source checkout, or ${findings.envExample}`,
+      step: { label: "Environment file", run },
     });
   }
   if (findings.convex) {
-    provision.push({ convex: { name: "dev/{plot}" } });
+    suggestions.push({
+      id: "convex",
+      label: "Convex deployment",
+      detail: "A deployment of its own, named after the plot",
+      step: { convex: { name: "dev/{plot}" } },
+    });
   }
+  for (const [name, script] of scriptsMatching(findings, [
+    "codegen",
+    "generate",
+    "build",
+    "migrate",
+    "db:migrate",
+    "db:push",
+  ])) {
+    suggestions.push({
+      id: `script:${name}`,
+      label: sentence(name),
+      detail: script,
+      step: { label: sentence(name), run: runScript(manager, name) },
+    });
+  }
+  return suggestions;
+}
 
-  const recipe: Recipe = {};
-  if (manager) recipe.packageManager = manager;
-  if (provision.length > 0) recipe.provision = provision;
-  if (findings.devScript && manager) {
-    recipe.commands = {
-      web: {
-        run:
-          manager === "npm"
-            ? `npm run ${findings.devScript}`
-            : `${manager} run ${findings.devScript}`,
-        url: true,
-        autoStart: true,
+/** The same reading, for the things that run for as long as you work. */
+export function suggestedCommands(
+  findings: RepositoryFindings,
+): readonly RecipeSuggestion[] {
+  const manager = findings.packageManager;
+  const suggestions: RecipeSuggestion[] = [];
+
+  if (findings.devScript) {
+    suggestions.push({
+      id: "web",
+      label: "web",
+      detail: runScript(manager, findings.devScript),
+      command: {
+        id: "web",
+        command: {
+          run: runScript(manager, findings.devScript),
+          url: true,
+          autoStart: true,
+        },
       },
-    };
+    });
   }
-  return recipe;
+  if (findings.convex) {
+    suggestions.push({
+      id: "convex",
+      label: "convex",
+      detail: "npx convex dev",
+      command: { id: "convex", command: { run: "npx convex dev" } },
+    });
+  }
+  for (const [name, script] of scriptsMatching(findings, [
+    "test:watch",
+    "storybook",
+    "typecheck:watch",
+  ])) {
+    suggestions.push({
+      id: `script:${name}`,
+      label: name.replace(/:.*$/, ""),
+      detail: script,
+      command: {
+        id: name.replace(/[^a-z0-9-]/g, "-"),
+        command: { run: runScript(manager, name) },
+      },
+    });
+  }
+  return suggestions;
+}
+
+function scriptsMatching(
+  findings: RepositoryFindings,
+  names: readonly string[],
+): ReadonlyArray<readonly [string, string]> {
+  const scripts = findings.scripts ?? {};
+  return names
+    .filter((name) => scripts[name])
+    .map((name) => [name, scripts[name] ?? ""] as const);
+}
+
+/** `db:migrate` reads as a label when it is given back as a sentence. */
+function sentence(script: string): string {
+  const words = script.replace(/[:_-]+/g, " ").trim();
+  return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
 async function exists(path: string): Promise<boolean> {

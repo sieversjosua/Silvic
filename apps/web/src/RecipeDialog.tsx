@@ -17,7 +17,9 @@ import {
   type PlotPreview,
   type ProvisionResult,
   type RecipeDocument,
+  type RecipeSuggestion,
   type RepositoryFindings,
+  type RepositoryReading,
   type ShellStep,
 } from "@silvic/contracts";
 
@@ -35,7 +37,11 @@ export function RecipeDialog({
   onClose(): void;
 }) {
   const [document, setDocument] = useState<RecipeDocument>();
-  const [findings, setFindings] = useState<RepositoryFindings>();
+  const [adding, setAdding] = useState<"provision" | "commands">();
+  const [reading, setReading] = useState<RepositoryReading>();
+  const findings = reading?.findings;
+  const stepSuggestions = reading?.steps ?? [];
+  const commandSuggestions = reading?.commands ?? [];
   const [directory, setDirectory] = useState("");
   const [commands, setCommands] = useState<CommandEntry[]>([]);
   const [provision, setProvision] = useState<ProvisionStep[]>([]);
@@ -66,7 +72,7 @@ export function RecipeDialog({
     ])
       .then(([loaded, inspected]) => {
         setDocument(loaded);
-        setFindings(inspected);
+        setReading(inspected);
         apply(loaded.recipe);
       })
       .catch((error: unknown) =>
@@ -195,25 +201,40 @@ export function RecipeDialog({
                 <h3>Once, when it is made</h3>
                 <p>Ordered, and finished before the plot is handed over.</p>
                 <div className="recipe-actions">
-                    <div className="recipe-add">
-                      <button
-                        type="button"
-                        onClick={() => setProvision([...provision, { run: "" }])}
-                      >
-                        <Terminal size={12} /> Command
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() =>
+                  <AddMenu
+                    open={adding === "provision"}
+                    onOpen={() => setAdding(adding === "provision" ? undefined : "provision")}
+                    onClose={() => setAdding(undefined)}
+                    suggestions={stepSuggestions.filter(
+                      (suggestion) =>
+                        !provision.some((step) => sameStep(step, suggestion)),
+                    )}
+                    onPick={(suggestion) => {
+                      if (suggestion.step) {
+                        setProvision([...provision, suggestion.step]);
+                      }
+                    }}
+                    blanks={[
+                      {
+                        id: "blank-command",
+                        label: "Command",
+                        detail: "Anything this repository needs run once",
+                        icon: <Terminal size={12} />,
+                        add: () => setProvision([...provision, { run: "" }]),
+                      },
+                      {
+                        id: "blank-convex",
+                        label: "Convex deployment",
+                        detail: "A deployment of its own for the plot",
+                        icon: <ConvexMark size={12} />,
+                        add: () =>
                           setProvision([
                             ...provision,
                             { convex: { name: "dev/{plot}" } },
-                          ])
-                        }
-                      >
-                        <ConvexMark size={12} /> Convex
-                      </button>
-                    </div>
+                          ]),
+                      },
+                    ]}
+                  />
                 </div>
               </div>
                 {provision.length === 0 && (
@@ -364,14 +385,41 @@ export function RecipeDialog({
                 <h3>While you work</h3>
                 <p>Started and stopped from the plot, for as long as you need them.</p>
                 <div className="recipe-actions">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setCommands([...commands, { id: "", run: "", url: true }])
-                      }
-                    >
-                      <Plus size={12} /> Add
-                    </button>
+                  <AddMenu
+                    open={adding === "commands"}
+                    onOpen={() => setAdding(adding === "commands" ? undefined : "commands")}
+                    onClose={() => setAdding(undefined)}
+                    suggestions={commandSuggestions.filter(
+                      (suggestion) =>
+                        !commands.some(
+                          (entry) => entry.id === suggestion.command?.id,
+                        ),
+                    )}
+                    onPick={(suggestion) => {
+                      if (!suggestion.command) return;
+                      setCommands([
+                        ...commands,
+                        {
+                          id: suggestion.command.id,
+                          run: suggestion.command.command.run,
+                          url: suggestion.command.command.url ?? false,
+                        },
+                      ]);
+                    }}
+                    blanks={[
+                      {
+                        id: "blank-command",
+                        label: "Command",
+                        detail: "Anything that runs while you work",
+                        icon: <Terminal size={12} />,
+                        add: () =>
+                          setCommands([
+                            ...commands,
+                            { id: "", run: "", url: true },
+                          ]),
+                      },
+                    ]}
+                  />
                 </div>
               </div>
                 {commands.length === 0 && (
@@ -524,6 +572,99 @@ export function RecipeDialog({
  * Most repositories describe themselves well enough to start from, so the
  * editor offers that rather than opening on a blank page.
  */
+/**
+ * Adding a step is a choice between things Silvic already knows belong here,
+ * with a blank one at the end for what it could not guess. A repository that
+ * runs npm and uses Convex should not be asked to type either.
+ */
+function AddMenu({
+  open,
+  onOpen,
+  onClose,
+  suggestions,
+  onPick,
+  blanks,
+}: {
+  open: boolean;
+  onOpen(): void;
+  onClose(): void;
+  suggestions: readonly RecipeSuggestion[];
+  onPick(suggestion: RecipeSuggestion): void;
+  blanks: readonly {
+    id: string;
+    label: string;
+    detail: string;
+    icon: React.ReactNode;
+    add(): void;
+  }[];
+}) {
+  return (
+    <div className="add-menu">
+      <button type="button" className="add-trigger" onClick={onOpen}>
+        <Plus size={12} /> Add step
+      </button>
+      {open && (
+        <>
+          <div className="menu-scrim" onClick={onClose} />
+          <div className="menu add-choices">
+            {suggestions.length > 0 && (
+              <p className="micro">Suggested for this repository</p>
+            )}
+            {suggestions.map((suggestion) => (
+              <button
+                key={suggestion.id}
+                type="button"
+                className="add-choice"
+                onClick={() => {
+                  onPick(suggestion);
+                  onClose();
+                }}
+              >
+                <span className="add-choice-icon">
+                  {suggestion.step && "convex" in suggestion.step ? (
+                    <ConvexMark size={12} />
+                  ) : (
+                    <Terminal size={12} />
+                  )}
+                </span>
+                <span className="add-choice-body">
+                  <strong>{suggestion.label}</strong>
+                  <span className="mono truncate">{suggestion.detail}</span>
+                </span>
+              </button>
+            ))}
+            <p className="micro">Or start from nothing</p>
+            {blanks.map((blank) => (
+              <button
+                key={blank.id}
+                type="button"
+                className="add-choice"
+                onClick={() => {
+                  blank.add();
+                  onClose();
+                }}
+              >
+                <span className="add-choice-icon">{blank.icon}</span>
+                <span className="add-choice-body">
+                  <strong>{blank.label}</strong>
+                  <span className="truncate">{blank.detail}</span>
+                </span>
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** Whether a suggestion is already in the recipe, so it is not offered twice. */
+function sameStep(step: ProvisionStep, suggestion: RecipeSuggestion): boolean {
+  if (!suggestion.step) return false;
+  if ("convex" in suggestion.step) return "convex" in step;
+  return "run" in step && step.run === suggestion.step.run;
+}
+
 function StepTest({
   result,
 }: {

@@ -251,6 +251,29 @@ export interface RepositoryFindings {
   convex: boolean;
   workConfig: boolean;
   envExample?: string;
+  /** The repository's own scripts, so suggestions can be its own words. */
+  scripts?: Readonly<Record<string, string>>;
+}
+
+/**
+ * A step or command Silvic proposes because of what it found in the
+ * repository. Offered one at a time rather than as a whole recipe, since most
+ * repositories already have some of it.
+ */
+export interface RecipeSuggestion {
+  id: string;
+  label: string;
+  /** What it would actually run, shown so nothing is added blind. */
+  detail: string;
+  step?: ProvisionStep;
+  command?: { id: string; command: PlotCommand };
+}
+
+/** What Silvic read in a repository, and what it makes of it. */
+export interface RepositoryReading {
+  findings: RepositoryFindings;
+  steps: readonly RecipeSuggestion[];
+  commands: readonly RecipeSuggestion[];
 }
 
 export const plotCommandSchema = z
@@ -580,7 +603,7 @@ export interface SilvicDesktopApi {
   planTeardown(request: TeardownRequestPayload): Promise<TeardownPlanPayload>;
   runTeardown(request: TeardownRequestPayload): Promise<TeardownRunResult>;
   getRecipe(projectId: string): Promise<RecipeDocument>;
-  inspectProject(projectId: string): Promise<RepositoryFindings>;
+  inspectProject(projectId: string): Promise<RepositoryReading>;
   saveRecipe(request: RecipeSaveRequest): Promise<RecipeDocument>;
   onSnapshot(listener: (snapshot: SilvicSnapshot) => void): () => void;
   onPlotProgress(listener: (progress: PlotProgress) => void): () => void;

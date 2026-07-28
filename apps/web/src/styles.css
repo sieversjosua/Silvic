@@ -3108,3 +3108,81 @@ button {
 .command-row[data-running] .command-action {
   color: var(--tone-attention);
 }
+
+/* Adding a step is a choice among things Silvic already knows belong in this
+   repository, with a blank one at the end for what it could not guess. */
+.add-menu {
+  position: relative;
+}
+
+.add-trigger {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--r-md);
+  color: var(--ink-muted);
+  font-size: 11.5px;
+  transition:
+    border-color 120ms var(--ease),
+    color 120ms var(--ease);
+}
+
+.add-trigger:hover {
+  border-color: var(--accent-edge);
+  color: var(--accent);
+}
+
+.add-choices {
+  min-width: 292px;
+  padding: 6px;
+  gap: 1px;
+}
+
+.add-choices > .micro {
+  padding: 6px 8px 4px;
+}
+
+.add-choice {
+  display: flex;
+  gap: 9px;
+  align-items: flex-start;
+  padding: 7px 8px;
+  border-radius: var(--r-md);
+  text-align: left;
+  transition: background 110ms var(--ease);
+}
+
+.add-choice:hover {
+  background: var(--surface-hover);
+}
+
+.add-choice-icon {
+  display: inline-flex;
+  padding-top: 1px;
+  color: var(--ink-faint);
+}
+
+.add-choice:hover .add-choice-icon {
+  color: var(--accent);
+}
+
+.add-choice-body {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.add-choice-body strong {
+  color: var(--ink);
+  font-size: 12.5px;
+  font-weight: 540;
+}
+
+.add-choice-body span {
+  color: var(--ink-faint);
+  font-size: 10.5px;
+}

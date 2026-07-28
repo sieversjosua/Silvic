@@ -61,6 +61,8 @@ import {
   TeardownService,
   inspectRepository,
   planTeardown,
+  suggestedCommands,
+  suggestedSteps,
   provisionOutputLimit,
   remedyCommand,
   remedyLabel,
@@ -468,7 +470,14 @@ function registerIpc(): void {
   ipcMain.handle(ipcChannels.projectInspect, async (event, projectId: unknown) => {
     assertTrustedSender(event);
     if (typeof projectId !== "string") throw new Error("Invalid project");
-    return inspectRepository(knownProjectRoot(projectId));
+    // The reading and what Silvic makes of it travel together: the interface
+    // offers the conclusions, and cannot reach the knowledge that drew them.
+    const findings = await inspectRepository(knownProjectRoot(projectId));
+    return {
+      findings,
+      steps: suggestedSteps(findings),
+      commands: suggestedCommands(findings),
+    };
   });
   ipcMain.handle(ipcChannels.recipeSave, async (event, request: unknown) => {
     assertTrustedSender(event);
