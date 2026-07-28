@@ -25,14 +25,6 @@ import { ConvexMark } from "./providers";
 import { failureMessage } from "./errors";
 
 type CommandEntry = { id: string } & PlotCommand;
-type Section = "location" | "commands" | "provision";
-
-const sections: ReadonlyArray<[Section, string]> = [
-  ["location", "Location"],
-  ["commands", "Commands"],
-  ["provision", "Provision"],
-];
-
 export function RecipeDialog({
   projectId,
   projectName,
@@ -44,7 +36,6 @@ export function RecipeDialog({
 }) {
   const [document, setDocument] = useState<RecipeDocument>();
   const [findings, setFindings] = useState<RepositoryFindings>();
-  const [section, setSection] = useState<Section>("provision");
   const [directory, setDirectory] = useState("");
   const [commands, setCommands] = useState<CommandEntry[]>([]);
   const [provision, setProvision] = useState<ProvisionStep[]>([]);
@@ -181,29 +172,12 @@ export function RecipeDialog({
         {findings && empty && <Suggestion findings={findings} onUse={apply} />}
 
         <div className="recipe-body">
-          <nav className="recipe-rail">
-            {sections.map(([id, label]) => (
-              <button
-                key={id}
-                type="button"
-                data-active={section === id || undefined}
-                onClick={() => setSection(id)}
-              >
-                {label}
-                <span className="mono">
-                  {id === "commands"
-                    ? commands.length || ""
-                    : id === "provision"
-                      ? provision.length || ""
-                      : ""}
-                </span>
-              </button>
-            ))}
-          </nav>
-
           <div className="recipe-panel">
-            {section === "location" && (
-              <>
+            <section className="recipe-part">
+              <div className="recipe-part-title">
+                <h3>Where a plot lands</h3>
+                <p>A directory beside the repository, one folder per plot.</p>
+              </div>
                 <label className="dialog-field">
                   <span className="micro">Plots directory</span>
                   <input
@@ -218,76 +192,13 @@ export function RecipeDialog({
                   Where new plots are created, relative to the repository. Left
                   empty, plots go beside it in a folder named after the project.
                 </p>
-              </>
-            )}
+            </section>
 
-            {section === "commands" && (
-              <>
-                <div className="recipe-head">
-                  <span className="micro">What runs in a plot</span>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setCommands([...commands, { id: "", run: "", url: true }])
-                    }
-                  >
-                    <Plus size={12} /> Add
-                  </button>
-                </div>
-                {commands.length === 0 && (
-                  <p className="section-empty">
-                    Nothing runs in a plot yet.
-                  </p>
-                )}
-                {commands.map((command, index) => (
-                  <div className="recipe-row" key={index}>
-                    <input
-                      className="recipe-id mono"
-                      value={command.id}
-                      placeholder="web"
-                      onChange={(event) =>
-                        setCommands(
-                          commands.map((entry, at) =>
-                            at === index
-                              ? { ...entry, id: event.target.value }
-                              : entry,
-                          ),
-                        )
-                      }
-                    />
-                    <input
-                      value={command.run}
-                      placeholder="bun run dev"
-                      onChange={(event) =>
-                        setCommands(
-                          commands.map((entry, at) =>
-                            at === index
-                              ? { ...entry, run: event.target.value }
-                              : entry,
-                          ),
-                        )
-                      }
-                    />
-                    <button
-                      type="button"
-                      aria-label="Remove command"
-                      onClick={() =>
-                        setCommands(commands.filter((_, at) => at !== index))
-                      }
-                    >
-                      <X size={12} />
-                    </button>
-                  </div>
-                ))}
-                <p className="recipe-hint">
-                  Commands are recorded but not started yet — running them needs
-                  process supervision, which is still to be decided.
-                </p>
-              </>
-            )}
-
-            {section === "provision" && (
-              <>
+            <section className="recipe-part">
+              <div className="recipe-part-title">
+                <h3>Once, when it is made</h3>
+                <p>Ordered, and finished before the plot is handed over.</p>
+              </div>
                 <div className="recipe-head">
                   <span className="micro">Runs in order, once, at creation</span>
                   <div className="recipe-add">
@@ -458,8 +369,76 @@ export function RecipeDialog({
                   <code>WORK_*</code> names are set too, so an existing work-cli
                   setup hook runs unchanged.
                 </p>
-              </>
-            )}
+            </section>
+
+            <section className="recipe-part">
+              <div className="recipe-part-title">
+                <h3>While you work</h3>
+                <p>Started and stopped from the plot, for as long as you need them.</p>
+              </div>
+                <div className="recipe-head">
+                  <span className="micro">What runs in a plot</span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setCommands([...commands, { id: "", run: "", url: true }])
+                    }
+                  >
+                    <Plus size={12} /> Add
+                  </button>
+                </div>
+                {commands.length === 0 && (
+                  <p className="section-empty">
+                    Nothing runs in a plot yet.
+                  </p>
+                )}
+                {commands.map((command, index) => (
+                  <div className="recipe-row" key={index}>
+                    <input
+                      className="recipe-id mono"
+                      value={command.id}
+                      placeholder="web"
+                      onChange={(event) =>
+                        setCommands(
+                          commands.map((entry, at) =>
+                            at === index
+                              ? { ...entry, id: event.target.value }
+                              : entry,
+                          ),
+                        )
+                      }
+                    />
+                    <input
+                      value={command.run}
+                      placeholder="bun run dev"
+                      onChange={(event) =>
+                        setCommands(
+                          commands.map((entry, at) =>
+                            at === index
+                              ? { ...entry, run: event.target.value }
+                              : entry,
+                          ),
+                        )
+                      }
+                    />
+                    <button
+                      type="button"
+                      aria-label="Remove command"
+                      onClick={() =>
+                        setCommands(commands.filter((_, at) => at !== index))
+                      }
+                    >
+                      <X size={12} />
+                    </button>
+                  </div>
+                ))}
+                <p className="recipe-hint">
+                  A command marked as serving is published under a name while it
+                  runs — <code>web-my-branch-{document?.resolved.project ?? "project"}</code> —
+                  so a plot's address stays the same however many run at once.
+                </p>
+            </section>
+
           </div>
           <aside className="recipe-preview">
             <p className="micro">Next plot</p>

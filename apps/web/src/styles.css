@@ -2023,65 +2023,51 @@ button {
   font-size: 11.5px;
 }
 
+/* One account of what happens to a plot, read top to bottom, with the plot it
+   would produce beside it. The parts were tabs once, which put the two kinds
+   of running — once at creation, and for as long as you work — on separate
+   cards, where the difference between them could not be seen. */
 .recipe-body {
   display: grid;
   min-height: 300px;
-  grid-template-columns: 120px minmax(0, 1fr) 210px;
-  gap: 16px;
+  grid-template-columns: minmax(0, 1fr) 210px;
+  gap: 18px;
 }
 
-.recipe-rail {
+.recipe-part {
   display: flex;
   flex-direction: column;
-  gap: 1px;
-  border-right: 1px solid var(--rule);
+  gap: 8px;
+  padding-bottom: 18px;
+  border-bottom: 1px dashed var(--rule);
 }
 
-.recipe-rail button {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-right: 10px;
-  padding: 7px 9px;
-  border-radius: var(--r-md);
-  color: var(--ink-muted);
-  font-size: 12.5px;
-  text-align: left;
+.recipe-part:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
 }
 
-.recipe-rail button:hover {
-  background: var(--surface-hover);
+.recipe-part-title h3 {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.012em;
 }
 
-/*
- * Selection is a left rule plus weight, not a fill. The fill alone was
- * indistinguishable from the focus ring, so a clicked section looked doubly
- * selected and a blurred one looked barely selected at all.
- */
-.recipe-rail button {
-  border-left: 2px solid transparent;
-  border-radius: 0 var(--r-md) var(--r-md) 0;
-}
-
-.recipe-rail button[data-active] {
-  color: var(--ink);
-  font-weight: 570;
-  border-left-color: var(--accent);
-  background: var(--surface-active);
-}
-
-.recipe-rail span {
+.recipe-part-title p {
+  margin-top: 2px;
   color: var(--ink-faint);
-  font-size: 10px;
+  font-size: 11.5px;
+  line-height: 1.45;
 }
 
 .recipe-panel {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 18px;
   min-width: 0;
-  max-height: 380px;
+  max-height: 440px;
   overflow-y: auto;
+  padding-right: 4px;
 }
 
 .recipe-add {
