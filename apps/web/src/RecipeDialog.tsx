@@ -179,7 +179,6 @@ export function RecipeDialog({
                 <p>A directory beside the repository, one folder per plot.</p>
               </div>
                 <label className="dialog-field">
-                  <span className="micro">Plots directory</span>
                   <input
                     value={directory}
                     onChange={(event) => setDirectory(event.target.value)}
@@ -188,39 +187,35 @@ export function RecipeDialog({
                     }
                   />
                 </label>
-                <p className="recipe-hint">
-                  Where new plots are created, relative to the repository. Left
-                  empty, plots go beside it in a folder named after the project.
-                </p>
+
             </section>
 
             <section className="recipe-part">
               <div className="recipe-part-title">
                 <h3>Once, when it is made</h3>
                 <p>Ordered, and finished before the plot is handed over.</p>
-              </div>
-                <div className="recipe-head">
-                  <span className="micro">Runs in order, once, at creation</span>
-                  <div className="recipe-add">
-                    <button
-                      type="button"
-                      onClick={() => setProvision([...provision, { run: "" }])}
-                    >
-                      <Terminal size={12} /> Command
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setProvision([
-                          ...provision,
-                          { convex: { name: "dev/{plot}" } },
-                        ])
-                      }
-                    >
-                      <ConvexMark size={12} /> Convex
-                    </button>
-                  </div>
+                <div className="recipe-actions">
+                    <div className="recipe-add">
+                      <button
+                        type="button"
+                        onClick={() => setProvision([...provision, { run: "" }])}
+                      >
+                        <Terminal size={12} /> Command
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setProvision([
+                            ...provision,
+                            { convex: { name: "dev/{plot}" } },
+                          ])
+                        }
+                      >
+                        <ConvexMark size={12} /> Convex
+                      </button>
+                    </div>
                 </div>
+              </div>
                 {provision.length === 0 && (
                   <p className="section-empty">
                     A new plot gets its files and nothing else.
@@ -320,11 +315,6 @@ export function RecipeDialog({
                             }
                           />
                         </label>
-                        <p className="recipe-hint">
-                          <code>{"{plot}"}</code> becomes the plot's name. Team
-                          and project left empty are read from the source
-                          checkout's <code>CONVEX_DEPLOYMENT</code>.
-                        </p>
                       </div>
                     ) : (
                       <>
@@ -364,10 +354,8 @@ export function RecipeDialog({
                   </div>
                 ))}
                 <p className="recipe-hint">
-                  Steps run in the new plot with <code>SILVIC_ROOT</code>,{" "}
-                  <code>SILVIC_PLOT</code> and <code>SILVIC_URL</code> set. The{" "}
-                  <code>WORK_*</code> names are set too, so an existing work-cli
-                  setup hook runs unchanged.
+                  With <code>SILVIC_*</code> set, and <code>WORK_*</code> too, so
+                  an existing work-cli hook runs unchanged.
                 </p>
             </section>
 
@@ -375,18 +363,17 @@ export function RecipeDialog({
               <div className="recipe-part-title">
                 <h3>While you work</h3>
                 <p>Started and stopped from the plot, for as long as you need them.</p>
-              </div>
-                <div className="recipe-head">
-                  <span className="micro">What runs in a plot</span>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setCommands([...commands, { id: "", run: "", url: true }])
-                    }
-                  >
-                    <Plus size={12} /> Add
-                  </button>
+                <div className="recipe-actions">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setCommands([...commands, { id: "", run: "", url: true }])
+                      }
+                    >
+                      <Plus size={12} /> Add
+                    </button>
                 </div>
+              </div>
                 {commands.length === 0 && (
                   <p className="section-empty">
                     Nothing runs in a plot yet.
@@ -433,9 +420,8 @@ export function RecipeDialog({
                   </div>
                 ))}
                 <p className="recipe-hint">
-                  A command marked as serving is published under a name while it
-                  runs — <code>web-my-branch-{document?.resolved.project ?? "project"}</code> —
-                  so a plot's address stays the same however many run at once.
+                  One that serves is published while it runs, so the plot's
+                  address holds however many are up at once.
                 </p>
             </section>
 

@@ -2037,8 +2037,8 @@ button {
 .recipe-part {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding-bottom: 18px;
+  gap: 7px;
+  padding-bottom: 15px;
   border-bottom: 1px dashed var(--rule);
 }
 
@@ -2047,17 +2047,33 @@ button {
   border-bottom: 0;
 }
 
+/* The heading, what it means, and what can be added to it — one block, so a
+   part of a plot's life reads as one thing rather than three stacked labels. */
+.recipe-part-title {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 10px;
+  align-items: baseline;
+}
+
 .recipe-part-title h3 {
+  flex: 0 0 auto;
   font-size: 13px;
   font-weight: 600;
   letter-spacing: -0.012em;
 }
 
 .recipe-part-title p {
-  margin-top: 2px;
+  flex-basis: 100%;
   color: var(--ink-faint);
   font-size: 11.5px;
-  line-height: 1.45;
+  line-height: 1.4;
+}
+
+.recipe-actions {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
 }
 
 .recipe-panel {
