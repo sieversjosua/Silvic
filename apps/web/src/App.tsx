@@ -905,8 +905,12 @@ function PlotCommandRow({
             {address.replace(/^https?:\/\//, "")}
           </button>
         ) : (
-          <span className="command-run mono truncate" title={failure ?? command.run}>
-            {failure ?? command.run}
+          <span
+            className="command-run mono truncate"
+            data-note={process?.advice !== undefined || undefined}
+            title={failure ?? process?.advice ?? command.run}
+          >
+            {failure ?? process?.advice ?? command.run}
           </span>
         )}
       </div>

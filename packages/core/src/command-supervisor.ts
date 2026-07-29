@@ -18,12 +18,9 @@ export interface SupervisedCommand {
   url?: string;
   startedAt?: string;
   exitCode?: number;
-  /**
-   * Part of the command line it was started with. Process ids are reused, so
-   * finding one alive is not proof it is the same process; this is what makes
-   * it proof.
-   */
-  signature?: string;
+  /** Why this is not what was asked for, when Silvic had to settle. */
+  advice?: string;
+
 }
 
 export interface StartRequest {
@@ -72,7 +69,7 @@ export class CommandSupervisor {
   adopt(entries: readonly SupervisedCommand[]): void {
     for (const entry of entries) {
       if (entry.status !== "running" || entry.processId === undefined) continue;
-      if (!stillRunning(entry.processId, entry.signature)) continue;
+      if (!stillRunning(entry.processId, entry.startedAt)) continue;
       this.running.set(keyFor(entry.plotPath, entry.id), entry);
     }
     if (this.running.size > 0) this.announce();
@@ -81,9 +78,18 @@ export class CommandSupervisor {
   async start(request: StartRequest): Promise<void> {
     const key = keyFor(request.plotPath, request.id);
     if (this.running.get(key)?.status === "running") return;
+    await this.spawn(request, request.canRoute && routes(request.command));
+  }
 
-    const routed = request.canRoute && routes(request.command);
-    const log = await this.openLog(key);
+  private async spawn(
+    request: StartRequest,
+    routed: boolean,
+    advice?: string,
+  ): Promise<void> {
+    const key = keyFor(request.plotPath, request.id);
+    const log = await this.openLog(key, advice !== undefined);
+    const startedAt = Date.now();
+    let recent = "";
     const child = spawn(
       routed ? "portless" : "sh",
       routed
@@ -107,20 +113,34 @@ export class CommandSupervisor {
       id: request.id,
       status: "running",
       startedAt: new Date().toISOString(),
-      signature: request.command.run,
       ...(child.pid === undefined ? {} : { processId: child.pid }),
       ...(routed ? { url: `https://${request.routeName}.localhost` } : {}),
+      ...(advice ? { advice } : {}),
     };
     this.running.set(key, entry);
     this.announce();
 
-    child.stdout?.on("data", (chunk: Buffer) => log.write(chunk));
-    child.stderr?.on("data", (chunk: Buffer) => log.write(chunk));
+    const note = (chunk: Buffer) => {
+      log.write(chunk);
+      recent = `${recent}${chunk.toString("utf8")}`.slice(-2_000);
+    };
+    child.stdout?.on("data", note);
+    child.stderr?.on("data", note);
     child.once("error", (error) => {
       log.write(`\n${error.message}\n`);
       this.settle(key, 1);
     });
-    child.once("close", (exitCode) => this.settle(key, exitCode ?? 0));
+    child.once("close", (exitCode) => {
+      // A publisher that cannot reach its proxy quits at once and says so.
+      // Running the command anyway, on the port the plot was given, is better
+      // than a plot with nothing in it — as long as it says what it settled
+      // for and what would fix it.
+      if (routed && Date.now() - startedAt < 8_000 && needsProxy(recent)) {
+        void this.spawn(request, false, proxyAdvice);
+        return;
+      }
+      this.settle(key, exitCode ?? 0);
+    });
     if (request.detached) child.unref();
   }
 
@@ -182,13 +202,23 @@ export class CommandSupervisor {
     return join(this.options.logDirectory, `${key.replaceAll("/", "-")}.log`);
   }
 
-  private async openLog(key: string): Promise<WriteStream> {
+  private async openLog(key: string, append = false): Promise<WriteStream> {
     await mkdir(this.options.logDirectory, { recursive: true });
     this.logs.get(key)?.end();
-    const stream = createWriteStream(this.logPath(key), { flags: "w" });
+    const stream = createWriteStream(this.logPath(key), {
+      flags: append ? "a" : "w",
+    });
     this.logs.set(key, stream);
     return stream;
   }
+}
+
+export const proxyAdvice =
+  "portless could not publish this: its proxy is not running, and it cannot ask for a password from here. Run `sudo portless proxy start --https` once, then start this again for a named address. It is running on the plot's own port meanwhile.";
+
+/** portless says this, in these words, when it has no proxy to publish to. */
+export function needsProxy(output: string): boolean {
+  return /proxy is not running/i.test(output);
 }
 
 /**
@@ -222,19 +252,36 @@ function keyFor(plotPath: string, id: string): string {
 }
 
 /**
- * Whether that process id is still the process it was. Asking the system what
- * is running under it costs one call and settles the question; asking only
- * whether something is there would let a reused id be mistaken for a dev
- * server, and then stopping it would end whatever had inherited the number.
+ * Whether that process id is still the process it was. Process ids are reused,
+ * so finding one alive proves nothing on its own — and stopping the wrong one
+ * would end whatever inherited the number.
+ *
+ * The proof is when it began. A command line cannot serve: `sh -lc "npm run
+ * dev"` replaces itself with what it was told to run, so what stands under the
+ * id afterwards bears no resemblance to what was started.
  */
-function stillRunning(processId: number, signature: string | undefined): boolean {
+function stillRunning(processId: number, startedAt: string | undefined): boolean {
   try {
-    const line = execFileSync("ps", ["-p", String(processId), "-o", "command="], {
-      encoding: "utf8",
-      timeout: 2_000,
-    });
-    return signature ? line.includes(signature) : line.trim().length > 0;
+    const elapsed = execFileSync(
+      "ps",
+      ["-p", String(processId), "-o", "etime="],
+      { encoding: "utf8", timeout: 2_000 },
+    ).trim();
+    if (!elapsed) return false;
+    if (!startedAt) return true;
+    const began = Date.now() - elapsedSeconds(elapsed) * 1_000;
+    return Math.abs(began - Date.parse(startedAt)) < 15_000;
   } catch {
     return false;
   }
+}
+
+/** `ps` elapsed time: `ss`, `mm:ss`, `hh:mm:ss` or `dd-hh:mm:ss`. */
+function elapsedSeconds(elapsed: string): number {
+  const [days, clock] = elapsed.includes("-")
+    ? elapsed.split("-")
+    : ["0", elapsed];
+  const parts = (clock ?? "0").split(":").map(Number).reverse();
+  const [seconds = 0, minutes = 0, hours = 0] = parts;
+  return Number(days) * 86_400 + hours * 3_600 + minutes * 60 + seconds;
 }

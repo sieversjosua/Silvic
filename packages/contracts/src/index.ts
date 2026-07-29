@@ -523,6 +523,8 @@ export interface PlotProcess {
   url?: string;
   startedAt?: string;
   exitCode?: number;
+  /** Why this is not what was asked for, when Silvic had to settle. */
+  advice?: string;
 }
 
 export const plotCommandRequestSchema = z

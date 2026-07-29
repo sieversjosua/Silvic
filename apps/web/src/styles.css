@@ -3242,3 +3242,9 @@ button {
 .keep-running:hover {
   color: var(--ink-muted);
 }
+
+/* A command that had to settle for less says so where its command would be. */
+.command-run[data-note] {
+  color: var(--tone-changed);
+  white-space: normal;
+}
