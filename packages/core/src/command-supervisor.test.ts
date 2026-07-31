@@ -1,4 +1,11 @@
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -80,6 +87,43 @@ describe("CommandSupervisor", () => {
     await stopped;
 
     expect(supervisor.list()).toEqual([]);
+  });
+
+  it("honours a repository command's relative cwd and environment", async () => {
+    const logDirectory = await mkdtemp(join(tmpdir(), "silvic-supervisor-"));
+    temporaryDirectories.push(logDirectory);
+    await mkdir(join(logDirectory, "services", "convex"), {
+      recursive: true,
+    });
+    let resolveStopped: (() => void) | undefined;
+    const stopped = new Promise<void>((resolve) => {
+      resolveStopped = resolve;
+    });
+    const supervisor = new CommandSupervisor({
+      logDirectory,
+      onChange: (commands) => {
+        if (commands.length === 0) resolveStopped?.();
+      },
+    });
+
+    await supervisor.start({
+      plotPath: logDirectory,
+      id: "convex",
+      command: {
+        run: 'printf "%s|%s" "$CONVEX_PROFILE" "$PWD"',
+        cwd: "services/convex",
+        env: { CONVEX_PROFILE: "like-photo" },
+      },
+      routeName: "convex-test",
+      environment: {},
+      canRoute: false,
+      detached: false,
+    });
+    await stopped;
+
+    expect(await supervisor.output(logDirectory, "convex")).toBe(
+      `like-photo|${join(await realpath(logDirectory), "services", "convex")}`,
+    );
   });
 
   it("forgets an explicitly stopped command even when its SIGTERM handler fails", async () => {

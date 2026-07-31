@@ -1,7 +1,7 @@
 import { execFileSync, spawn } from "node:child_process";
 import { createWriteStream, type WriteStream } from "node:fs";
 import { mkdir, readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 
 import type { PlotCommand } from "@silvic/contracts";
 
@@ -20,7 +20,6 @@ export interface SupervisedCommand {
   exitCode?: number;
   /** Why this is not what was asked for, when Silvic had to settle. */
   advice?: string;
-
 }
 
 export interface StartRequest {
@@ -101,11 +100,12 @@ export class CommandSupervisor {
         ? [request.routeName, "sh", "-lc", request.command.run]
         : ["-lc", request.command.run],
       {
-        cwd: request.plotPath,
+        cwd: commandWorkingDirectory(request.plotPath, request.command.cwd),
         env: {
           ...process.env,
           PATH: resolvedCommandPath(),
           ...request.environment,
+          ...request.command.env,
         },
         // Its own group, so stopping reaches everything it started.
         detached: true,
@@ -305,6 +305,19 @@ function keyFor(plotPath: string, id: string): string {
   return `${plotPath}::${id}`;
 }
 
+function commandWorkingDirectory(
+  plotPath: string,
+  configured: string | undefined,
+): string {
+  const root = resolve(plotPath);
+  const target = resolve(root, configured ?? ".");
+  const relation = relative(root, target);
+  if (relation.startsWith("..") || isAbsolute(relation)) {
+    throw new Error("A command's working directory must stay inside its plot");
+  }
+  return target;
+}
+
 /**
  * Whether that process id is still the process it was. Process ids are reused,
  * so finding one alive proves nothing on its own — and stopping the wrong one
@@ -314,7 +327,10 @@ function keyFor(plotPath: string, id: string): string {
  * dev"` replaces itself with what it was told to run, so what stands under the
  * id afterwards bears no resemblance to what was started.
  */
-function stillRunning(processId: number, startedAt: string | undefined): boolean {
+function stillRunning(
+  processId: number,
+  startedAt: string | undefined,
+): boolean {
   try {
     const elapsed = execFileSync(
       "ps",

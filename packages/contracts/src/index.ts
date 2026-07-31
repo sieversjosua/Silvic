@@ -281,6 +281,13 @@ export interface RepositoryReading {
 export const plotCommandSchema = z
   .object({
     run: z.string().min(1).max(2_000),
+    /** Working directory relative to the plot root. */
+    cwd: z.string().min(1).max(400).optional(),
+    /** Additional variables declared by the repository for this command. */
+    env: z
+      .record(z.string().max(120), z.string().max(4_000))
+      .refine((value) => Object.keys(value).length <= 50)
+      .optional(),
     /** Serves the plot's stable localhost address. */
     url: z.boolean().optional(),
     autoStart: z.boolean().optional(),
