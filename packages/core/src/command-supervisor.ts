@@ -6,6 +6,7 @@ import { isAbsolute, join, relative, resolve } from "node:path";
 import type { PlotCommand } from "@silvic/contracts";
 
 import { resolvedCommandPath } from "./command-runner";
+import { routes } from "./plot-address";
 
 export interface SupervisedCommand {
   /** The plot this runs in. */
@@ -81,7 +82,12 @@ export class CommandSupervisor {
   async start(request: StartRequest): Promise<void> {
     const key = keyFor(request.plotPath, request.id);
     if (this.running.get(key)?.status === "running") return;
-    await this.spawn(request, request.canRoute && routes(request.command));
+    const named = routes(request.command);
+    if (named && !request.canRoute) {
+      this.refuse(request, proxyAdvice);
+      return;
+    }
+    await this.spawn(request, named);
   }
 
   private async spawn(
@@ -145,16 +151,29 @@ export class CommandSupervisor {
       // than a plot with nothing in it — as long as it says what it settled
       // for and what would fix it.
       if (routed && Date.now() - startedAt < 8_000 && needsProxy(recent)) {
-        if (this.stopping.has(key)) {
-          this.settle(key, exitCode ?? 0);
-          return;
+        const entry = this.running.get(key);
+        if (entry) {
+          this.running.set(key, { ...entry, advice: proxyAdvice });
+          this.announce();
         }
-        void this.spawn(request, false, proxyAdvice);
+        this.settle(key, exitCode || 1);
         return;
       }
       this.settle(key, exitCode ?? 0);
     });
     if (request.detached) child.unref();
+  }
+
+  private refuse(request: StartRequest, advice: string): void {
+    const key = keyFor(request.plotPath, request.id);
+    this.running.set(key, {
+      plotPath: request.plotPath,
+      id: request.id,
+      status: "failed",
+      exitCode: 1,
+      advice,
+    });
+    this.announce();
   }
 
   /**
@@ -267,38 +286,13 @@ export class CommandSupervisor {
 }
 
 export const proxyAdvice =
-  "portless could not publish this: its proxy is not running, and it cannot ask for a password from here. Run `sudo portless proxy start --https` once, then start this again for a named address. It is running on the plot's own port meanwhile.";
+  "The named HTTPS URL needs portless and its proxy on port 443. Install portless, then run `sudo portless proxy start --https` once and try again. Or disable Named HTTPS URL in the recipe to use the stable localhost port.";
 
 /** portless says this, in these words, when it has no proxy to publish to. */
 export function needsProxy(output: string): boolean {
-  return /proxy is not running/i.test(output);
-}
-
-/**
- * Named publishing needs an explicit recipe opt-in. A serving command still
- * gets the plot's stable localhost port without depending on a privileged
- * system proxy.
- */
-export function routes(command: PlotCommand): boolean {
-  return command.url === true && command.portless === true;
-}
-
-/**
- * The shape `work` established and this machine already reads:
- * `{command}-{plot}-{project}.localhost`. One label, not a subdomain of a
- * subdomain, since a wildcard certificate covers only one level.
- */
-export function routeNameFor(
-  command: { id: string; routeName?: string | undefined },
-  plot: string,
-  project: string,
-): string {
-  return [command.routeName ?? command.id, plot, project]
-    .join("-")
-    .toLowerCase()
-    .replace(/[^a-z0-9-]+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "");
+  return /proxy is not running|port 443 requires elevated privileges|sudo: (?:a password|a terminal) is required/i.test(
+    output,
+  );
 }
 
 function keyFor(plotPath: string, id: string): string {

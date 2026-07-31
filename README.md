@@ -59,6 +59,9 @@ See [docs/PLOTS.md](docs/PLOTS.md) for the model and the decisions behind it.
   pushes schema/functions without changing the repository's Convex dependency
 - Stable per-plot addresses, so a URL registered with an identity provider keeps
   working across restarts
+- Named HTTPS addresses such as
+  `https://web-auth-callback-like-photo.localhost`, with an explicit stable-port
+  fallback
 - Auto-start commands are supervised with logs and stop/restart controls, and
   start only after the complete provisioning sequence succeeds
 - Diff inspection, Codex-assisted delivery drafts, and confirmed commit/push/PR
@@ -95,6 +98,8 @@ Requirements:
 - Node.js 22 or newer
 - pnpm 11
 - Git
+- `portless` for named HTTPS routes (`npm install -g portless`), followed once
+  by `sudo portless proxy start --https`
 
 ```bash
 pnpm install

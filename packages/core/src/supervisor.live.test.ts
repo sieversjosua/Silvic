@@ -29,7 +29,7 @@ const settle = (ms: number) => new Promise((done) => setTimeout(done, ms));
 // this look like a failure of the thing being tested.
 const port = 4600 + Math.floor(Math.random() * 300);
 
-it("starts a real command, publishes it, stops its whole group, and is taken back", async () => {
+it("starts a real command, stops its whole group, and is taken back", async () => {
   const plot = await mkdtemp(join(tmpdir(), "silvic-live-"));
   const logs = await mkdtemp(join(tmpdir(), "silvic-logs-"));
   directories.push(plot, logs);
@@ -49,11 +49,14 @@ it("starts a real command, publishes it, stops its whole group, and is taken bac
     command: {
       run: "python3 -m http.server $PORT",
       url: true,
-      portless: true,
+      portless: false,
     },
     routeName: "silvic-live-check",
-    environment: { PORT: String(port) },
-    canRoute: true,
+    environment: {
+      PORT: String(port),
+      SILVIC_URL: `http://localhost:${port}`,
+    },
+    canRoute: false,
     detached: true,
   });
 
@@ -61,14 +64,11 @@ it("starts a real command, publishes it, stops its whole group, and is taken bac
   expect(started?.status).toBe("running");
   expect(announced).toHaveLength(1);
 
-  // On this machine the portless proxy is not running, and it cannot ask for
-  // a password from here. The command must still be running — on the plot's
-  // own port — and must say what it settled for.
-  await settle(6_000);
+  await settle(500);
   const afterPublishing = supervisor.list()[0];
   expect(afterPublishing?.status).toBe("running");
-  expect(afterPublishing?.advice ?? "").toMatch(/portless proxy start/);
-  expect(afterPublishing?.url).toBeUndefined();
+  expect(afterPublishing?.advice).toBeUndefined();
+  expect(afterPublishing?.url).toBe(`http://localhost:${port}`);
   const served = execFileSync("curl", ["-sS", "-o", "/dev/null", "-w", "%{http_code}", `http://127.0.0.1:${port}/`], { encoding: "utf8" });
   expect(served.trim()).toBe("200");
 

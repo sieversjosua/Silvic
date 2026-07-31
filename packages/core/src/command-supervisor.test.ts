@@ -11,7 +11,10 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { CommandSupervisor, routeNameFor, routes } from "./command-supervisor";
+import {
+  CommandSupervisor,
+  needsProxy,
+} from "./command-supervisor";
 
 const temporaryDirectories: string[] = [];
 
@@ -23,25 +26,22 @@ afterEach(async () => {
   );
 });
 
-describe("routes", () => {
-  it("only publishes when a recipe explicitly opts into portless", () => {
-    expect(routes({ run: "npm run dev", url: true })).toBe(false);
-    expect(routes({ run: "npm run dev", url: true, portless: true })).toBe(
-      true,
-    );
-  });
-
-  it("leaves everything else where it is", () => {
-    expect(routes({ run: "npm run test:watch" })).toBe(false);
-    // Serving, but the project asked for the port it was given instead.
-    expect(routes({ run: "npm run dev", url: true, portless: false })).toBe(
-      false,
-    );
+describe("needsProxy", () => {
+  it("recognises the non-interactive macOS privilege failure", () => {
+    expect(
+      needsProxy(
+        [
+          "Starting proxy...",
+          "Port 443 requires elevated privileges. Requesting sudo...",
+          "sudo: a password is required",
+        ].join("\n"),
+      ),
+    ).toBe(true);
   });
 });
 
 describe("CommandSupervisor", () => {
-  it("exposes the stable plot URL when a serving command runs directly", async () => {
+  it("exposes the stable port URL when named routing is disabled", async () => {
     const logDirectory = await mkdtemp(join(tmpdir(), "silvic-supervisor-"));
     temporaryDirectories.push(logDirectory);
     const onChange = vi.fn();
@@ -50,7 +50,7 @@ describe("CommandSupervisor", () => {
     await supervisor.start({
       plotPath: logDirectory,
       id: "web",
-      command: { run: "sleep 10", url: true },
+      command: { run: "sleep 10", url: true, portless: false },
       routeName: "web-test",
       environment: { SILVIC_URL: "http://localhost:3456" },
       canRoute: false,
@@ -59,6 +59,32 @@ describe("CommandSupervisor", () => {
 
     expect(supervisor.list()[0]?.url).toBe("http://localhost:3456");
     supervisor.stopAll();
+  });
+
+  it("refuses a named runtime when the HTTPS router is unavailable", async () => {
+    const logDirectory = await mkdtemp(join(tmpdir(), "silvic-supervisor-"));
+    temporaryDirectories.push(logDirectory);
+    const supervisor = new CommandSupervisor({
+      logDirectory,
+      onChange: () => {},
+    });
+
+    await supervisor.start({
+      plotPath: logDirectory,
+      id: "web",
+      command: { run: "sleep 10", url: true },
+      routeName: "web-test",
+      environment: { SILVIC_URL: "https://web-test.localhost" },
+      canRoute: false,
+      detached: false,
+    });
+
+    expect(supervisor.list()[0]).toMatchObject({
+      id: "web",
+      status: "failed",
+      exitCode: 1,
+      advice: expect.stringMatching(/portless proxy start/),
+    });
   });
 
   it("forgets a command after it stops cleanly", async () => {
@@ -146,6 +172,7 @@ describe("CommandSupervisor", () => {
       command: {
         run: "trap 'exit 7' TERM; while :; do sleep 1; done",
         url: true,
+        portless: false,
       },
       routeName: "web-test",
       environment: { SILVIC_URL: "http://localhost:3456" },
@@ -158,7 +185,7 @@ describe("CommandSupervisor", () => {
     expect(supervisor.list()).toEqual([]);
   });
 
-  it("does not launch the direct fallback after a routed command was stopped", async () => {
+  it("forgets a routed command stopped while its publisher is failing", async () => {
     const logDirectory = await mkdtemp(join(tmpdir(), "silvic-supervisor-"));
     temporaryDirectories.push(logDirectory);
     const portless = join(logDirectory, "portless");
@@ -239,26 +266,5 @@ describe("CommandSupervisor", () => {
     await stopped;
 
     expect(reopened.list()).toEqual([]);
-  });
-});
-
-describe("routeNameFor", () => {
-  it("names a command the way work already does on this machine", () => {
-    expect(routeNameFor({ id: "web" }, "feature-x", "tilly")).toBe(
-      "web-feature-x-tilly",
-    );
-  });
-
-  it("takes the recipe's own segment when it gives one", () => {
-    expect(
-      routeNameFor({ id: "web", routeName: "app" }, "feature-x", "tilly"),
-    ).toBe("app-feature-x-tilly");
-  });
-
-  it("keeps a single label, since a wildcard certificate covers one level", () => {
-    const name = routeNameFor({ id: "web" }, "feat/Slashed", "My Project");
-
-    expect(name).toBe("web-feat-slashed-my-project");
-    expect(name).not.toContain(".");
   });
 });

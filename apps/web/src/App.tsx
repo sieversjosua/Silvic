@@ -31,6 +31,7 @@ import type {
   HarnessId,
   PlotCommand,
   PlotCreationResult,
+  PlotPreview,
   PlotProcess,
   PlotProgressStep,
   PlotProvisioning,
@@ -1143,6 +1144,7 @@ function NewPlotDialog({
   }>();
   const [failure, setFailure] = useState<string>();
   const [conflict, setConflict] = useState<string>();
+  const [preview, setPreview] = useState<PlotPreview>();
   // Set when the plot is to take up a branch that already exists rather than
   // cut a new one. The ref is what Git is pointed at; the name is the local
   // branch that ends up in the worktree.
@@ -1193,10 +1195,13 @@ function NewPlotDialog({
   );
 
   useEffect(() => {
-    if (!wanted || !projectId || taken || adopt) {
+    if (!wanted || !projectId) {
       setConflict(undefined);
+      setPreview(undefined);
       return;
     }
+    setConflict(undefined);
+    setPreview(undefined);
     let current = true;
     // Everything the interface cannot answer itself — a name Git will not
     // take, a directory already standing where the plot would go.
@@ -1204,19 +1209,24 @@ function NewPlotDialog({
       void window.silvic
         .previewPlot({ projectId, branch: wanted })
         .then((preview) => {
-          if (current) setConflict(preview.conflict);
+          if (!current) return;
+          setPreview(preview);
+          setConflict(adopt ? undefined : preview.conflict);
         })
         .catch(() => {
           // A preview that cannot be taken must not block a creation that
           // might still work; creation asks the same question again anyway.
-          if (current) setConflict(undefined);
+          if (current) {
+            setConflict(undefined);
+            setPreview(undefined);
+          }
         });
     }, 120);
     return () => {
       current = false;
       window.clearTimeout(timer);
     };
-  }, [wanted, projectId, taken, adopt]);
+  }, [wanted, projectId, adopt]);
 
   if (!source) return null;
 
@@ -1432,7 +1442,7 @@ function NewPlotDialog({
         onMouseDown={(event) => event.stopPropagation()}
         onSubmit={(event) => {
           event.preventDefault();
-          if (!plotName || creating || branchFailure) return;
+          if (!plotName || creating || branchFailure || preview?.advice) return;
           const requested = branch.trim();
           setFailure(undefined);
           setSteps([]);
@@ -1628,9 +1638,11 @@ function NewPlotDialog({
         </fieldset>
         {/* Present from the start, holding its place: a preview that appears
             on the first keystroke moves everything under it. */}
-        <p className="destination mono" data-empty={!plotName || undefined}>
-          {plotName || "—"}
-        </p>
+        <div className="destination" data-empty={!preview?.url || undefined}>
+          <span className="micro">Plot URL</span>
+          <strong className="mono">{preview?.url ?? "—"}</strong>
+        </div>
+        {preview?.advice && <p className="dialog-error">{preview.advice}</p>}
         {steps.length > 0 && <ProgressSteps steps={steps} settled={!creating} />}
         {failure && !branchFailure && <p className="dialog-error">{failure}</p>}
         <div className="dialog-actions">
@@ -1645,7 +1657,12 @@ function NewPlotDialog({
           <button
             type="submit"
             className="primary-button"
-            disabled={creating || !plotName || branchFailure !== undefined}
+            disabled={
+              creating ||
+              !plotName ||
+              branchFailure !== undefined ||
+              preview?.advice !== undefined
+            }
           >
             {creating ? "Creating…" : "Create plot"}
           </button>

@@ -1862,12 +1862,19 @@ button {
 }
 
 .destination {
+  display: grid;
+  gap: 4px;
   padding: 8px 10px;
   overflow-wrap: anywhere;
   border: 1px dashed var(--rule-strong);
   border-radius: var(--r-md);
   color: var(--ink-muted);
   font-size: 10.5px;
+}
+
+.destination strong {
+  color: var(--ink);
+  font-weight: 540;
 }
 
 /* --- recipe editor -------------------------------------------------------- */

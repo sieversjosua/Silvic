@@ -62,7 +62,8 @@ One optional file at the repository root. Every field optional.
   },
 
   "commands": {
-    // `portless: true` additionally publishes a named .localhost address.
+    // Serving commands get a named HTTPS address by default.
+    // Set `portless: false` to keep only the stable localhost port.
     "web": { "run": "bun dev", "url": true, "autoStart": true },
     "convex": { "run": "bunx convex dev", "autoStart": true },
   },
@@ -82,30 +83,31 @@ tasks; named steps like `convex` are implemented by Silvic because they own an
 isolation contract and can report structured results — a deployment name Silvic
 can then display and link.
 
-## URLs, and why the default is a port
+## Stable named URLs
 
 A Plot's address has to satisfy two audiences: a person reading it, and an
 identity provider validating it.
 
-Subdomain routing (`https://web-my-plot-my-project.localhost`) reads better.
-But WorkOS only guarantees wildcard redirect URIs for **the port on localhost**
-(`http://localhost:*/callback`, per RFC 8252); wildcards do not match across
-subdomain levels and are rejected for public-suffix domains. A `.localhost`
-subdomain is therefore not covered by the one form providers document.
-
-So the default is the boring one that works everywhere:
+Serving commands are published through portless by default:
 
 ```
-http://localhost:<port>
+https://web-my-plot-my-project.localhost
 ```
 
-with a **stable** port per plot, derived deterministically from the project and
-plot name and adjusted on collision. Stability is the point — a plot's address
-must not change between restarts, or every registered redirect breaks.
+The entire identity stays in one DNS label. That permits a single WorkOS
+Sandbox redirect such as
+`https://web-*-my-project.localhost/auth/callback`: WorkOS permits one
+leftmost wildcard with fixed prefixes and suffixes. Clerk development instances
+dynamically detect the requesting development origin, so every Plot sends its
+own named origin consistently.
 
-Pretty subdomain URLs remain available by opting in, for projects willing to
-register redirects per plot or to run a proxy. Silvic states the trade-off at
-the point of choosing rather than deciding for the user.
+Silvic writes that address into the Plot's local and Convex environments before
+schema/functions are pushed, then starts the runtime under the same route.
+portless requires a one-time HTTPS proxy setup on the machine. Silvic checks it
+before creating the worktree or changing a provider; if the named route cannot
+be kept, creation stops with the exact setup command instead of writing an auth
+origin that the runtime will not serve. A recipe can explicitly choose the
+deterministic `http://localhost:<port>` alternative with `"portless": false`.
 
 ## Auth redirects
 

@@ -6,6 +6,7 @@ export * from "./delivery-service";
 export * from "./detect";
 export * from "./environment-service";
 export * from "./git";
+export * from "./plot-address";
 export * from "./ports";
 export * from "./project-service";
 export * from "./provision-environment";

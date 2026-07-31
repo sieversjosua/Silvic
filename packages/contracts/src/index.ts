@@ -287,12 +287,12 @@ export const plotCommandSchema = z
       .record(z.string().max(120), z.string().max(4_000))
       .refine((value) => Object.keys(value).length <= 50)
       .optional(),
-    /** Serves the plot's stable localhost address. */
+    /** Serves the plot's canonical browser and auth address. */
     url: z.boolean().optional(),
     autoStart: z.boolean().optional(),
     /** First segment of that name; the command's id when left out. */
     routeName: z.string().min(1).max(60).optional(),
-    /** Opt into publishing this command under a named portless address. */
+    /** Named HTTPS routing is the default; false keeps the stable port URL. */
     portless: z.boolean().optional(),
   })
   .strict();
@@ -379,6 +379,8 @@ export interface PlotPreview {
   url: string;
   /** Why this plot cannot be created, asked of the repository before trying. */
   conflict?: string;
+  /** A local prerequisite that must be satisfied before creation. */
+  advice?: string;
 }
 
 export const testStepRequestSchema = z

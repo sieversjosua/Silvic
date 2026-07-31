@@ -477,11 +477,13 @@ export function RecipeDialog({
                     />
                     <label
                       className="recipe-command-routing"
-                      title="Publish through portless instead of using only the stable localhost port"
+                      title="Publish the stable wildcard-compatible HTTPS address through portless"
                     >
                       <input
                         type="checkbox"
-                        checked={command.portless === true}
+                        checked={
+                          command.url === true && command.portless !== false
+                        }
                         onChange={(event) =>
                           setCommands(
                             commands.map((entry, at) =>
@@ -498,7 +500,7 @@ export function RecipeDialog({
                           )
                         }
                       />
-                      Named URL
+                      Named HTTPS URL
                     </label>
                     <button
                       type="button"
@@ -512,8 +514,9 @@ export function RecipeDialog({
                   </div>
                 ))}
                 <p className="recipe-hint">
-                  Serving commands use the plot&apos;s stable localhost port.
-                  Named URL opts into publishing through portless.
+                  Serving commands get a named HTTPS URL by default. Disable it
+                  to keep only the stable localhost port. Named routing needs
+                  portless and its one-time HTTPS proxy setup.
                 </p>
             </section>
 
@@ -541,6 +544,9 @@ export function RecipeDialog({
                   <span className="field-value mono">{preview.url}</span>
                 </div>
                 <p className="preview-path mono">{preview.path}</p>
+                {preview.advice && (
+                  <p className="field-error">{preview.advice}</p>
+                )}
               </>
             ) : (
               <p className="section-empty">…</p>

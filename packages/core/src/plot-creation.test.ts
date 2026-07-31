@@ -8,7 +8,8 @@ import { afterEach, expect, it } from "vitest";
 
 import { LocalCommandRunner } from "./command-runner";
 import { EnvironmentService } from "./environment-service";
-import { plotPort, plotUrl } from "./ports";
+import { resolvePlotAddress } from "./plot-address";
+import { plotPort } from "./ports";
 import { Provisioner } from "./provisioner";
 import { readRecipe } from "./recipe";
 
@@ -27,11 +28,7 @@ async function git(cwd: string, args: readonly string[]): Promise<void> {
   await execute("git", [...args], { cwd });
 }
 
-/**
- * The whole path a plot takes: recipe, address, worktree, provisioning. The
- * provisioning step here reads `WORK_*`, the way an existing work-cli setup
- * hook does, to prove those repositories keep working unchanged.
- */
+/** The whole path a plot takes: recipe, address, worktree, provisioning. */
 it("creates a plot and provisions it from the repository's recipe", async () => {
   const directory = await mkdtemp(join(tmpdir(), "silvic-plot-"));
   temporaryDirectories.push(directory);
@@ -44,10 +41,13 @@ it("creates a plot and provisions it from the repository's recipe", async () => 
     join(repository, "silvic.json"),
     JSON.stringify({
       plots: { directory: "../plots" },
+      commands: {
+        web: { run: "npm run dev", url: true, autoStart: true },
+      },
       provision: [
         {
           label: "Write environment",
-          run: 'printf "URL=%s\\nPLOT=%s\\n" "$WORK_URL" "$SILVIC_PLOT" > .env.local',
+          run: 'printf "URL=%s\\nPLOT=%s\\n" "$SILVIC_URL" "$SILVIC_PLOT" > .env.local',
         },
       ],
     }),
@@ -61,7 +61,12 @@ it("creates a plot and provisions it from the repository's recipe", async () => 
 
   const plot = "owner-onboarding";
   const port = plotPort(recipe.project, plot);
-  const url = plotUrl(port);
+  const { url } = resolvePlotAddress({
+    commands: recipe.commands,
+    plot,
+    project: recipe.project,
+    port,
+  });
   const destinationPath = join(recipe.directory, plot);
 
   const runner = new LocalCommandRunner();
@@ -84,6 +89,9 @@ it("creates a plot and provisions it from the repository's recipe", async () => 
   expect(results.map((step) => step.exitCode)).toEqual([0]);
   expect(await readFile(join(destinationPath, ".env.local"), "utf8")).toBe(
     `URL=${url}\nPLOT=${plot}\n`,
+  );
+  expect(url).toBe(
+    "https://web-owner-onboarding-syntwin-mono.localhost",
   );
   // The address must be reproducible from the same inputs alone.
   expect(plotPort(recipe.project, plot)).toBe(port);

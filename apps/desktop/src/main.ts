@@ -69,7 +69,8 @@ import {
   remedyLabel,
   WorkspaceRegistry,
   plotPort,
-  plotUrl,
+  resolvePlotAddress,
+  proxyAdvice,
   provisionEnvironment,
   provisionCompleted,
   provisionStepLabel,
@@ -81,6 +82,8 @@ import {
   writeRecipe,
   resolvedCommandPath,
   type SupervisedCommand,
+  type PlotAddress,
+  type ResolvedRecipe,
   type WorkspaceRecord,
 } from "@silvic/core";
 
@@ -426,12 +429,15 @@ function registerIpc(): void {
           destinationPath,
         })
       : undefined;
+    const address = addressFor(recipe, plot, port);
+    const routingIssue = await namedRoutingIssue(address);
     return {
       name: plot,
       path: destinationPath,
       port,
-      url: plotUrl(port),
+      url: address.url,
       ...(conflict ? { conflict } : {}),
+      ...(routingIssue ? { advice: routingIssue } : {}),
     };
   });
   ipcMain.handle(ipcChannels.stepTest, async (event, request: unknown) => {
@@ -630,7 +636,9 @@ async function createEnvironment(
   // repository you have opened.
   const destinationPath = join(recipe.directory, `${recipe.project}-${plot}`);
   const port = plotPort(recipe.project, plot, takenPlotPorts());
-  const url = plotUrl(port);
+  const address = addressFor(recipe, plot, port);
+  await requireNamedRouting(address);
+  const url = address.url;
 
   // Named before anything runs, so the dialog can show the whole plan and not
   // just the step that happens to be running.
@@ -776,6 +784,8 @@ async function provisionPlot(
   const port =
     storedPlotPort(workspace.path) ??
     plotPort(recipe.project, plot, takenPlotPorts());
+  const address = addressFor(recipe, plot, port);
+  await requireNamedRouting(address);
   const sourceRoot =
     project.workspaces.find(
       (candidate) =>
@@ -835,7 +845,7 @@ async function provisionPlot(
         project: recipe.project,
         plot,
         branch: workspace.git.branch,
-        url: plotUrl(port),
+        url: address.url,
         ...(packageManager ? { packageManager } : {}),
       },
       {
@@ -993,6 +1003,7 @@ async function startPlotCommand(path: string, id: string): Promise<void> {
   const port =
     storedPlotPort(workspace.path) ??
     plotPort(recipe.project, plot, takenPlotPorts());
+  const address = addressFor(recipe, plot, port);
 
   await supervisor.start({
     plotPath: workspace.path,
@@ -1010,7 +1021,7 @@ async function startPlotCommand(path: string, id: string): Promise<void> {
         project: recipe.project,
         plot,
         branch: workspace.git.branch,
-        url: plotUrl(port),
+        url: address.url,
         ...(recipe.packageManager
           ? { packageManager: recipe.packageManager }
           : {}),
@@ -1035,14 +1046,56 @@ function supervisedIn(plotPath: string): readonly string[] {
     .map((entry) => entry.id);
 }
 
-/** Asked once: whether this machine can publish a command under a name. */
-let portlessCheck: Promise<boolean> | undefined;
+function addressFor(
+  recipe: ResolvedRecipe,
+  plot: string,
+  port: number,
+): PlotAddress {
+  return resolvePlotAddress({
+    commands: recipe.commands,
+    plot,
+    project: recipe.project,
+    port,
+  });
+}
+
+async function namedRoutingIssue(
+  address: PlotAddress,
+): Promise<string | undefined> {
+  return address.named && !(await portlessAvailable())
+    ? proxyAdvice
+    : undefined;
+}
+
+async function requireNamedRouting(address: PlotAddress): Promise<void> {
+  const issue = await namedRoutingIssue(address);
+  if (issue) throw new Error(issue);
+}
+
+/** Short-lived because the one-time proxy setup may finish while Silvic is open. */
+let portlessCheck:
+  | { checkedAt: number; result: Promise<boolean> }
+  | undefined;
 function portlessAvailable(): Promise<boolean> {
-  portlessCheck ??= runner
+  if (portlessCheck && Date.now() - portlessCheck.checkedAt < 1_500) {
+    return portlessCheck.result;
+  }
+  const result = runner
     .run({ executable: "which", arguments: ["portless"] })
-    .then((result) => result.exitCode === 0)
+    .then(async (installed) => {
+      if (installed.exitCode !== 0) return false;
+      const status = await runner.run({
+        executable: "portless",
+        arguments: ["service", "status"],
+      });
+      return (
+        status.exitCode === 0 &&
+        /Proxy on 443:\s*responding/i.test(`${status.stdout}${status.stderr}`)
+      );
+    })
     .catch(() => false);
-  return portlessCheck;
+  portlessCheck = { checkedAt: Date.now(), result };
+  return result;
 }
 
 /** Plots are directories named `<project>-<plot>`; older ones are `<plot>`. */
