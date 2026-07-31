@@ -103,11 +103,18 @@ own named origin consistently.
 
 Silvic writes that address into the Plot's local and Convex environments before
 schema/functions are pushed, then starts the runtime under the same route.
-portless requires a one-time HTTPS proxy setup on the machine. Silvic checks it
-before creating the worktree or changing a provider; if the named route cannot
-be kept, creation stops with the exact setup command instead of writing an auth
+portless requires the one-time `portless service install` setup on the machine.
+Silvic can open that explicit Terminal/admin flow from the Plot dialog and
+rechecks the service while it completes. Before creating the worktree or
+changing a provider, Silvic verifies that the proxy really answers on port 443;
+if the named route cannot be kept, creation stops instead of writing an auth
 origin that the runtime will not serve. A recipe can explicitly choose the
 deterministic `http://localhost:<port>` alternative with `"portless": false`.
+
+For Next.js, keep the serving command at the repository's normal dev script
+(for example, `bun run dev`). portless supplies `PORT` itself. Do not add
+`--hostname "$HOST"`: middleware can otherwise turn an internal rewrite into
+HTTPS while the Next.js development port itself still speaks plain HTTP.
 
 ## Auth redirects
 

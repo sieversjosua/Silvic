@@ -76,8 +76,9 @@ See [docs/PLOTS.md](docs/PLOTS.md) for the model and the decisions behind it.
 - **No universal provider setup.** A repository can declare custom tasks and
   use Silvic's typed Convex step, but Silvic does not yet know how to configure
   every auth or hosting provider on its own.
-- **No teardown.** Archiving and removing provisioned resources is not built, so
-  a Convex deployment per plot has to be cleaned up by hand.
+- **Provider teardown is limited.** Silvic safely stops its own processes and
+  can remove a worktree and branch, but Convex deployments still have to be
+  removed in the provider dashboard because the CLI exposes no delete command.
 
 ## Credentials
 
@@ -99,12 +100,16 @@ Requirements:
 - pnpm 11
 - Git
 - `portless` for named HTTPS routes (`npm install -g portless`), followed once
-  by `sudo portless proxy start --https`
+  by `portless service install` (Silvic can open this setup in Terminal)
 
 ```bash
 pnpm install
 pnpm dev
 ```
+
+For a Next.js repository, use its normal dev script as the serving command
+(for example, `bun run dev`). Named routing supplies `PORT`; forcing
+`--hostname "$HOST"` can break middleware rewrites behind the HTTPS proxy.
 
 Useful checks:
 

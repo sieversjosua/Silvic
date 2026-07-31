@@ -83,7 +83,7 @@ describe("CommandSupervisor", () => {
       id: "web",
       status: "failed",
       exitCode: 1,
-      advice: expect.stringMatching(/portless proxy start/),
+      advice: expect.stringMatching(/portless service install/),
     });
   });
 

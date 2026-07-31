@@ -440,6 +440,13 @@ function registerIpc(): void {
       ...(routingIssue ? { advice: routingIssue } : {}),
     };
   });
+  ipcMain.handle(ipcChannels.namedRoutingSetup, async (event) => {
+    assertTrustedSender(event);
+    // The command deliberately runs in Terminal: installing the launch service
+    // changes a system network setting and macOS must ask the person at the
+    // keyboard for administrator approval. Silvic never handles that password.
+    await openTerminalCommand("portless", ["service", "install"]);
+  });
   ipcMain.handle(ipcChannels.stepTest, async (event, request: unknown) => {
     assertTrustedSender(event);
     const parsed = testStepRequestSchema.parse(request);

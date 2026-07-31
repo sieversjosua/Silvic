@@ -58,6 +58,7 @@ import {
   workspaceState,
 } from "./state";
 import { concernsBranch, failureMessage } from "./errors";
+import { namedRoutingReady, pollNamedRouting } from "./named-routing";
 import { useSilvic } from "./store";
 
 
@@ -1143,8 +1144,11 @@ function NewPlotDialog({
     mode: "worktree" | "clone";
   }>();
   const [failure, setFailure] = useState<string>();
+  const [previewFailure, setPreviewFailure] = useState<string>();
   const [conflict, setConflict] = useState<string>();
   const [preview, setPreview] = useState<PlotPreview>();
+  const [previewAttempt, setPreviewAttempt] = useState(0);
+  const [settingUpRouting, setSettingUpRouting] = useState(false);
   // Set when the plot is to take up a branch that already exists rather than
   // cut a new one. The ref is what Git is pointed at; the name is the local
   // branch that ends up in the worktree.
@@ -1186,6 +1190,15 @@ function NewPlotDialog({
     .replace(/[^a-zA-Z0-9._-]+/g, "-")
     .replace(/^-+|-+$/g, "");
 
+  const applyPreview = useCallback(
+    (next: PlotPreview) => {
+      setPreview(next);
+      setConflict(adopt ? undefined : next.conflict);
+      setPreviewFailure(undefined);
+    },
+    [adopt],
+  );
+
   useEffect(
     () =>
       window.silvic.onPlotProgress((progress) => {
@@ -1198,27 +1211,29 @@ function NewPlotDialog({
     if (!wanted || !projectId) {
       setConflict(undefined);
       setPreview(undefined);
+      setPreviewFailure(undefined);
       return;
     }
     setConflict(undefined);
     setPreview(undefined);
+    setPreviewFailure(undefined);
     let current = true;
     // Everything the interface cannot answer itself — a name Git will not
     // take, a directory already standing where the plot would go.
     const timer = window.setTimeout(() => {
       void window.silvic
         .previewPlot({ projectId, branch: wanted })
-        .then((preview) => {
+        .then((next) => {
           if (!current) return;
-          setPreview(preview);
-          setConflict(adopt ? undefined : preview.conflict);
+          applyPreview(next);
         })
-        .catch(() => {
-          // A preview that cannot be taken must not block a creation that
-          // might still work; creation asks the same question again anyway.
+        .catch((error: unknown) => {
           if (current) {
             setConflict(undefined);
             setPreview(undefined);
+            setPreviewFailure(
+              `Could not verify the Plot URL: ${failureMessage(error)}`,
+            );
           }
         });
     }, 120);
@@ -1226,7 +1241,67 @@ function NewPlotDialog({
       current = false;
       window.clearTimeout(timer);
     };
-  }, [wanted, projectId, adopt]);
+  }, [wanted, projectId, applyPreview, previewAttempt]);
+
+  useEffect(() => {
+    if (!settingUpRouting || !preview?.advice || !wanted || !projectId) return;
+    let current = true;
+    let timer: number | undefined;
+    let finishWait: (() => void) | undefined;
+    void pollNamedRouting({
+      preview: () => window.silvic.previewPlot({ projectId, branch: wanted }),
+      onPreview: applyPreview,
+      isCancelled: () => !current,
+      wait: (milliseconds) =>
+        new Promise<void>((resolve) => {
+          finishWait = resolve;
+          timer = window.setTimeout(() => {
+            timer = undefined;
+            finishWait = undefined;
+            resolve();
+          }, milliseconds);
+        }),
+    })
+      .then((result) => {
+        if (!current) return;
+        setSettingUpRouting(false);
+        if (result === "timed-out") {
+          setFailure(
+            "HTTPS setup is not ready yet. Check Terminal, then try again.",
+          );
+        }
+      })
+      .catch((error: unknown) => {
+        if (!current) return;
+        setFailure(failureMessage(error));
+        setSettingUpRouting(false);
+      });
+    return () => {
+      current = false;
+      if (timer !== undefined) {
+        window.clearTimeout(timer);
+        timer = undefined;
+        const resolve = finishWait;
+        finishWait = undefined;
+        resolve?.();
+      }
+    };
+  }, [
+    settingUpRouting,
+    preview?.advice,
+    wanted,
+    projectId,
+    applyPreview,
+  ]);
+
+  const setupNamedRouting = () => {
+    setFailure(undefined);
+    setSettingUpRouting(true);
+    void window.silvic.setupNamedRouting().catch((error: unknown) => {
+      setFailure(failureMessage(error));
+      setSettingUpRouting(false);
+    });
+  };
 
   if (!source) return null;
 
@@ -1442,7 +1517,13 @@ function NewPlotDialog({
         onMouseDown={(event) => event.stopPropagation()}
         onSubmit={(event) => {
           event.preventDefault();
-          if (!plotName || creating || branchFailure || preview?.advice) return;
+          if (
+            !plotName ||
+            creating ||
+            branchFailure ||
+            !namedRoutingReady(preview)
+          )
+            return;
           const requested = branch.trim();
           setFailure(undefined);
           setSteps([]);
@@ -1642,8 +1723,35 @@ function NewPlotDialog({
           <span className="micro">Plot URL</span>
           <strong className="mono">{preview?.url ?? "—"}</strong>
         </div>
-        {preview?.advice && <p className="dialog-error">{preview.advice}</p>}
+        {preview?.advice && (
+          <div className="routing-setup">
+            <p className="dialog-error">{preview.advice}</p>
+            <button
+              type="button"
+              className="ghost-button"
+              onClick={setupNamedRouting}
+              disabled={creating || settingUpRouting}
+            >
+              <Terminal size={12} />
+              {settingUpRouting ? "Waiting for setup…" : "Set up HTTPS"}
+            </button>
+          </div>
+        )}
         {steps.length > 0 && <ProgressSteps steps={steps} settled={!creating} />}
+        {previewFailure && (
+          <div className="routing-setup">
+            <p className="dialog-error">{previewFailure}</p>
+            <button
+              type="button"
+              className="ghost-button"
+              onClick={() => setPreviewAttempt((attempt) => attempt + 1)}
+              disabled={creating}
+            >
+              <RefreshCw size={12} />
+              Retry URL check
+            </button>
+          </div>
+        )}
         {failure && !branchFailure && <p className="dialog-error">{failure}</p>}
         <div className="dialog-actions">
           <button
@@ -1661,7 +1769,7 @@ function NewPlotDialog({
               creating ||
               !plotName ||
               branchFailure !== undefined ||
-              preview?.advice !== undefined
+              !namedRoutingReady(preview)
             }
           >
             {creating ? "Creating…" : "Create plot"}

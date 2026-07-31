@@ -621,6 +621,8 @@ export interface SilvicDesktopApi {
   getDefaultHarness(): Promise<HarnessId>;
   setDefaultHarness(id: HarnessId): Promise<HarnessId>;
   previewPlot(request: PlotPreviewRequest): Promise<PlotPreview>;
+  /** Opens the explicit Terminal/admin flow for the persistent HTTPS proxy. */
+  setupNamedRouting(): Promise<void>;
   testProvisionStep(request: TestStepRequest): Promise<ProvisionResult>;
   planTeardown(request: TeardownRequestPayload): Promise<TeardownPlanPayload>;
   runTeardown(request: TeardownRequestPayload): Promise<TeardownRunResult>;
@@ -653,6 +655,7 @@ export const ipcChannels = {
   defaultHarnessGet: "silvic:harness:default:get",
   defaultHarnessSet: "silvic:harness:default:set",
   plotPreview: "silvic:plot:preview",
+  namedRoutingSetup: "silvic:routing:setup",
   plotProgress: "silvic:plot:progress",
   plotProvision: "silvic:plot:provision",
   plotCommandsGet: "silvic:plot:commands:get",

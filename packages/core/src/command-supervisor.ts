@@ -286,7 +286,7 @@ export class CommandSupervisor {
 }
 
 export const proxyAdvice =
-  "The named HTTPS URL needs portless and its proxy on port 443. Install portless, then run `sudo portless proxy start --https` once and try again. Or disable Named HTTPS URL in the recipe to use the stable localhost port.";
+  "The named HTTPS URL needs portless and its proxy on port 443. Install portless, then run `portless service install` once and try again. Or disable Named HTTPS URL in the recipe to use the stable localhost port.";
 
 /** portless says this, in these words, when it has no proxy to publish to. */
 export function needsProxy(output: string): boolean {

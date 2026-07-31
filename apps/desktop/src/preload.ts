@@ -75,6 +75,7 @@ const api: SilvicDesktopApi = {
     ipcRenderer.invoke(ipcChannels.defaultHarnessSet, id),
   previewPlot: (request: PlotPreviewRequest) =>
     ipcRenderer.invoke(ipcChannels.plotPreview, request),
+  setupNamedRouting: () => ipcRenderer.invoke(ipcChannels.namedRoutingSetup),
   testProvisionStep: (request: TestStepRequest) =>
     ipcRenderer.invoke(ipcChannels.stepTest, request),
   planTeardown: (request: TeardownRequestPayload) =>

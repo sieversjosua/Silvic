@@ -1877,6 +1877,16 @@ button {
   font-weight: 540;
 }
 
+.routing-setup {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+}
+
+.routing-setup .dialog-error {
+  margin: 0;
+}
+
 /* --- recipe editor -------------------------------------------------------- */
 
 .dialog.teardown {
