@@ -2235,6 +2235,25 @@ button {
   align-items: center;
 }
 
+.recipe-row.command {
+  grid-template-columns: 108px minmax(0, 1fr) auto auto;
+}
+
+.recipe-row .recipe-command-routing {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  color: var(--ink-faint);
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+
+.recipe-row .recipe-command-routing input {
+  width: auto;
+  min-width: auto;
+  padding: 0;
+}
+
 .recipe-row.provision {
   grid-template-columns: 108px minmax(0, 1fr) auto auto auto;
 }

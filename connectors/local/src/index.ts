@@ -50,6 +50,9 @@ export function createLocalContextConnector(runner: CommandRunner): Connector {
       kind: "service",
       capabilities: ["observe"],
     },
+    invalidate: () => {
+      cache = undefined;
+    },
     observe: async (target) => {
       const context = await readContext();
       return [

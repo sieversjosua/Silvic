@@ -252,6 +252,29 @@ describe("Convex provisioning step", () => {
     });
   });
 
+  it("prefers the selected checkout and falls back to the project root", async () => {
+    const selected = await plotRoot();
+    const projectRoot = await plotRoot();
+    await writeFile(
+      join(selected, ".env.local"),
+      "CONVEX_DEPLOYMENT=dev:selected # team: selected-team, project: selected-project\n",
+    );
+    await writeFile(
+      join(projectRoot, ".env.local"),
+      "CONVEX_DEPLOYMENT=dev:primary # team: primary-team, project: primary-project\n",
+    );
+
+    await expect(readConvexTarget(selected, projectRoot)).resolves.toEqual({
+      team: "selected-team",
+      project: "selected-project",
+    });
+    await rm(join(selected, ".env.local"));
+    await expect(readConvexTarget(selected, projectRoot)).resolves.toEqual({
+      team: "primary-team",
+      project: "primary-project",
+    });
+  });
+
   it("builds a deployment reference from the plot name", async () => {
     const root = await plotRoot();
     const source = await plotRoot();

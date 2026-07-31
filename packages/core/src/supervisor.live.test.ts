@@ -46,7 +46,11 @@ it("starts a real command, publishes it, stops its whole group, and is taken bac
   await supervisor.start({
     plotPath: plot,
     id: "web",
-    command: { run: "python3 -m http.server $PORT", url: true },
+    command: {
+      run: "python3 -m http.server $PORT",
+      url: true,
+      portless: true,
+    },
     routeName: "silvic-live-check",
     environment: { PORT: String(port) },
     canRoute: true,

@@ -85,6 +85,8 @@ export interface ConnectorContext {
 
 export interface Connector {
   readonly manifest: ConnectorManifest;
+  /** Discard observations cached by this connector before the next scan. */
+  invalidate?(): void;
   observe(
     target: WorkspaceTarget,
     context?: ConnectorContext,
@@ -279,12 +281,12 @@ export interface RepositoryReading {
 export const plotCommandSchema = z
   .object({
     run: z.string().min(1).max(2_000),
-    /** Serves the plot's address, so it is published under a name. */
+    /** Serves the plot's stable localhost address. */
     url: z.boolean().optional(),
     autoStart: z.boolean().optional(),
     /** First segment of that name; the command's id when left out. */
     routeName: z.string().min(1).max(60).optional(),
-    /** Set false to run a serving command where it is, unpublished. */
+    /** Opt into publishing this command under a named portless address. */
     portless: z.boolean().optional(),
   })
   .strict();

@@ -14,7 +14,7 @@ export interface SupervisedCommand {
   id: string;
   status: "running" | "stopped" | "failed";
   processId?: number;
-  /** Where it can be reached, when it was published under a name. */
+  /** Where a serving command can be reached. */
   url?: string;
   startedAt?: string;
   exitCode?: number;
@@ -30,7 +30,7 @@ export interface StartRequest {
   /** `{command}-{plot}-{project}`, the name a routed command is published as. */
   routeName: string;
   environment: Record<string, string>;
-  /** Whether portless is on PATH to publish it. */
+  /** Whether portless is on PATH when the recipe opted into publishing. */
   canRoute: boolean;
   /** Left running when Silvic quits, rather than ending with it. */
   detached: boolean;
@@ -48,6 +48,8 @@ export interface StartRequest {
 export class CommandSupervisor {
   private readonly running = new Map<string, SupervisedCommand>();
   private readonly logs = new Map<string, WriteStream>();
+  private readonly stopping = new Set<string>();
+  private readonly adopted = new Set<string>();
 
   constructor(
     private readonly options: {
@@ -70,7 +72,9 @@ export class CommandSupervisor {
     for (const entry of entries) {
       if (entry.status !== "running" || entry.processId === undefined) continue;
       if (!stillRunning(entry.processId, entry.startedAt)) continue;
-      this.running.set(keyFor(entry.plotPath, entry.id), entry);
+      const key = keyFor(entry.plotPath, entry.id);
+      this.running.set(key, entry);
+      this.adopted.add(key);
     }
     if (this.running.size > 0) this.announce();
   }
@@ -87,6 +91,7 @@ export class CommandSupervisor {
     advice?: string,
   ): Promise<void> {
     const key = keyFor(request.plotPath, request.id);
+    this.adopted.delete(key);
     const log = await this.openLog(key, advice !== undefined);
     const startedAt = Date.now();
     let recent = "";
@@ -114,7 +119,11 @@ export class CommandSupervisor {
       status: "running",
       startedAt: new Date().toISOString(),
       ...(child.pid === undefined ? {} : { processId: child.pid }),
-      ...(routed ? { url: `https://${request.routeName}.localhost` } : {}),
+      ...(routed
+        ? { url: `https://${request.routeName}.localhost` }
+        : request.command.url === true && request.environment["SILVIC_URL"]
+          ? { url: request.environment["SILVIC_URL"] }
+          : {}),
       ...(advice ? { advice } : {}),
     };
     this.running.set(key, entry);
@@ -136,6 +145,10 @@ export class CommandSupervisor {
       // than a plot with nothing in it — as long as it says what it settled
       // for and what would fix it.
       if (routed && Date.now() - startedAt < 8_000 && needsProxy(recent)) {
+        if (this.stopping.has(key)) {
+          this.settle(key, exitCode ?? 0);
+          return;
+        }
         void this.spawn(request, false, proxyAdvice);
         return;
       }
@@ -150,12 +163,18 @@ export class CommandSupervisor {
    * rest holding the port.
    */
   stop(plotPath: string, id: string): void {
-    const entry = this.running.get(keyFor(plotPath, id));
+    const key = keyFor(plotPath, id);
+    const entry = this.running.get(key);
     if (!entry?.processId) return;
+    this.stopping.add(key);
     try {
       process.kill(-entry.processId, "SIGTERM");
+      if (this.adopted.has(key)) {
+        this.observeAdoptedStop(key, entry.processId);
+      }
     } catch {
       // Already gone, which is the state being asked for.
+      this.settle(key, 0);
     }
   }
 
@@ -181,6 +200,15 @@ export class CommandSupervisor {
   private settle(key: string, exitCode: number): void {
     const entry = this.running.get(key);
     if (!entry) return;
+    const wasStopped = this.stopping.delete(key);
+    if (exitCode === 0 || wasStopped) {
+      this.running.delete(key);
+      this.adopted.delete(key);
+      this.logs.get(key)?.end();
+      this.logs.delete(key);
+      this.announce();
+      return;
+    }
     // The process id goes with the process: keeping it would offer something
     // to stop that is not there any more.
     const { processId: _ended, ...rest } = entry;
@@ -192,6 +220,31 @@ export class CommandSupervisor {
     this.logs.get(key)?.end();
     this.logs.delete(key);
     this.announce();
+  }
+
+  private observeAdoptedStop(
+    key: string,
+    processId: number,
+    attempt = 0,
+  ): void {
+    setTimeout(() => {
+      const entry = this.running.get(key);
+      if (!entry || entry.processId !== processId) return;
+      if (!stillRunning(processId, entry.startedAt)) {
+        this.settle(key, 0);
+        return;
+      }
+      if (attempt >= 49) {
+        try {
+          process.kill(-processId, "SIGKILL");
+        } catch {
+          // It exited between the observation and the escalation.
+        }
+        this.settle(key, 0);
+        return;
+      }
+      this.observeAdoptedStop(key, processId, attempt + 1);
+    }, 100);
   }
 
   private announce(): void {
@@ -222,11 +275,12 @@ export function needsProxy(output: string): boolean {
 }
 
 /**
- * A command is published under a name when it serves the plot's address and
- * has not said otherwise. Everything else runs where it is.
+ * Named publishing needs an explicit recipe opt-in. A serving command still
+ * gets the plot's stable localhost port without depending on a privileged
+ * system proxy.
  */
 export function routes(command: PlotCommand): boolean {
-  return command.url === true && command.portless !== false;
+  return command.url === true && command.portless === true;
 }
 
 /**

@@ -65,6 +65,7 @@ One optional file at the repository root. Every field optional.
   },
 
   "commands": {
+    // `portless: true` additionally publishes a named .localhost address.
     "web": { "run": "bun dev", "url": true, "autoStart": true },
     "convex": { "run": "bunx convex dev", "autoStart": true }
   },

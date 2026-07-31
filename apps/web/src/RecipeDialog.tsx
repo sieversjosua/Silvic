@@ -422,7 +422,7 @@ export function RecipeDialog({
                   </p>
                 )}
                 {commands.map((command, index) => (
-                  <div className="recipe-row" key={index}>
+                  <div className="recipe-row command" key={index}>
                     <input
                       className="recipe-id mono"
                       value={command.id}
@@ -450,6 +450,31 @@ export function RecipeDialog({
                         )
                       }
                     />
+                    <label
+                      className="recipe-command-routing"
+                      title="Publish through portless instead of using only the stable localhost port"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={command.portless === true}
+                        onChange={(event) =>
+                          setCommands(
+                            commands.map((entry, at) =>
+                              at === index
+                                ? {
+                                    ...entry,
+                                    ...(event.target.checked
+                                      ? { url: true }
+                                      : {}),
+                                    portless: event.target.checked,
+                                  }
+                                : entry,
+                            ),
+                          )
+                        }
+                      />
+                      Named URL
+                    </label>
                     <button
                       type="button"
                       aria-label="Remove command"
@@ -462,8 +487,8 @@ export function RecipeDialog({
                   </div>
                 ))}
                 <p className="recipe-hint">
-                  One that serves is published while it runs, so the plot's
-                  address holds however many are up at once.
+                  Serving commands use the plot&apos;s stable localhost port.
+                  Named URL opts into publishing through portless.
                 </p>
             </section>
 

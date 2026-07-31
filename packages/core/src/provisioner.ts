@@ -17,6 +17,8 @@ export interface ProvisionContext {
   root: string;
   /** The checkout the plot was branched from. */
   sourceRoot: string;
+  /** The project's primary checkout, used only when the source has no target. */
+  projectRoot?: string;
   project: string;
   plot: string;
   branch?: string;
@@ -94,7 +96,7 @@ export class Provisioner {
     const target =
       step.convex.team && step.convex.project
         ? { team: step.convex.team, project: step.convex.project }
-        : await readConvexTarget(context.sourceRoot);
+        : await readConvexTarget(context.sourceRoot, context.projectRoot);
     if (!target) {
       throw new Error(
         "No Convex team and project set, and none found in the source checkout's .env.local",
@@ -207,18 +209,25 @@ export function provisionStepLabel(step: ProvisionStep, index: number): string {
  */
 export async function readConvexTarget(
   sourceRoot: string,
+  fallbackRoot?: string,
 ): Promise<{ team: string; project: string } | undefined> {
-  try {
-    const contents = await readFile(join(sourceRoot, ".env.local"), "utf8");
-    const line = contents
-      .split(/\r?\n/)
-      .find((candidate) => candidate.startsWith("CONVEX_DEPLOYMENT="));
-    const team = line?.match(/team:\s*([^,\s]+)/)?.[1];
-    const project = line?.match(/project:\s*([^,\s]+)/)?.[1];
-    return team && project ? { team, project } : undefined;
-  } catch {
-    return undefined;
+  const roots = fallbackRoot
+    ? new Set([sourceRoot, fallbackRoot])
+    : new Set([sourceRoot]);
+  for (const root of roots) {
+    try {
+      const contents = await readFile(join(root, ".env.local"), "utf8");
+      const line = contents
+        .split(/\r?\n/)
+        .find((candidate) => candidate.startsWith("CONVEX_DEPLOYMENT="));
+      const team = line?.match(/team:\s*([^,\s]+)/)?.[1];
+      const project = line?.match(/project:\s*([^,\s]+)/)?.[1];
+      if (team && project) return { team, project };
+    } catch {
+      // A source without this optional file falls through to the project root.
+    }
   }
+  return undefined;
 }
 
 function execRunner(packageManager: PackageManager | undefined): string {

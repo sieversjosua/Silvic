@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type {
   Connector,
@@ -58,5 +58,29 @@ describe("ConnectorRegistry", () => {
         message: "not configured",
       },
     ]);
+  });
+
+  it("invalidates only the requested connector's cached observations", () => {
+    const localInvalidate = vi.fn();
+    const remoteInvalidate = vi.fn();
+    const connector = (id: string, invalidate: () => void): Connector => ({
+      manifest: {
+        id,
+        name: id,
+        kind: "service",
+        capabilities: ["observe"],
+      },
+      observe: async () => [],
+      invalidate,
+    });
+    const registry = new ConnectorRegistry([
+      connector("local-context", localInvalidate),
+      connector("github", remoteInvalidate),
+    ]);
+
+    registry.invalidate("local-context");
+
+    expect(localInvalidate).toHaveBeenCalledOnce();
+    expect(remoteInvalidate).not.toHaveBeenCalled();
   });
 });

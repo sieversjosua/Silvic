@@ -72,6 +72,7 @@ import {
   provisionEnvironment,
   provisionStepLabel,
   readRecipe,
+  mergeSnapshots,
   routeNameFor,
   readRecipeSource,
   readWorkCliNames,
@@ -128,6 +129,7 @@ const deliveryService = new DeliveryService(runner);
 const provisioner = new Provisioner(runner);
 const teardownService = new TeardownService(runner);
 const workspaceRegistry = new WorkspaceRegistry();
+let runtimeRefreshTimer: NodeJS.Timeout | undefined;
 const supervisor = new CommandSupervisor({
   logDirectory: join(app.getPath("userData"), "command-logs"),
   onChange: (processes) => {
@@ -135,6 +137,12 @@ const supervisor = new CommandSupervisor({
     // knowledge of what is running with it.
     settings.set("runningCommands", [...processes]);
     mainWindow?.webContents.send(ipcChannels.plotCommandsChanged, processes);
+    connectors.invalidate("local-context");
+    if (runtimeRefreshTimer) clearTimeout(runtimeRefreshTimer);
+    runtimeRefreshTimer = setTimeout(() => {
+      connectors.invalidate("local-context");
+      void refreshSnapshot(true);
+    }, 750);
   },
 });
 const settings = new Store<Settings>({
@@ -480,8 +488,9 @@ function registerIpc(): void {
       projectRoot: project.rootPath,
       stopCommand: (id) => supervisor.stop(workspace.path, id),
     });
-    await paintFromGit([project.rootPath], "merge");
-    void refreshSnapshot(true);
+    // Deletion is authoritative, and the returned snapshot must keep connector
+    // state for every surviving workspace.
+    await refreshSnapshot(true);
     return { results, snapshot: latestSnapshot };
   });
   ipcMain.handle(ipcChannels.recipeGet, async (event, projectId: unknown) => {
@@ -684,7 +693,8 @@ async function createEnvironment(
       recipe.provision,
       {
         root: destinationPath,
-        sourceRoot: project.rootPath,
+        sourceRoot: source.path,
+        projectRoot: project.rootPath,
         project: recipe.project,
         plot,
         branch: request.branch,
@@ -811,7 +821,8 @@ async function provisionPlot(
       recipe.provision,
       {
         root: workspace.path,
-        sourceRoot: project.rootPath,
+        sourceRoot: workspace.path,
+        projectRoot: project.rootPath,
         project: recipe.project,
         plot,
         branch: workspace.git.branch,
@@ -919,10 +930,9 @@ async function commitsHeldOnlyHere(
 }
 
 /**
- * Starts one of the commands a recipe declares, in the plot. A command that
- * serves the plot's address is published under a name by portless, which owns
- * the certificate, the port and the proxy; Silvic owns only the naming, so the
- * address reads the same as the one `work` gives and stays put.
+ * Starts one of the commands a recipe declares, in the plot. Serving commands
+ * get the plot's stable localhost port. A recipe can additionally opt into a
+ * named address through portless.
  */
 async function startPlotCommand(path: string, id: string): Promise<void> {
   const workspace = knownWorkspace(path);
@@ -1065,25 +1075,6 @@ function publishSnapshot(
     mode === "merge" ? mergeSnapshots(latestSnapshot, decorated) : decorated;
   mainWindow?.webContents.send(ipcChannels.snapshotChanged, latestSnapshot);
   return latestSnapshot;
-}
-
-/** A partial scan replaces the projects it covers and leaves the rest alone. */
-function mergeSnapshots(
-  current: SilvicSnapshot,
-  incoming: SilvicSnapshot,
-): SilvicSnapshot {
-  const byId = new Map(current.projects.map((project) => [project.id, project]));
-  for (const project of incoming.projects) byId.set(project.id, project);
-  return {
-    projects: [...byId.values()].sort((left, right) =>
-      left.name.localeCompare(right.name),
-    ),
-    connectorFailures:
-      incoming.connectorFailures.length > 0
-        ? incoming.connectorFailures
-        : current.connectorFailures,
-    refreshedAt: incoming.refreshedAt,
-  };
 }
 
 /**
