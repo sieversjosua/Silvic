@@ -48,14 +48,19 @@ See [docs/PLOTS.md](docs/PLOTS.md) for the model and the decisions behind it.
 - A plot recipe per project, stored as `silvic.json` in the repository and
   editable in the app
 - Silvic inspects a repository — package manager, dev script, `convex/`, an
-  existing `work.config.js` — and proposes a recipe rather than opening a blank
-  form
+  existing `work.config.js` marker — and proposes a recipe rather than opening
+  a blank form
+- `work.config.js` is only a migration signal. Silvic never imports, executes,
+  or uses it as runtime configuration
 - Provisioning steps run in order at creation, streamed, each reporting what it
   did and stopping at the first failure
-- A typed Convex step: team, project and deployment name as fields, defaulting to
-  the source checkout's `CONVEX_DEPLOYMENT`
+- A native Convex step that creates the isolated deployment and scoped deploy
+  key, copies local variables, syncs server variables, rewrites plot URLs and
+  pushes schema/functions without changing the repository's Convex dependency
 - Stable per-plot addresses, so a URL registered with an identity provider keeps
   working across restarts
+- Auto-start commands are supervised with logs and stop/restart controls, and
+  start only after the complete provisioning sequence succeeds
 - Diff inspection, Codex-assisted delivery drafts, and confirmed commit/push/PR
 
 **Opening it**
@@ -65,20 +70,19 @@ See [docs/PLOTS.md](docs/PLOTS.md) for the model and the decisions behind it.
 
 ## What does not work yet
 
-- **Nothing starts.** Commands are configurable but inert: running and
-  supervising them is an open design decision, recorded in
-  [docs/PLOTS.md](docs/PLOTS.md).
-- **No environment contract.** Clerk and WorkOS keys, and the redirect URI a new
-  plot needs, are not modelled yet.
+- **No universal provider setup.** A repository can declare custom tasks and
+  use Silvic's typed Convex step, but Silvic does not yet know how to configure
+  every auth or hosting provider on its own.
 - **No teardown.** Archiving and removing provisioned resources is not built, so
   a Convex deployment per plot has to be cleaned up by hand.
 
 ## Credentials
 
-Silvic never reads or stores GitHub or Convex credentials. GitHub uses your
-existing `gh` authentication, so `gh auth login --web` provides browser OAuth
-when needed. A provisioning step that needs a credential borrows an existing
-CLI's, the same way.
+Silvic never stores GitHub or Convex account credentials. It borrows existing
+CLI authentication: GitHub through `gh`, Convex through the Convex CLI. During
+native Convex provisioning it copies deployment variables directly between the
+source and isolated deployment, redacts them from progress output, and removes
+its protected temporary file immediately.
 
 Change context sent to an AI for a commit or pull-request draft is bounded and
 credential-redacted first.
@@ -129,9 +133,9 @@ coupling it to the UI. Architecture and product intent live in
 
 ## Status
 
-Early. Discovery, naming, the canvas, recipes and provisioning form the current
-foundation. Running processes, the environment contract, and resource teardown
-are next.
+Early. Discovery, naming, the canvas, recipes, provisioning and supervised
+runtimes form the current foundation. Provider-specific setup and resource
+teardown are next.
 
 ## License
 

@@ -48,7 +48,11 @@ export async function inspectRepository(
   findings.workConfig =
     (await exists(join(root, "work.config.js"))) ||
     (await exists(join(root, "work.config.ts")));
-  for (const candidate of [".env.example", ".env.local.example", ".env.sample"]) {
+  for (const candidate of [
+    ".env.example",
+    ".env.local.example",
+    ".env.sample",
+  ]) {
     if (await exists(join(root, candidate))) {
       findings.envExample = candidate;
       break;
@@ -68,7 +72,10 @@ export function suggestRecipe(findings: RepositoryFindings): Recipe {
   const commands = Object.fromEntries(
     suggestedCommands(findings)
       .filter((suggestion) => suggestion.command !== undefined)
-      .map((suggestion) => [suggestion.command!.id, suggestion.command!.command]),
+      .map((suggestion) => [
+        suggestion.command!.id,
+        suggestion.command!.command,
+      ]),
   );
 
   const recipe: Recipe = {};
@@ -79,7 +86,10 @@ export function suggestRecipe(findings: RepositoryFindings): Recipe {
 }
 
 /** How a package manager is asked to run one of a repository's own scripts. */
-function runScript(manager: PackageManager | undefined, script: string): string {
+function runScript(
+  manager: PackageManager | undefined,
+  script: string,
+): string {
   return manager === "npm" || manager === undefined
     ? `npm run ${script}`
     : `${manager} run ${script}`;
@@ -167,7 +177,10 @@ export function suggestedCommands(
       id: "convex",
       label: "convex",
       detail: "npx convex dev",
-      command: { id: "convex", command: { run: "npx convex dev" } },
+      command: {
+        id: "convex",
+        command: { run: "npx convex dev", autoStart: true },
+      },
     });
   }
   for (const [name, script] of scriptsMatching(findings, [

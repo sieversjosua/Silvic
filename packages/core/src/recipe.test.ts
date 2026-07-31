@@ -1,11 +1,11 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
 import { plotPort, plotUrl } from "./ports";
-import { readRecipe } from "./recipe";
+import { readRecipe, readRecipeSource } from "./recipe";
 
 const temporaryDirectories: string[] = [];
 
@@ -64,6 +64,41 @@ describe("readRecipe", () => {
     });
     expect(recipe.provision).toHaveLength(2);
     expect(recipe.configured).toBe(true);
+  });
+
+  it("treats work-cli as a detection signal without executing its config", async () => {
+    const root = await repository();
+    await writeFile(join(root, "bun.lock"), "");
+    await writeFile(
+      join(root, "package.json"),
+      JSON.stringify({ scripts: { dev: "next dev" } }),
+    );
+    await mkdir(join(root, "convex"));
+    await writeFile(
+      join(root, "work.config.js"),
+      `require("node:fs").writeFileSync("work-config-ran", "bad");
+      throw new Error("Silvic must not execute this");
+      \n`,
+    );
+
+    const recipe = await readRecipe(root);
+    const source = await readRecipeSource(root);
+
+    expect(recipe.project).toBe("syntwin-mono");
+    expect(recipe.directory).toBe(resolve(root, "..", "syntwin-mono.plots"));
+    expect(recipe.provision).toEqual([
+      { label: "Install dependencies", run: "bun install" },
+      { convex: { name: "dev/{plot}" } },
+    ]);
+    expect(recipe.commands).toEqual({
+      web: { run: "bun run dev", autoStart: true, url: true },
+      convex: { run: "npx convex dev", autoStart: true },
+    });
+    expect(recipe.configured).toBe(false);
+    expect(source.exists).toBe(false);
+    expect(source.recipe.provision).toEqual(recipe.provision);
+    expect(source.recipe.commands).toEqual(recipe.commands);
+    await expect(access(join(root, "work-config-ran"))).rejects.toThrow();
   });
 
   it("falls back to defaults rather than failing on a malformed recipe", async () => {

@@ -42,6 +42,7 @@ import {
   type CreateEnvironmentRequest,
   type HarnessId,
   type PlotCreationResult,
+  type PlotCommand,
   type PlotProvisioning,
   type PlotProvisionRequest,
   type ProvisionResult,
@@ -70,6 +71,7 @@ import {
   plotPort,
   plotUrl,
   provisionEnvironment,
+  provisionCompleted,
   provisionStepLabel,
   readRecipe,
   mergeSnapshots,
@@ -498,18 +500,21 @@ function registerIpc(): void {
     if (typeof projectId !== "string") throw new Error("Invalid project");
     return recipeDocument(projectId);
   });
-  ipcMain.handle(ipcChannels.projectInspect, async (event, projectId: unknown) => {
-    assertTrustedSender(event);
-    if (typeof projectId !== "string") throw new Error("Invalid project");
-    // The reading and what Silvic makes of it travel together: the interface
-    // offers the conclusions, and cannot reach the knowledge that drew them.
-    const findings = await inspectRepository(knownProjectRoot(projectId));
-    return {
-      findings,
-      steps: suggestedSteps(findings),
-      commands: suggestedCommands(findings),
-    };
-  });
+  ipcMain.handle(
+    ipcChannels.projectInspect,
+    async (event, projectId: unknown) => {
+      assertTrustedSender(event);
+      if (typeof projectId !== "string") throw new Error("Invalid project");
+      // The reading and what Silvic makes of it travel together: the interface
+      // offers the conclusions, and cannot reach the knowledge that drew them.
+      const findings = await inspectRepository(knownProjectRoot(projectId));
+      return {
+        findings,
+        steps: suggestedSteps(findings),
+        commands: suggestedCommands(findings),
+      };
+    },
+  );
   ipcMain.handle(ipcChannels.recipeSave, async (event, request: unknown) => {
     assertTrustedSender(event);
     const parsed = recipeSaveRequestSchema.parse(request);
@@ -645,7 +650,8 @@ async function createEnvironment(
       })),
       { id: surveyStepId, label: "Survey the new plot" },
     ],
-    (payload) => mainWindow?.webContents.send(ipcChannels.plotProgress, payload),
+    (payload) =>
+      mainWindow?.webContents.send(ipcChannels.plotProgress, payload),
   );
   progress.announce();
 
@@ -686,7 +692,10 @@ async function createEnvironment(
         displayName: request.branch,
       },
     ]);
-    settings.set("plotPorts", { ...settings.get("plotPorts"), [destinationPath]: port });
+    settings.set("plotPorts", {
+      ...settings.get("plotPorts"),
+      [destinationPath]: port,
+    });
     progress.finished(checkoutStepId);
 
     const provision = await provisioner.run(
@@ -694,7 +703,7 @@ async function createEnvironment(
       {
         root: destinationPath,
         sourceRoot: source.path,
-        projectRoot: project.rootPath,
+        sourceFallbackRoots: providerSourceRoots(project, source.path),
         project: recipe.project,
         plot,
         branch: request.branch,
@@ -722,14 +731,8 @@ async function createEnvironment(
     await paintFromGit([project.rootPath, destinationPath]);
     progress.finished(surveyStepId);
     // The recipe said these should be up; the plot is handed over running.
-    for (const [id, command] of Object.entries(recipe.commands)) {
-      if (!command.autoStart) continue;
-      try {
-        await startPlotCommand(destinationPath, id);
-      } catch {
-        // A command that will not start is not a reason to fail a plot that
-        // was made. It shows as stopped, with its output kept.
-      }
+    if (provisionCompleted(recipe.provision, provision)) {
+      await startAutoCommands(destinationPath, recipe.commands);
     }
     void refreshSnapshot(true);
     return {
@@ -773,6 +776,11 @@ async function provisionPlot(
   const port =
     storedPlotPort(workspace.path) ??
     plotPort(recipe.project, plot, takenPlotPorts());
+  const sourceRoot =
+    project.workspaces.find(
+      (candidate) =>
+        candidate.workspaceId === workspace.lineage?.parentWorkspaceId,
+    )?.path ?? project.rootPath;
 
   const progress = new PlotProgressReporter(
     workspace.git.branch,
@@ -783,7 +791,8 @@ async function provisionPlot(
         label: provisionStepLabel(step, index),
       })),
     ],
-    (payload) => mainWindow?.webContents.send(ipcChannels.plotProgress, payload),
+    (payload) =>
+      mainWindow?.webContents.send(ipcChannels.plotProgress, payload),
   );
   progress.announce();
 
@@ -821,8 +830,8 @@ async function provisionPlot(
       recipe.provision,
       {
         root: workspace.path,
-        sourceRoot: workspace.path,
-        projectRoot: project.rootPath,
+        sourceRoot,
+        sourceFallbackRoots: providerSourceRoots(project, sourceRoot),
         project: recipe.project,
         plot,
         branch: workspace.git.branch,
@@ -846,6 +855,9 @@ async function provisionPlot(
     const results = repair ? [repair, ...provision] : provision;
     recordProvisioning(workspace.path, results);
     await paintFromGit([workspace.path]);
+    if (provisionCompleted(recipe.provision, provision)) {
+      await startAutoCommands(workspace.path, recipe.commands);
+    }
     void refreshSnapshot(true);
     return results;
   } catch (error) {
@@ -854,6 +866,35 @@ async function provisionPlot(
   } finally {
     progress.settled();
   }
+}
+
+async function startAutoCommands(
+  plotPath: string,
+  commands: Readonly<Record<string, PlotCommand>>,
+): Promise<void> {
+  for (const [id, command] of Object.entries(commands)) {
+    if (!command.autoStart) continue;
+    try {
+      await startPlotCommand(plotPath, id);
+    } catch {
+      // A runtime failure remains visible in its log, without turning a fully
+      // provisioned worktree back into a failed plot.
+    }
+  }
+}
+
+function providerSourceRoots(
+  project: { workspaces: readonly WorkspaceSnapshot[] },
+  selectedPath: string,
+): readonly string[] {
+  const selected = normalize(selectedPath);
+  return project.workspaces
+    .filter(
+      (workspace) =>
+        workspace.locationKind === "checkout" &&
+        normalize(workspace.path) !== selected,
+    )
+    .map((workspace) => workspace.path);
 }
 
 /**

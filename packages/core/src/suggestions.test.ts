@@ -8,7 +8,11 @@ const npmConvex = {
   convex: true,
   workConfig: false,
   envExample: ".env.example",
-  scripts: { dev: "next dev", codegen: "graphql-codegen", "test:watch": "vitest" },
+  scripts: {
+    dev: "next dev",
+    codegen: "graphql-codegen",
+    "test:watch": "vitest",
+  },
 };
 
 describe("what Silvic offers for a repository", () => {
@@ -17,7 +21,9 @@ describe("what Silvic offers for a repository", () => {
     const byId = new Map(steps.map((entry) => [entry.id, entry]));
 
     expect(byId.get("install")?.detail).toBe("npm install");
-    expect(byId.get("convex")?.step).toEqual({ convex: { name: "dev/{plot}" } });
+    expect(byId.get("convex")?.step).toEqual({
+      convex: { name: "dev/{plot}" },
+    });
     // A script the repository actually has, given back as a sentence.
     expect(byId.get("script:codegen")?.label).toBe("Codegen");
     expect(byId.get("script:codegen")?.detail).toBe("graphql-codegen");
@@ -30,6 +36,17 @@ describe("what Silvic offers for a repository", () => {
     expect(web?.command?.command).toEqual({
       run: "npm run dev",
       url: true,
+      autoStart: true,
+    });
+  });
+
+  it("keeps the isolated Convex deployment in sync after setup", () => {
+    const convex = suggestedCommands(npmConvex).find(
+      (suggestion) => suggestion.command?.id === "convex",
+    );
+
+    expect(convex?.command?.command).toEqual({
+      run: "npx convex dev",
       autoStart: true,
     });
   });

@@ -8,6 +8,8 @@ import {
   type Recipe,
 } from "@silvic/contracts";
 
+import { inspectRepository, suggestRecipe } from "./detect";
+
 export const recipeFileName = "silvic.json";
 
 export interface ResolvedRecipe {
@@ -34,30 +36,45 @@ export async function readRecipe(rootPath: string): Promise<ResolvedRecipe> {
   try {
     parsed = JSON.parse(await readFile(join(root, recipeFileName), "utf8"));
   } catch {
-    return defaults(root, fallbackProject, false);
+    return inferredRecipe(root, fallbackProject);
   }
 
   const recipe = recipeSchema.safeParse(parsed);
   if (!recipe.success) {
     // A malformed recipe must not make the repository unusable.
-    return defaults(root, fallbackProject, false);
+    return inferredRecipe(root, fallbackProject);
   }
 
-  const project = recipe.data.project
-    ? slug(recipe.data.project)
-    : fallbackProject;
+  return resolveRecipe(root, fallbackProject, recipe.data);
+}
+
+async function inferredRecipe(
+  root: string,
+  fallbackProject: string,
+): Promise<ResolvedRecipe> {
+  const inferred = suggestRecipe(await inspectRepository(root));
+  return {
+    ...resolveRecipe(root, fallbackProject, inferred),
+    configured: false,
+  };
+}
+
+function resolveRecipe(
+  root: string,
+  fallbackProject: string,
+  recipe: Recipe,
+): ResolvedRecipe {
+  const project = recipe.project ? slug(recipe.project) : fallbackProject;
   const configured = defaults(root, project, true);
-  const directory = recipe.data.plots?.directory
-    ? resolve(root, recipe.data.plots.directory)
+  const directory = recipe.plots?.directory
+    ? resolve(root, recipe.plots.directory)
     : configured.directory;
   return {
     project,
     directory,
-    ...(recipe.data.packageManager
-      ? { packageManager: recipe.data.packageManager }
-      : {}),
-    commands: recipe.data.commands ?? {},
-    provision: recipe.data.provision ?? [],
+    ...(recipe.packageManager ? { packageManager: recipe.packageManager } : {}),
+    commands: recipe.commands ?? {},
+    provision: recipe.provision ?? [],
     configured: true,
   };
 }
@@ -76,9 +93,18 @@ export async function readRecipeSource(rootPath: string): Promise<{
   try {
     const parsed: unknown = JSON.parse(await readFile(path, "utf8"));
     const recipe = recipeSchema.safeParse(parsed);
-    return { path, exists: true, recipe: recipe.success ? recipe.data : {} };
+    if (recipe.success) return { path, exists: true, recipe: recipe.data };
+    return {
+      path,
+      exists: true,
+      recipe: suggestRecipe(await inspectRepository(normalize(rootPath))),
+    };
   } catch {
-    return { path, exists: false, recipe: {} };
+    return {
+      path,
+      exists: false,
+      recipe: suggestRecipe(await inspectRepository(normalize(rootPath))),
+    };
   }
 }
 

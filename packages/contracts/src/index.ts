@@ -226,16 +226,15 @@ export const convexStepSchema = z
         project: z.string().min(1).max(120).optional(),
         /** Deployment name; `{plot}` is replaced with the plot's name. */
         name: z.string().min(1).max(200).default("dev/{plot}"),
+        /** Optional Convex expiration expression, for example `in 7 days`. */
+        expiration: z.string().min(1).max(120).optional(),
       })
       .strict(),
     label: z.string().min(1).max(120).optional(),
   })
   .strict();
 
-export const provisionStepSchema = z.union([
-  shellStepSchema,
-  convexStepSchema,
-]);
+export const provisionStepSchema = z.union([shellStepSchema, convexStepSchema]);
 export type ShellStep = z.infer<typeof shellStepSchema>;
 export type ConvexStep = z.infer<typeof convexStepSchema>;
 export type ProvisionStep = z.infer<typeof provisionStepSchema>;
@@ -309,7 +308,10 @@ export const recipeSchema = z
       .optional(),
     commands: z
       .record(
-        z.string().regex(/^[a-z][a-z0-9-]*$/).max(60),
+        z
+          .string()
+          .regex(/^[a-z][a-z0-9-]*$/)
+          .max(60),
         plotCommandSchema,
       )
       .optional(),
@@ -582,7 +584,9 @@ export interface SilvicDesktopApi {
   addRoot(): Promise<readonly string[]>;
   removeRoot(root: string): Promise<readonly string[]>;
   refresh(): Promise<SilvicSnapshot>;
-  createEnvironment(request: CreateEnvironmentRequest): Promise<PlotCreationResult>;
+  createEnvironment(
+    request: CreateEnvironmentRequest,
+  ): Promise<PlotCreationResult>;
   getPlotProcesses(): Promise<readonly PlotProcess[]>;
   /** Whether a plot's commands outlive the window that started them. */
   getKeepCommandsRunning(): Promise<boolean>;
@@ -604,7 +608,9 @@ export interface SilvicDesktopApi {
   openWorkspace(request: OpenWorkspaceRequest): Promise<void>;
   openLink(request: OpenLinkRequest): Promise<void>;
   getAppearance(): Promise<AppearancePreference>;
-  setAppearance(preference: AppearancePreference): Promise<AppearancePreference>;
+  setAppearance(
+    preference: AppearancePreference,
+  ): Promise<AppearancePreference>;
   getActiveProjects(): Promise<readonly string[]>;
   setProjectActive(
     request: ProjectActivationRequest,

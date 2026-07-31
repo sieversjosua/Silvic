@@ -1462,8 +1462,11 @@ function NewPlotDialog({
         <p className="micro">New plot</p>
         <h2>Branch from {source.name}</h2>
         <p className="dialog-copy">
-          Silvic creates the worktree, assigns a stable address, then runs
-          whatever this repository declares as provisioning.
+          Silvic creates the worktree and stable address, then runs the visible
+          recipe. A Convex step creates a dev deployment and scoped deploy key,
+          copies local variables, syncs server variables, and pushes the
+          repository's schema and functions. “Create plot” confirms those
+          provider changes.
         </p>
         {sources.length > 1 && (
           <label className="dialog-field">
@@ -1763,8 +1766,8 @@ function ProvisionDialog({
           {running
             ? "Running the steps this repository declares, in the plot."
             : results.length === 0
-              ? "Nothing is recorded for this plot. Running the recipe again is safe: its steps are meant to be repeatable, and the ones that already succeeded will simply pass."
-              : "The last run of this repository's recipe here. Running it again repeats every step."}
+              ? "Nothing is recorded for this plot. Running the recipe again is safe: its steps are meant to be repeatable. A Convex step may create a dev deployment and scoped deploy key, sync environment variables, and push code."
+              : "The last run of this repository's recipe is shown here. “Provision again” confirms repeating its provider changes, including any deployment, scoped key, environment sync, and code push."}
         </p>
         {running ? (
           <ProgressSteps steps={steps} settled={!running} />

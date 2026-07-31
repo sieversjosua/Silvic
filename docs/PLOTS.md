@@ -16,29 +16,26 @@ Agent harnesses already create worktrees. Codex puts them in
 They are correct and invisible: no name, no URL, no deployment, no way to tell
 one from another. Switching harness means losing the thread entirely.
 
-Everything a Plot adds exists to answer one question — *what is this, and how do
-I get back into it?*
+Everything a Plot adds exists to answer one question — _what is this, and how do
+I get back into it?_
 
 ## Scope: replacing work-cli
 
 Silvic takes over the responsibilities currently held by `work`. That is a
 larger surface than it first appears, and it is worth naming honestly:
 
-| Responsibility | Difficulty | Notes |
-| -------------- | ---------- | ----- |
-| Worktree creation in a known directory | Low | Silvic already does the git half |
-| Recipe format | Low | Declarative; see below |
-| Provisioning steps (env, Convex, auth) | Medium | Ordered, idempotent, retryable |
-| Stable URL per plot | Medium | Port allocation and collision handling |
-| Process supervision | **High** | Survive app restarts, capture logs, restart, stop cleanly |
+| Responsibility                         | Difficulty | Notes                                                     |
+| -------------------------------------- | ---------- | --------------------------------------------------------- |
+| Worktree creation in a known directory | Low        | Silvic already does the git half                          |
+| Recipe format                          | Low        | Declarative; see below                                    |
+| Provisioning steps (env, Convex, auth) | Medium     | Ordered, idempotent, retryable                            |
+| Stable URL per plot                    | Medium     | Port allocation and collision handling                    |
+| Process supervision                    | **High**   | Survive app restarts, capture logs, restart, stop cleanly |
 
-Process supervision is the hard part. `work` solves it with tmux plus a daemon.
-Silvic must decide independently; until it does, the rest cannot be finished.
-**This decision is open.**
-
-Nothing here should break existing `work` users. A repository that already has
-`work.config.js` keeps working, and Silvic reads it rather than demanding
-migration.
+Silvic may detect `work.config.js` as migration context, but it never imports,
+executes, or uses that file as runtime configuration. Instead, Silvic infers a
+native recipe from the repository's package manager, scripts, and provider
+layout. An explicit `silvic.json` always takes precedence.
 
 ## Opinionated, not enforced
 
@@ -61,28 +58,29 @@ One optional file at the repository root. Every field optional.
 
   "plots": {
     // Defaults to a sibling directory: ../<project>.plots
-    "directory": "../syntwin-mono.plots"
+    "directory": "../syntwin-mono.plots",
   },
 
   "commands": {
     // `portless: true` additionally publishes a named .localhost address.
     "web": { "run": "bun dev", "url": true, "autoStart": true },
-    "convex": { "run": "bunx convex dev", "autoStart": true }
+    "convex": { "run": "bunx convex dev", "autoStart": true },
   },
 
   // Ordered, idempotent, retryable. Each step reports what it did.
   "provision": [
     { "run": "bun install" },
     // Team and project are read from the source checkout's CONVEX_DEPLOYMENT
-    // when they are left out. Needs convex 1.34 or newer in the repository.
-    { "convex": { "name": "dev/{plot}" } }
-  ]
+    // when they are left out. Silvic supplies its own compatible Convex CLI.
+    { "convex": { "name": "dev/{plot}" } },
+  ],
 }
 ```
 
-`provision` steps are the extension point. `run` covers everything; named steps
-like `convex` exist because they can report structured results — a deployment
-name Silvic can then display and link.
+`provision` steps are the extension point. `run` covers repository-specific
+tasks; named steps like `convex` are implemented by Silvic because they own an
+isolation contract and can report structured results — a deployment name Silvic
+can then display and link.
 
 ## URLs, and why the default is a port
 
@@ -133,20 +131,29 @@ resume    reconcile what exists, start only what is missing
 ```
 
 Provisioning is separate from starting. A Plot that fails to provision is still
-a Plot — it reports what failed and offers a retry, rather than disappearing.
+a Plot — it reports what failed rather than disappearing. Auto-start commands
+do not run against that half-configured worktree.
+
+Typed provider steps are Silvic-owned. The Convex step copies the source
+environment without its deployment-specific keys, creates and selects a dev
+deployment, creates a deploy key scoped to it, rewrites local URLs, synchronises
+the source deployment's server variables through a protected temporary file,
+and pushes schema/functions once. Its progress is visible without printing
+secret values. Only after every declared provisioning step succeeds does
+Silvic start every command marked `autoStart`.
 
 ## Tearing down
 
-Activity and retention are separate questions. *Is anything running here* is
+Activity and retention are separate questions. _Is anything running here_ is
 already answered by the operational state — Active or Quiet. What teardown deals
-with is *what this Plot still holds, and what releasing it costs*:
+with is _what this Plot still holds, and what releasing it costs_:
 
-| Resource | Cost to keep | Getting it back |
-| -------- | ------------ | --------------- |
-| Processes | a port, some memory | start them again |
-| Worktree | disk | recreate from the branch |
-| Provider deployment | **money** | provision again |
-| Branch | nothing, once pushed | only if it was pushed |
+| Resource            | Cost to keep         | Getting it back          |
+| ------------------- | -------------------- | ------------------------ |
+| Processes           | a port, some memory  | start them again         |
+| Worktree            | disk                 | recreate from the branch |
+| Provider deployment | **money**            | provision again          |
+| Branch              | nothing, once pushed | only if it was pushed    |
 
 So teardown is a ladder rather than a state, each rung reversible at increasing
 cost:
@@ -168,19 +175,17 @@ today:
 - **Convex deployments cannot be deleted.** The CLI offers `select`, `create`
   and `token`, and nothing that removes a deployment. Archiving a Plot therefore
   cannot stop it costing money; Silvic says so and links to the dashboard.
-- **Processes Silvic did not start cannot be stopped**, because there is no
-  supervision yet.
+- **Processes Silvic did not start cannot be stopped safely**, because Silvic
+  does not own their process identity or logs.
 
 Claiming a resource was released when it was not would be worse than leaving it
 to the user, so the plan is honest about which steps are the user's.
 
 ## Open decisions
 
-- **Process supervision.** Detached children, tmux, or a small daemon. Blocks
-  start/stop, logs, and restart.
-- **Where the recipe lives.** Repository file, Silvic settings, or both with the
-  repository winning.
-- **Provisioning secrets.** Silvic holds no credentials today. Any step needing
-  one must borrow an existing CLI's auth, as the GitHub connector borrows `gh`.
+- **Additional provider credentials.** Silvic borrows account authentication
+  from existing CLIs and writes a deployment-scoped Convex key only to the
+  plot's protected local environment. Other providers need equivalent,
+  explicit contracts before Silvic can configure them.
 - **Teardown of paid resources.** Creating a Convex dev deployment per plot has
   a cost. Cleanup must be explicit, listed, and confirmed.

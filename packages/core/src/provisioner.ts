@@ -1,6 +1,3 @@
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
-
 import {
   isConvexStep,
   type PackageManager,
@@ -11,26 +8,24 @@ import {
 } from "@silvic/contracts";
 
 import type { CommandRunner } from "./command-runner";
-
-export interface ProvisionContext {
-  /** The new plot's working directory. */
-  root: string;
-  /** The checkout the plot was branched from. */
-  sourceRoot: string;
-  /** The project's primary checkout, used only when the source has no target. */
-  projectRoot?: string;
-  project: string;
-  plot: string;
-  branch?: string;
-  url?: string;
-  packageManager?: PackageManager;
-}
+import {
+  ConvexProvisioner,
+  convexDeploymentMinimum,
+} from "./convex-provisioner";
+import {
+  provisionEnvironment,
+  type ProvisionContext,
+} from "./provision-environment";
 
 /** How much of a command's output is worth keeping to show a person. */
 export const provisionOutputLimit = 20_000;
 
 export class Provisioner {
-  constructor(private readonly runner: CommandRunner) {}
+  private readonly convexProvisioner: ConvexProvisioner;
+
+  constructor(private readonly runner: CommandRunner) {
+    this.convexProvisioner = new ConvexProvisioner(runner);
+  }
 
   /**
    * Steps run in order and stop at the first failure. A plot that fails to
@@ -52,24 +47,39 @@ export class Provisioner {
     const results: ProvisionResult[] = [];
     for (const [index, step] of steps.entries()) {
       const startedAt = Date.now();
-      const command = await this.resolve(step, context);
+      const command = isConvexStep(step)
+        ? "Silvic isolated Convex environment"
+        : step.run;
       options.onStepStart?.({ index, command });
-      const result = await this.runner.run({
-        executable: "sh",
-        arguments: ["-c", command],
-        cwd: context.root,
-        environment: provisionEnvironment(context),
-        ...(options.signal ? { signal: options.signal } : {}),
-        ...(options.onStepOutput
-          ? {
-              onOutput: (chunk: string) =>
-                options.onStepOutput?.({ index, chunk }),
-            }
-          : {}),
-      });
-      const output = `${result.stdout}${result.stderr}`
-        .trim()
-        .slice(0, provisionOutputLimit);
+      const result: { exitCode: number; output: string } = isConvexStep(step)
+        ? await this.convexProvisioner.run(step, context, {
+            ...(options.signal ? { signal: options.signal } : {}),
+            ...(options.onStepOutput
+              ? {
+                  onOutput: (chunk: string) =>
+                    options.onStepOutput?.({ index, chunk }),
+                }
+              : {}),
+          })
+        : await this.runner
+            .run({
+              executable: "sh",
+              arguments: ["-c", command],
+              cwd: context.root,
+              environment: provisionEnvironment(context),
+              ...(options.signal ? { signal: options.signal } : {}),
+              ...(options.onStepOutput
+                ? {
+                    onOutput: (chunk: string) =>
+                      options.onStepOutput?.({ index, chunk }),
+                  }
+                : {}),
+            })
+            .then((shell) => ({
+              exitCode: shell.exitCode,
+              output: `${shell.stdout}${shell.stderr}`.trim(),
+            }));
+      const output = result.output.slice(0, provisionOutputLimit);
       const diagnosis =
         result.exitCode === 0 ? undefined : provisionDiagnosis(step, output);
       const record: ProvisionResult = {
@@ -86,37 +96,18 @@ export class Provisioner {
     }
     return results;
   }
-
-  /** A typed step becomes the command it stands for; shell steps pass through. */
-  private async resolve(
-    step: ProvisionStep,
-    context: ProvisionContext,
-  ): Promise<string> {
-    if (!isConvexStep(step)) return step.run;
-    const target =
-      step.convex.team && step.convex.project
-        ? { team: step.convex.team, project: step.convex.project }
-        : await readConvexTarget(context.sourceRoot, context.projectRoot);
-    if (!target) {
-      throw new Error(
-        "No Convex team and project set, and none found in the source checkout's .env.local",
-      );
-    }
-    const name = step.convex.name.replaceAll("{plot}", context.plot);
-    const reference = `${target.team}:${target.project}:${name}`;
-    return `${execRunner(context.packageManager)} convex deployment create ${shellQuote(reference)} --type dev --select`;
-  }
 }
 
-/**
- * `convex deployment create` arrived in convex 1.34, but naming the project in
- * the reference — `team:project:dev/plot` — only arrived in 1.40. A plot needs
- * that form: `.env.local` is git-ignored, so a fresh worktree carries no Convex
- * configuration and a CLI that can only read the directory answers "No project
- * configured". Verified against 1.34, 1.35, 1.37 and 1.39, which document only
- * a bare reference, and 1.40 onwards, which document the team and project one.
- */
-const convexDeploymentMinimum = "1.40";
+/** A runtime must never start against a half-configured plot. */
+export function provisionCompleted(
+  steps: readonly ProvisionStep[],
+  results: readonly ProvisionResult[],
+): boolean {
+  return (
+    results.length === steps.length &&
+    results.every((result) => result.exitCode === 0)
+  );
+}
 
 /**
  * Failures Silvic understands better than the tool reporting them. A typed step
@@ -201,67 +192,4 @@ function addPackage(packageManager: PackageManager | undefined): string {
 export function provisionStepLabel(step: ProvisionStep, index: number): string {
   if (step.label) return step.label;
   return isConvexStep(step) ? "Convex deployment" : `Step ${index + 1}`;
-}
-
-/**
- * The convention a Convex project uses to record where its deployments live:
- * `CONVEX_DEPLOYMENT=dev:name # team: slug, project: slug`.
- */
-export async function readConvexTarget(
-  sourceRoot: string,
-  fallbackRoot?: string,
-): Promise<{ team: string; project: string } | undefined> {
-  const roots = fallbackRoot
-    ? new Set([sourceRoot, fallbackRoot])
-    : new Set([sourceRoot]);
-  for (const root of roots) {
-    try {
-      const contents = await readFile(join(root, ".env.local"), "utf8");
-      const line = contents
-        .split(/\r?\n/)
-        .find((candidate) => candidate.startsWith("CONVEX_DEPLOYMENT="));
-      const team = line?.match(/team:\s*([^,\s]+)/)?.[1];
-      const project = line?.match(/project:\s*([^,\s]+)/)?.[1];
-      if (team && project) return { team, project };
-    } catch {
-      // A source without this optional file falls through to the project root.
-    }
-  }
-  return undefined;
-}
-
-function execRunner(packageManager: PackageManager | undefined): string {
-  if (packageManager === "bun") return "bunx";
-  if (packageManager === "pnpm") return "pnpm dlx";
-  if (packageManager === "yarn") return "yarn dlx";
-  return "npx";
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", "'\\''")}'`;
-}
-
-/**
- * `WORK_*` is emitted alongside `SILVIC_*` so setup hooks written for work-cli
- * keep working unchanged. Silvic replaces the tool, not the repositories that
- * already rely on its contract.
- */
-export function provisionEnvironment(
-  context: ProvisionContext,
-): Record<string, string> {
-  const shared: Record<string, string> = {
-    ROOT: context.root,
-    SOURCE_ROOT: context.sourceRoot,
-    PROJECT: context.project,
-    WORKSPACE: context.plot,
-    ...(context.branch ? { BRANCH: context.branch } : {}),
-    ...(context.url ? { URL: context.url } : {}),
-  };
-  const environment: Record<string, string> = { SILVIC_PLOT: context.plot };
-  for (const [key, value] of Object.entries(shared)) {
-    environment[`SILVIC_${key}`] = value;
-    environment[`WORK_${key}`] = value;
-  }
-  if (context.url) environment["WORK_WEB_URL"] = context.url;
-  return environment;
 }

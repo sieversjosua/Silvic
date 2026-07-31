@@ -301,6 +301,30 @@ export function RecipeDialog({
                             }
                           />
                         </label>
+                        <label>
+                          <span className="micro">Expires</span>
+                          <input
+                            className="mono"
+                            value={step.convex.expiration ?? ""}
+                            placeholder="never, or in 7 days"
+                            onChange={(event) =>
+                              patch(index, {
+                                ...step,
+                                convex: {
+                                  ...step.convex,
+                                  expiration:
+                                    event.target.value || undefined,
+                                },
+                              })
+                            }
+                          />
+                        </label>
+                        <p className="micro">
+                          Silvic copies the local environment, creates a scoped
+                          deploy key, syncs server variables, and pushes Convex
+                          once with its own compatible CLI. The repository
+                          dependency is left unchanged.
+                        </p>
                       </div>
                     ) : (
                       <>
@@ -369,8 +393,9 @@ export function RecipeDialog({
                   </div>
                 ))}
                 <p className="recipe-hint">
-                  With <code>SILVIC_*</code> set, and <code>WORK_*</code> too, so
-                  an existing work-cli hook runs unchanged.
+                  Custom commands receive the plot's <code>SILVIC_*</code>,
+                  <code>HOST</code>, and <code>PORT</code> context. Typed
+                  provider steps stay owned by Silvic.
                 </p>
             </section>
 
@@ -586,7 +611,6 @@ export function RecipeDialog({
     </div>
   );
 }
-
 /**
  * Most repositories describe themselves well enough to start from, so the
  * editor offers that rather than opening on a blank page.
