@@ -138,4 +138,27 @@ describe("plotResources", () => {
       "observation:local-context:runtime:node",
     );
   });
+
+  it("keeps coding sessions out of the provider resource list", () => {
+    const resources = plotResources({
+      workspace: {
+        ...workspace,
+        observations: [
+          {
+            connectorId: "local-context",
+            workspaceId: workspace.workspaceId,
+            kind: "session",
+            state: "active",
+            label: "Fix HEIC uploads",
+            detail: "Codex task",
+          },
+        ],
+      },
+      commands: {},
+      processes: [],
+      declared: {},
+    });
+
+    expect(resources).toEqual([]);
+  });
 });

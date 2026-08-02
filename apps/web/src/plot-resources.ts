@@ -43,10 +43,11 @@ export function plotResources({
   const observed = workspace.observations
     .filter(
       (observation) =>
-        observation.kind !== "runtime" ||
-        !observationProcessIds(observation).some((processId) =>
-          supervisedProcessIds.has(processId),
-        ),
+        observation.kind !== "session" &&
+        (observation.kind !== "runtime" ||
+          !observationProcessIds(observation).some((processId) =>
+            supervisedProcessIds.has(processId),
+          )),
     )
     .map(observationResource);
   return [...explicit, ...runtime, ...observed];

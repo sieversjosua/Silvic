@@ -13,10 +13,12 @@ import {
   Moon,
   MoreHorizontal,
   PackageCheck,
+  Play,
   Plus,
   RefreshCw,
   Search,
   SlidersHorizontal,
+  Square,
   Sun,
   Terminal,
   X,
@@ -37,6 +39,7 @@ import type {
   PlotProcess,
   PlotProgressStep,
   PlotProvisioning,
+  PlotResource,
   PlotResourceDefinition,
   ProjectSnapshot,
   ProvisionRemedyId,
@@ -49,10 +52,9 @@ import type {
 import { useAppearance } from "./appearance";
 import { Grove } from "./Grove";
 import { Mark } from "./Mark";
-import { PlotView } from "./PlotView";
 import { HarnessRows, harnessLabel } from "./harnesses";
 import { IssuePicker } from "./IssuePicker";
-import { CodexMark, ConvexMark, HarnessMark } from "./providers";
+import { CodexMark, HarnessMark } from "./providers";
 import { RecipeDialog } from "./RecipeDialog";
 import { TeardownDialog } from "./TeardownDialog";
 import {
@@ -64,6 +66,7 @@ import {
 } from "./state";
 import { concernsBranch, failureMessage } from "./errors";
 import { namedRoutingReady, pollNamedRouting } from "./named-routing";
+import { plotResources } from "./plot-resources";
 import { useSilvic } from "./store";
 import { branchForIssue } from "./task";
 
@@ -100,7 +103,6 @@ export function App() {
   const [showEnvironment, setShowEnvironment] = useState(false);
   const [deliveryWorkspace, setDeliveryWorkspace] =
     useState<WorkspaceSnapshot>();
-  const [plotViewWorkspaceId, setPlotViewWorkspaceId] = useState<string>();
 
   useEffect(() => {
     let dispose: () => void = () => {};
@@ -126,9 +128,6 @@ export function App() {
     activeProjects[0];
   const workspace = project?.workspaces.find(
     (candidate) => candidate.workspaceId === selectedWorkspaceId,
-  );
-  const plotViewWorkspace = project?.workspaces.find(
-    (candidate) => candidate.workspaceId === plotViewWorkspaceId,
   );
   const openWorkspace = useCallback(
     async (path: string, target: HarnessDefinition["id"]) => {
@@ -320,13 +319,13 @@ export function App() {
             key={workspace.workspaceId}
             workspace={workspace}
             commands={commands}
+            declaredResources={declaredResources}
             processes={processes}
             defaultHarness={defaultHarness}
             onSetDefaultHarness={(id) => void setDefaultHarness(id)}
             onOpen={openWorkspace}
             onShip={() => setDeliveryWorkspace(workspace)}
             onProvision={() => setProvisioningPlot(workspace)}
-            onView={() => setPlotViewWorkspaceId(workspace.workspaceId)}
           />
         ) : (
           <div className="inspector-empty">
@@ -341,25 +340,6 @@ export function App() {
           key={provisioningPlot.workspaceId}
           workspace={provisioningPlot}
           onClose={() => setProvisioningPlot(undefined)}
-        />
-      )}
-      {plotViewWorkspace && (
-        <PlotView
-          workspace={plotViewWorkspace}
-          commands={Object.fromEntries(commands)}
-          declaredResources={declaredResources}
-          processes={processes}
-          defaultHarness={defaultHarness}
-          onOpen={openWorkspace}
-          onShip={() => {
-            setDeliveryWorkspace(plotViewWorkspace);
-            setPlotViewWorkspaceId(undefined);
-          }}
-          onProvision={() => {
-            setProvisioningPlot(plotViewWorkspace);
-            setPlotViewWorkspaceId(undefined);
-          }}
-          onClose={() => setPlotViewWorkspaceId(undefined)}
         />
       )}
       {teardownPlot && (
@@ -719,24 +699,24 @@ function AppearanceControl({
 function WorkspaceInspector({
   workspace,
   commands,
+  declaredResources,
   processes,
   defaultHarness,
   onSetDefaultHarness,
   onOpen,
   onShip,
   onProvision,
-  onView,
 }: {
   workspace: WorkspaceSnapshot;
   /** What the recipe says can be run here. */
   commands: readonly (readonly [string, PlotCommand])[];
+  declaredResources: Readonly<Record<string, PlotResourceDefinition>>;
   processes: readonly PlotProcess[];
   defaultHarness: HarnessId;
   onSetDefaultHarness(id: HarnessId): void;
   onOpen(path: string, target: HarnessDefinition["id"]): void;
   onShip(): void;
   onProvision(): void;
-  onView(): void;
 }) {
   const [openMenu, setOpenMenu] = useState(false);
   const state = workspaceState(workspace);
@@ -746,6 +726,19 @@ function WorkspaceInspector({
       Map.groupBy(workspace.observations, (observation) => observation.kind),
     [workspace.observations],
   );
+  const resources = useMemo(
+    () =>
+      plotResources({
+        workspace,
+        commands: Object.fromEntries(commands),
+        processes,
+        declared: declaredResources,
+      }),
+    [workspace, commands, processes, declaredResources],
+  );
+  const preview = resources.find(
+    (resource) => resource.provider === "web" && resource.url,
+  )?.url;
 
   return (
     <>
@@ -757,8 +750,10 @@ function WorkspaceInspector({
             {state.label}
           </span>
         </div>
-        <h2 title={workspace.name}>{workspace.name}</h2>
-        {workspace.branch !== workspace.name && (
+        <h2 title={workspace.task?.title ?? workspace.name}>
+          {workspace.task?.title ?? workspace.name}
+        </h2>
+        {(workspace.task || workspace.branch !== workspace.name) && (
           <p className="inspector-branch mono">
             <GitBranch size={12} />
             {workspace.branch || "Detached"}
@@ -798,19 +793,42 @@ function WorkspaceInspector({
             </>
           )}
         </div>
-        {!workspace.isPrimary && (
+        {preview && (
           <button
             type="button"
-            className="ghost-button inspector-plot-view"
-            onClick={onView}
+            className="ghost-button inspector-preview"
+            onClick={() => void window.silvic.openLink({ url: preview })}
           >
-            <Monitor size={13} />
-            Open Plot view
+            <ExternalLink size={13} />
+            Open preview
           </button>
         )}
       </div>
 
       <div className="inspector-body">
+        {workspace.task && (
+          <Section icon={<GitPullRequest size={12} />} title="Task">
+            {workspace.task.description && (
+              <p className="inspector-task-description">
+                {workspace.task.description}
+              </p>
+            )}
+            {workspace.task.issue && (
+              <button
+                type="button"
+                className="section-action"
+                onClick={() =>
+                  void window.silvic.openLink({
+                    url: workspace.task?.issue?.url ?? "",
+                  })
+                }
+              >
+                GitHub #{workspace.task.issue.number}
+                <ExternalLink size={11} />
+              </button>
+            )}
+          </Section>
+        )}
         <Section icon={<GitBranch size={12} />} title="Code">
           <Field label="Working tree" value={workingTreeLabel(workspace)} />
           <Field
@@ -856,46 +874,23 @@ function WorkspaceInspector({
             </button>
           </Section>
         )}
-        <Section icon={<Terminal size={12} />} title="Runtime">
-          {commands.length === 0 ? (
+        <Section icon={<PackageCheck size={12} />} title="Resources">
+          {resources.length === 0 ? (
             <p className="section-empty">
-              This repository declares no commands to run. Add them to
+              This repository declares no services or commands. Add them to
               <code> silvic.json </code> and they appear here.
             </p>
           ) : (
-            commands.map(([id, command]) => (
-              <PlotCommandRow
-                key={id}
-                path={workspace.path}
-                id={id}
-                command={command}
-                process={processes.find(
-                  (candidate) =>
-                    candidate.plotPath === workspace.path &&
-                    candidate.id === id,
-                )}
+            resources.map((resource) => (
+              <PlotResourceRow
+                key={resource.id}
+                workspace={workspace}
+                resource={resource}
+                processes={processes}
               />
             ))
           )}
-          {(grouped.get("runtime") ?? []).map((observation) => (
-            <Observation
-              key={`${observation.connectorId}:${observation.label}`}
-              observation={observation}
-            />
-          ))}
         </Section>
-        <Observations
-          icon={<ConvexMark size={12} />}
-          title="Deployment"
-          observations={grouped.get("deployment") ?? []}
-          empty="No deployment attached"
-        />
-        <Observations
-          icon={<GitPullRequest size={12} />}
-          title="Review"
-          observations={grouped.get("review") ?? []}
-          empty="No pull request"
-        />
         <Observations
           icon={<CodexMark size={12} />}
           title="Sessions"
@@ -930,72 +925,123 @@ function shortDate(iso: string): string {
     : date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-/**
- * A command the recipe declares, and the state Silvic has it in. Starting is
- * the point: an address nothing serves is a promise the tool did not keep.
- */
-function PlotCommandRow({
-  path,
-  id,
-  command,
-  process,
+function PlotResourceRow({
+  workspace,
+  resource,
+  processes,
 }: {
-  path: string;
-  id: string;
-  command: PlotCommand;
-  process: PlotProcess | undefined;
+  workspace: WorkspaceSnapshot;
+  resource: PlotResource;
+  processes: readonly PlotProcess[];
 }) {
   const [working, setWorking] = useState(false);
   const [failure, setFailure] = useState<string>();
-  const running = process?.status === "running";
-  const address = process?.url;
-  const act = (start: boolean) => {
+  const [logs, setLogs] = useState<string>();
+  const running = processes.some(
+    (process) =>
+      process.plotPath === workspace.path &&
+      process.id === resource.commandId &&
+      process.status === "running",
+  );
+  const open = (url: string) =>
+    void window.silvic
+      .openLink({ url })
+      .catch((error: unknown) => setFailure(failureMessage(error)));
+  const act = () => {
+    const id = resource.commandId;
+    if (!id) return;
     setWorking(true);
     setFailure(undefined);
-    const request = { path, id };
+    const request = { path: workspace.path, id };
     void (
-      start
-        ? window.silvic.startPlotCommand(request)
-        : window.silvic.stopPlotCommand(request)
+      running
+        ? window.silvic.stopPlotCommand(request)
+        : window.silvic.startPlotCommand(request)
     )
       .catch((error: unknown) => setFailure(failureMessage(error)))
       .finally(() => setWorking(false));
   };
+  const readLogs = () => {
+    const id = resource.commandId;
+    if (!id) return;
+    setFailure(undefined);
+    void window.silvic
+      .readPlotCommandOutput({ path: workspace.path, id })
+      .then((output) => setLogs(logs === undefined ? output : undefined))
+      .catch((error: unknown) => setFailure(failureMessage(error)));
+  };
 
   return (
-    <div className="command-row" data-running={running || undefined}>
-      <i className="dot" data-tone={running ? "active" : "quiet"} />
-      <div className="command-body">
-        <strong>{id}</strong>
-        {running && address ? (
-          <button
-            type="button"
-            className="command-url mono truncate"
-            title={address}
-            onClick={() => void window.silvic.openLink({ url: address })}
-          >
-            {address.replace(/^https?:\/\//, "")}
-          </button>
-        ) : (
-          <span
-            className="command-run mono truncate"
-            data-note={process?.advice !== undefined || undefined}
-            title={failure ?? process?.advice ?? command.run}
-          >
-            {failure ?? process?.advice ?? command.run}
+    <div className="sidebar-resource" data-state={resource.state}>
+      <div className="sidebar-resource-main">
+        <i className="dot" data-tone={resource.state} />
+        <div className="sidebar-resource-copy">
+          <strong>{resource.label}</strong>
+          <span className="truncate">
+            {resource.provider} · {resource.kind} · {resource.isolation}
           </span>
-        )}
+        </div>
+        <div className="sidebar-resource-actions">
+          {(resource.url || resource.dashboardUrl) && (
+            <button
+              type="button"
+              aria-label={`Open ${resource.label}`}
+              title={resource.url ? "Open" : "Open dashboard"}
+              onClick={() => open(resource.url ?? resource.dashboardUrl ?? "")}
+            >
+              <ExternalLink size={11} />
+            </button>
+          )}
+          {resource.commandId && (
+            <button
+              type="button"
+              aria-label={`${logs === undefined ? "Show" : "Hide"} ${resource.label} logs`}
+              title="Logs"
+              onClick={readLogs}
+            >
+              <Terminal size={11} />
+            </button>
+          )}
+          {resource.commandId && (
+            <button
+              type="button"
+              aria-label={`${running ? "Stop" : "Start"} ${resource.label}`}
+              title={running ? "Stop" : "Start"}
+              onClick={act}
+              disabled={working}
+            >
+              {running ? <Square size={10} /> : <Play size={10} />}
+            </button>
+          )}
+        </div>
       </div>
-      <button
-        type="button"
-        className="ghost-button command-action"
-        disabled={working}
-        onClick={() => act(!running)}
-      >
-        {running ? "Stop" : "Start"}
-      </button>
+      <p className="sidebar-resource-detail mono truncate">
+        {failure ?? resource.detail ?? resourceStateLabel(resource.state)}
+      </p>
+      {logs !== undefined && (
+        <pre className="sidebar-resource-logs mono">
+          {logs || "No output yet"}
+        </pre>
+      )}
     </div>
   );
+}
+
+function resourceStateLabel(state: PlotResource["state"]): string {
+  switch (state) {
+    case "active":
+      return "Running";
+    case "ready":
+      return "Ready";
+    case "waiting":
+      return "Waiting";
+    case "attention":
+      return "Needs attention";
+    case "quiet":
+      return "Stopped";
+    default:
+      return "Status unknown";
+  }
 }
 
 function Section({

@@ -42,8 +42,9 @@ See [docs/PLOTS.md](docs/PLOTS.md) for the model and the decisions behind it.
 - GitHub pull requests and checks through your existing `gh` login
 - Convex deployments, localhost runtimes and Codex sessions surfaced per plot,
   each opening in the browser where it has an address
-- A dedicated Plot view that brings the task, branch, preview, logs,
-  deployments and every attached service into one operational screen
+- A persistent Plot inspector in the sidebar that brings the task, branch,
+  preview, logs, deployments and every attached service together without
+  leaving the grove
 
 **Creating it**
 
@@ -151,7 +152,7 @@ coupling it to the UI. Architecture and product intent live in
 ## Status
 
 Early. Discovery, issue-driven creation, naming, the canvas, recipes, the
-dedicated Plot view, provisioning and supervised multi-service runtimes form
+Plot inspector, provisioning and supervised multi-service runtimes form
 the current foundation. More provider-specific provisioning and resource
 teardown are next.
 
