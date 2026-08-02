@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { normalize } from "node:path";
 
-import type { SilvicSnapshot, WorkspaceSnapshot } from "@silvic/contracts";
+import type {
+  SilvicSnapshot,
+  TaskContext,
+  WorkspaceSnapshot,
+} from "@silvic/contracts";
 
 import { resolveDisplayName } from "./work-cli-names";
 
@@ -13,6 +17,7 @@ export interface WorkspaceRecord {
   parentWorkspaceId?: string;
   displayName?: string;
   purpose?: string;
+  task?: TaskContext;
 }
 
 export interface ReconciledWorkspaces {
@@ -128,6 +133,7 @@ function stableWorkspace(
       gitName: workspace.name,
     }),
     ...(record.purpose ? { purpose: record.purpose } : {}),
+    ...(record.task ? { task: record.task } : {}),
     observations: workspace.observations.map((observation) => ({
       ...observation,
       workspaceId: stableId,

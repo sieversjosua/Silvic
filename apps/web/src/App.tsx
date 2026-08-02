@@ -26,15 +26,18 @@ import type {
   AppearancePreference,
   ConnectorFailure,
   ConnectorObservation,
+  CreateEnvironmentRequest,
   DeliveryDraft,
   HarnessDefinition,
   HarnessId,
+  IssueSummary,
   PlotCommand,
   PlotCreationResult,
   PlotPreview,
   PlotProcess,
   PlotProgressStep,
   PlotProvisioning,
+  PlotResourceDefinition,
   ProjectSnapshot,
   ProvisionRemedyId,
   ProvisionResult,
@@ -46,7 +49,9 @@ import type {
 import { useAppearance } from "./appearance";
 import { Grove } from "./Grove";
 import { Mark } from "./Mark";
+import { PlotView } from "./PlotView";
 import { HarnessRows, harnessLabel } from "./harnesses";
+import { IssuePicker } from "./IssuePicker";
 import { CodexMark, ConvexMark, HarnessMark } from "./providers";
 import { RecipeDialog } from "./RecipeDialog";
 import { TeardownDialog } from "./TeardownDialog";
@@ -60,7 +65,7 @@ import {
 import { concernsBranch, failureMessage } from "./errors";
 import { namedRoutingReady, pollNamedRouting } from "./named-routing";
 import { useSilvic } from "./store";
-
+import { branchForIssue } from "./task";
 
 /**
  * Each row can be made the default for the Open button. The control sits on the
@@ -95,6 +100,7 @@ export function App() {
   const [showEnvironment, setShowEnvironment] = useState(false);
   const [deliveryWorkspace, setDeliveryWorkspace] =
     useState<WorkspaceSnapshot>();
+  const [plotViewWorkspaceId, setPlotViewWorkspaceId] = useState<string>();
 
   useEffect(() => {
     let dispose: () => void = () => {};
@@ -121,6 +127,9 @@ export function App() {
   const workspace = project?.workspaces.find(
     (candidate) => candidate.workspaceId === selectedWorkspaceId,
   );
+  const plotViewWorkspace = project?.workspaces.find(
+    (candidate) => candidate.workspaceId === plotViewWorkspaceId,
+  );
   const openWorkspace = useCallback(
     async (path: string, target: HarnessDefinition["id"]) => {
       await window.silvic.openWorkspace({ path, target });
@@ -132,16 +141,25 @@ export function App() {
   const [commands, setCommands] = useState<
     readonly (readonly [string, PlotCommand])[]
   >([]);
+  const [declaredResources, setDeclaredResources] = useState<
+    Readonly<Record<string, PlotResourceDefinition>>
+  >({});
   useEffect(() => {
     if (!project) return;
     let current = true;
     void window.silvic
       .getRecipe(project.id)
       .then((document) => {
-        if (current) setCommands(Object.entries(document.recipe.commands ?? {}));
+        if (current) {
+          setCommands(Object.entries(document.recipe.commands ?? {}));
+          setDeclaredResources(document.recipe.resources ?? {});
+        }
       })
       .catch(() => {
-        if (current) setCommands([]);
+        if (current) {
+          setCommands([]);
+          setDeclaredResources({});
+        }
       });
     return () => {
       current = false;
@@ -205,7 +223,11 @@ export function App() {
         <div className="rail-foot">
           <AppearanceControl value={preference} onChange={setPreference} />
           <KeepRunningToggle />
-          <button type="button" className="rail-action" onClick={() => void addRoot()}>
+          <button
+            type="button"
+            className="rail-action"
+            onClick={() => void addRoot()}
+          >
             <Plus size={13} />
             Add location
           </button>
@@ -245,7 +267,11 @@ export function App() {
                     placeholder="Find in project"
                   />
                   {query && (
-                    <button type="button" aria-label="Clear search" onClick={() => setQuery("")}>
+                    <button
+                      type="button"
+                      aria-label="Clear search"
+                      onClick={() => setQuery("")}
+                    >
                       <X size={11} />
                     </button>
                   )}
@@ -273,7 +299,7 @@ export function App() {
               project={project}
               query={query}
               appearance={appearance}
-                selectedWorkspaceId={workspace?.workspaceId}
+              selectedWorkspaceId={workspace?.workspaceId}
               onSelect={selectWorkspace}
               onOpen={openWorkspace}
               onEditRecipe={() => setRecipeProject(project)}
@@ -282,7 +308,6 @@ export function App() {
               onNewPlot={() => setShowEnvironment(true)}
               onTeardown={setTeardownPlot}
             />
-
           </>
         ) : (
           <EmptyState onAdd={() => void addRoot()} loading={loading} />
@@ -301,6 +326,7 @@ export function App() {
             onOpen={openWorkspace}
             onShip={() => setDeliveryWorkspace(workspace)}
             onProvision={() => setProvisioningPlot(workspace)}
+            onView={() => setPlotViewWorkspaceId(workspace.workspaceId)}
           />
         ) : (
           <div className="inspector-empty">
@@ -315,6 +341,25 @@ export function App() {
           key={provisioningPlot.workspaceId}
           workspace={provisioningPlot}
           onClose={() => setProvisioningPlot(undefined)}
+        />
+      )}
+      {plotViewWorkspace && (
+        <PlotView
+          workspace={plotViewWorkspace}
+          commands={Object.fromEntries(commands)}
+          declaredResources={declaredResources}
+          processes={processes}
+          defaultHarness={defaultHarness}
+          onOpen={openWorkspace}
+          onShip={() => {
+            setDeliveryWorkspace(plotViewWorkspace);
+            setPlotViewWorkspaceId(undefined);
+          }}
+          onProvision={() => {
+            setProvisioningPlot(plotViewWorkspace);
+            setPlotViewWorkspaceId(undefined);
+          }}
+          onClose={() => setPlotViewWorkspaceId(undefined)}
         />
       )}
       {teardownPlot && (
@@ -680,6 +725,7 @@ function WorkspaceInspector({
   onOpen,
   onShip,
   onProvision,
+  onView,
 }: {
   workspace: WorkspaceSnapshot;
   /** What the recipe says can be run here. */
@@ -690,12 +736,14 @@ function WorkspaceInspector({
   onOpen(path: string, target: HarnessDefinition["id"]): void;
   onShip(): void;
   onProvision(): void;
+  onView(): void;
 }) {
   const [openMenu, setOpenMenu] = useState(false);
   const state = workspaceState(workspace);
   const changes = localChangeCount(workspace);
   const grouped = useMemo(
-    () => Map.groupBy(workspace.observations, (observation) => observation.kind),
+    () =>
+      Map.groupBy(workspace.observations, (observation) => observation.kind),
     [workspace.observations],
   );
 
@@ -750,14 +798,33 @@ function WorkspaceInspector({
             </>
           )}
         </div>
+        {!workspace.isPrimary && (
+          <button
+            type="button"
+            className="ghost-button inspector-plot-view"
+            onClick={onView}
+          >
+            <Monitor size={13} />
+            Open Plot view
+          </button>
+        )}
       </div>
 
       <div className="inspector-body">
         <Section icon={<GitBranch size={12} />} title="Code">
           <Field label="Working tree" value={workingTreeLabel(workspace)} />
-          <Field label="Upstream" value={workspace.git.upstream ?? "Not configured"} />
-          <Field label="Ahead / behind" value={`${workspace.git.ahead} / ${workspace.git.behind}`} />
-          <Field label="Revision" value={workspace.git.revision?.slice(0, 9) ?? "Unknown"} />
+          <Field
+            label="Upstream"
+            value={workspace.git.upstream ?? "Not configured"}
+          />
+          <Field
+            label="Ahead / behind"
+            value={`${workspace.git.ahead} / ${workspace.git.behind}`}
+          />
+          <Field
+            label="Revision"
+            value={workspace.git.revision?.slice(0, 9) ?? "Unknown"}
+          />
           {(changes > 0 || workspace.git.ahead > 0) && (
             <button type="button" className="section-action" onClick={onShip}>
               Review &amp; ship
@@ -773,7 +840,9 @@ function WorkspaceInspector({
             {workspace.provisioning?.status === "failed" && (
               <Field
                 label="Stopped at"
-                value={failedStepLabel(workspace.provisioning) ?? "Unknown step"}
+                value={
+                  failedStepLabel(workspace.provisioning) ?? "Unknown step"
+                }
               />
             )}
             <button
@@ -884,9 +953,10 @@ function PlotCommandRow({
     setWorking(true);
     setFailure(undefined);
     const request = { path, id };
-    void (start
-      ? window.silvic.startPlotCommand(request)
-      : window.silvic.stopPlotCommand(request)
+    void (
+      start
+        ? window.silvic.startPlotCommand(request)
+        : window.silvic.stopPlotCommand(request)
     )
       .catch((error: unknown) => setFailure(failureMessage(error)))
       .finally(() => setWorking(false));
@@ -1113,22 +1183,17 @@ function NewPlotDialog({
   onCancel(): void;
   onOpen(path: string, target: HarnessDefinition["id"]): void;
   onSetDefaultHarness(id: HarnessId): void;
-  onCreate(request: {
-    sourcePath: string;
-    branch: string;
-    mode: "worktree" | "clone";
-    adopt?: string;
-  }): Promise<PlotCreationResult>;
+  onCreate(request: CreateEnvironmentRequest): Promise<PlotCreationResult>;
 }) {
   // What a plot is cut from. It defaults to the project's own checkout: the
   // ways in here are all project-level, and inheriting whichever card happened
   // to be selected made parentage a thing that happened to you.
-  const trunk =
-    sources.find((candidate) => candidate.isPrimary) ?? sources[0];
+  const trunk = sources.find((candidate) => candidate.isPrimary) ?? sources[0];
   const [sourceId, setSourceId] = useState(trunk?.workspaceId ?? "");
   const source =
     sources.find((candidate) => candidate.workspaceId === sourceId) ?? trunk;
   const [branch, setBranch] = useState("");
+  const [issue, setIssue] = useState<IssueSummary>();
   const [mode, setMode] = useState<"worktree" | "clone">("worktree");
   const [creating, setCreating] = useState(false);
   const [repairing, setRepairing] = useState(false);
@@ -1202,7 +1267,8 @@ function NewPlotDialog({
   useEffect(
     () =>
       window.silvic.onPlotProgress((progress) => {
-        if (progress.branch === creatingBranch.current) setSteps(progress.steps);
+        if (progress.branch === creatingBranch.current)
+          setSteps(progress.steps);
       }),
     [],
   );
@@ -1286,13 +1352,7 @@ function NewPlotDialog({
         resolve?.();
       }
     };
-  }, [
-    settingUpRouting,
-    preview?.advice,
-    wanted,
-    projectId,
-    applyPreview,
-  ]);
+  }, [settingUpRouting, preview?.advice, wanted, projectId, applyPreview]);
 
   const setupNamedRouting = () => {
     setFailure(undefined);
@@ -1335,9 +1395,7 @@ function NewPlotDialog({
       void window.silvic
         .provisionPlot({ path: result.plot.path, remedy })
         .then((provision) => setResult({ ...result, provision }))
-        .catch((error: unknown) =>
-          setFailure(failureMessage(error)),
-        )
+        .catch((error: unknown) => setFailure(failureMessage(error)))
         .finally(() => {
           creatingBranch.current = undefined;
           setRepairing(false);
@@ -1402,7 +1460,9 @@ function NewPlotDialog({
                   label={name}
                   value={command.run}
                   display={
-                    command.url ? `${command.run}  → serves the address` : command.run
+                    command.url
+                      ? `${command.run}  → serves the address`
+                      : command.run
                   }
                 />
               ))}
@@ -1437,7 +1497,9 @@ function NewPlotDialog({
                     <i className="dot" data-tone="ready" />
                     <strong>{step.label}</strong>
                     <i className="field-leader" />
-                    <span className="mono">{secondsLabel(step.durationMs)}</span>
+                    <span className="mono">
+                      {secondsLabel(step.durationMs)}
+                    </span>
                   </li>
                 ))}
               </ul>
@@ -1490,7 +1552,10 @@ function NewPlotDialog({
               </button>
               {openMenu && (
                 <>
-                  <div className="menu-scrim" onClick={() => setOpenMenu(false)} />
+                  <div
+                    className="menu-scrim"
+                    onClick={() => setOpenMenu(false)}
+                  />
                   <div className="menu">
                     <HarnessRows
                       defaultHarness={defaultHarness}
@@ -1539,11 +1604,22 @@ function NewPlotDialog({
             branch: requested,
             mode,
             ...(adopt ? { adopt: adopt.ref } : {}),
+            ...(issue
+              ? {
+                  task: {
+                    title: issue.title,
+                    ...(issue.body ? { description: issue.body } : {}),
+                    issue: {
+                      ...issue,
+                      labels: [...issue.labels],
+                      assignees: [...issue.assignees],
+                    },
+                  },
+                }
+              : {}),
           })
             .then(setResult)
-            .catch((error: unknown) =>
-              setFailure(failureMessage(error)),
-            )
+            .catch((error: unknown) => setFailure(failureMessage(error)))
             .finally(() => {
               creatingBranch.current = undefined;
               setCreating(false);
@@ -1559,6 +1635,23 @@ function NewPlotDialog({
           repository's schema and functions. “Create plot” confirms those
           provider changes.
         </p>
+        <div className="task-source">
+          <p className="micro">Start from</p>
+          <IssuePicker
+            projectId={projectId ?? ""}
+            selected={issue}
+            disabled={creating || !projectId}
+            onSelect={(next) => {
+              setIssue(next);
+              if (next) {
+                setBranch(branchForIssue(next));
+                setAdopt(undefined);
+                setFailure(undefined);
+                setSteps([]);
+              }
+            }}
+          />
+        </div>
         {sources.length > 1 && (
           <label className="dialog-field">
             <span className="micro">Branch from</span>
@@ -1622,7 +1715,11 @@ function NewPlotDialog({
           data-taken={(adopt !== undefined && !branchFailure) || undefined}
           data-refused={branchFailure !== undefined || undefined}
         >
-          {branchFailure ? <AlertTriangle size={11} /> : <GitBranch size={11} />}
+          {branchFailure ? (
+            <AlertTriangle size={11} />
+          ) : (
+            <GitBranch size={11} />
+          )}
           {branchFailure ? (
             <span>{branchFailure}</span>
           ) : adopt ? (
@@ -1648,22 +1745,22 @@ function NewPlotDialog({
           )}
         </p>
         {openable.length > 0 && (
-            <div className="branch-candidates">
-              <p className="micro">
-                Or take up one that exists
-                <span className="micro-value">
-                  {wanted === ""
-                    ? openable.length
-                    : `${candidates.length} of ${openable.length}`}
-                </span>
-              </p>
-              {/* Sized by what could be listed, not by what the typing has
+          <div className="branch-candidates">
+            <p className="micro">
+              Or take up one that exists
+              <span className="micro-value">
+                {wanted === ""
+                  ? openable.length
+                  : `${candidates.length} of ${openable.length}`}
+              </span>
+            </p>
+            {/* Sized by what could be listed, not by what the typing has
                   left, so filtering empties the box instead of resizing the
                   dialog under the field being typed in. */}
-              <div
-                className="branch-candidate-list"
-                style={{ height: candidateListHeight(openable.length) }}
-              >
+            <div
+              className="branch-candidate-list"
+              style={{ height: candidateListHeight(openable.length) }}
+            >
               {candidates.length === 0 && (
                 <p className="candidates-empty">
                   Nothing here matches. <span className="mono">{wanted}</span>{" "}
@@ -1691,8 +1788,8 @@ function NewPlotDialog({
                   )}
                 </button>
               ))}
-              </div>
             </div>
+          </div>
         )}
         <fieldset className="choices" disabled={creating}>
           <legend className="micro">Location</legend>
@@ -1737,7 +1834,9 @@ function NewPlotDialog({
             </button>
           </div>
         )}
-        {steps.length > 0 && <ProgressSteps steps={steps} settled={!creating} />}
+        {steps.length > 0 && (
+          <ProgressSteps steps={steps} settled={!creating} />
+        )}
         {previewFailure && (
           <div className="routing-setup">
             <p className="dialog-error">{previewFailure}</p>
@@ -1870,9 +1969,7 @@ function ProvisionDialog({
     void window.silvic
       .provisionPlot({ path: workspace.path, ...(remedy ? { remedy } : {}) })
       .then(setResults)
-      .catch((error: unknown) =>
-        setFailure(failureMessage(error)),
-      )
+      .catch((error: unknown) => setFailure(failureMessage(error)))
       .finally(() => setRunning(false));
   };
 
@@ -1884,7 +1981,11 @@ function ProvisionDialog({
         onMouseDown={(event) => event.stopPropagation()}
       >
         <p className="micro">
-          {running ? "Provisioning" : failed ? "Provisioning failed" : "Provisioning"}
+          {running
+            ? "Provisioning"
+            : failed
+              ? "Provisioning failed"
+              : "Provisioning"}
         </p>
         <h2>{workspace.name}</h2>
         <p className="dialog-copy">
@@ -1996,9 +2097,7 @@ function DeliveryDialog({
           }));
         }
       })
-      .catch((error) =>
-        setFailure(failureMessage(error)),
-      );
+      .catch((error) => setFailure(failureMessage(error)));
   }, [workspace.path]);
 
   const generate = async () => {
@@ -2148,7 +2247,9 @@ function EmptyState({ onAdd, loading }: { onAdd(): void; loading: boolean }) {
         <Mark size={30} />
       </span>
       <h1>{loading ? "Surveying your projects…" : "Start with a project"}</h1>
-      <p>Choose a repository, or a folder containing the projects you work on.</p>
+      <p>
+        Choose a repository, or a folder containing the projects you work on.
+      </p>
       {!loading && (
         <button type="button" className="primary-button" onClick={onAdd}>
           <Plus size={13} /> Add projects

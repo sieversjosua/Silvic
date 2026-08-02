@@ -66,6 +66,28 @@ One optional file at the repository root. Every field optional.
     // Set `portless: false` to keep only the stable localhost port.
     "web": { "run": "bun dev", "url": true, "autoStart": true },
     "convex": { "run": "bunx convex dev", "autoStart": true },
+    "agent": { "run": "bun run agent:dev", "autoStart": true },
+  },
+
+  // Services shown in the Plot view. A command links live state and logs.
+  "resources": {
+    "agent": {
+      "provider": "livekit",
+      "kind": "agent",
+      "isolation": "shared",
+      "command": "agent",
+    },
+    "payments": {
+      "provider": "stripe",
+      "kind": "payments",
+      "isolation": "namespaced",
+      "dashboardUrl": "https://dashboard.stripe.com/test/events",
+    },
+    "auth": {
+      "provider": "workos",
+      "kind": "auth",
+      "isolation": "shared",
+    },
   },
 
   // Ordered, idempotent, retryable. Each step reports what it did.
@@ -78,10 +100,23 @@ One optional file at the repository root. Every field optional.
 }
 ```
 
+When no explicit recipe exists, Silvic also recognises LiveKit, Stripe,
+Cloudflare/Wrangler, Vercel, Clerk and WorkOS packages or scripts. A matching
+long-running script becomes a supervised command; every detected provider
+becomes a visible resource. Detection never reads credential values.
+
 `provision` steps are the extension point. `run` covers repository-specific
 tasks; named steps like `convex` are implemented by Silvic because they own an
 isolation contract and can report structured results — a deployment name Silvic
 can then display and link.
+
+`resources` describe operational truth rather than pretending every provider
+has the same API. `isolated` means one resource per Plot, `namespaced` means a
+shared provider account with Plot-specific names or events, `shared` means the
+Plot uses an existing service, and `manual` means Silvic can display and link it
+but cannot configure it. Convex provisioning remains typed and Silvic-owned;
+the other provider entries are currently visibility, links and process
+supervision where a command is attached.
 
 ## Stable named URLs
 

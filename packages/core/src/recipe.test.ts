@@ -42,11 +42,19 @@ describe("readRecipe", () => {
     expect(recipe.configured).toBe(false);
   });
 
-  it("reads commands and ordered provisioning steps", async () => {
+  it("reads commands, resources and ordered provisioning steps", async () => {
     const root = await repository({
       project: "SynTwin Mono",
       plots: { directory: "../elsewhere" },
       commands: { web: { run: "bun dev", url: true, autoStart: true } },
+      resources: {
+        auth: {
+          provider: "workos",
+          kind: "auth",
+          isolation: "shared",
+          dashboardUrl: "https://dashboard.workos.com/",
+        },
+      },
       provision: [
         { run: "bun install", label: "Install dependencies" },
         { run: "bun scripts/work-setup.ts" },
@@ -61,6 +69,12 @@ describe("readRecipe", () => {
       run: "bun dev",
       url: true,
       autoStart: true,
+    });
+    expect(recipe.resources["auth"]).toEqual({
+      provider: "workos",
+      kind: "auth",
+      isolation: "shared",
+      dashboardUrl: "https://dashboard.workos.com/",
     });
     expect(recipe.provision).toHaveLength(2);
     expect(recipe.configured).toBe(true);

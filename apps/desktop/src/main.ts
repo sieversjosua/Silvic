@@ -18,7 +18,10 @@ import {
 import Store from "electron-store";
 
 import { convexConnector } from "@silvic/connector-convex";
-import { createGitHubConnector } from "@silvic/connector-github";
+import {
+  createGitHubConnector,
+  listGitHubIssues,
+} from "@silvic/connector-github";
 import { harnessById } from "@silvic/connector-harnesses";
 import { createLocalContextConnector } from "@silvic/connector-local";
 import { createWorkCliConnector } from "@silvic/connector-work-cli";
@@ -28,6 +31,7 @@ import {
   harnessIdSchema,
   deliveryExecuteRequestSchema,
   ipcChannels,
+  issueListRequestSchema,
   openLinkRequestSchema,
   openWorkspaceRequestSchema,
   projectActivationRequestSchema,
@@ -376,10 +380,19 @@ function registerIpc(): void {
     assertTrustedSender(event);
     return openWorkspace(openWorkspaceRequestSchema.parse(request));
   });
+  ipcMain.handle(ipcChannels.issuesList, async (event, request: unknown) => {
+    assertTrustedSender(event);
+    const parsed = issueListRequestSchema.parse(request);
+    return listGitHubIssues(
+      runner,
+      knownProjectRoot(parsed.projectId),
+      parsed.query,
+    );
+  });
   ipcMain.handle(ipcChannels.linkOpen, async (event, request: unknown) => {
     assertTrustedSender(event);
     const { url } = openLinkRequestSchema.parse(request);
-    await shell.openExternal(knownObservationUrl(url));
+    await shell.openExternal(await knownLinkUrl(url));
   });
   ipcMain.handle(ipcChannels.projectsActiveGet, (event) => {
     assertTrustedSender(event);
@@ -705,6 +718,9 @@ async function createEnvironment(
         branch: request.branch,
         parentWorkspaceId: source.workspaceId,
         displayName: request.branch,
+        ...(request.task
+          ? { purpose: request.task.title, task: request.task }
+          : {}),
       },
     ]);
     settings.set("plotPorts", {
@@ -1080,9 +1096,7 @@ async function requireNamedRouting(address: PlotAddress): Promise<void> {
 }
 
 /** Short-lived because the one-time proxy setup may finish while Silvic is open. */
-let portlessCheck:
-  | { checkedAt: number; result: Promise<boolean> }
-  | undefined;
+let portlessCheck: { checkedAt: number; result: Promise<boolean> } | undefined;
 function portlessAvailable(): Promise<boolean> {
   if (portlessCheck && Date.now() - portlessCheck.checkedAt < 1_500) {
     return portlessCheck.result;
@@ -1233,20 +1247,34 @@ async function openWorkspace(request: OpenWorkspaceRequest): Promise<void> {
  * Only links a connector actually reported can be opened, so the renderer can
  * never hand the browser an arbitrary address.
  */
-function knownObservationUrl(url: string): string {
+async function knownLinkUrl(url: string): Promise<string> {
   const known =
     latestSnapshot.projects.some(
       (project) =>
         project.remoteUrl === url ||
-        project.workspaces.some((workspace) =>
-          workspace.observations.some((observation) => observation.url === url),
+        project.workspaces.some(
+          (workspace) =>
+            workspace.task?.issue?.url === url ||
+            workspace.observations.some(
+              (observation) => observation.url === url,
+            ),
         ),
     ) ||
     // An address Silvic published itself by starting a command. It was never
     // observed, because it exists on Silvic's say-so.
     supervisor.list().some((entry) => entry.url === url);
-  if (!known) throw new Error("Silvic can only open a discovered link");
-  return url;
+  if (known) return url;
+  for (const project of latestSnapshot.projects) {
+    const recipe = await readRecipe(project.rootPath);
+    if (
+      Object.values(recipe.resources).some(
+        (resource) => resource.url === url || resource.dashboardUrl === url,
+      )
+    ) {
+      return url;
+    }
+  }
+  throw new Error("Silvic can only open a discovered or declared link");
 }
 
 function knownWorkspace(path: string) {

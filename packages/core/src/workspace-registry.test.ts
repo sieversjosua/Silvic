@@ -5,6 +5,48 @@ import type { SilvicSnapshot } from "@silvic/contracts";
 import { WorkspaceRegistry } from "./workspace-registry";
 
 describe("WorkspaceRegistry", () => {
+  it("keeps the Issue that explains why a Plot exists", () => {
+    const registry = new WorkspaceRegistry();
+    const snapshot = fixture("/projects/app-feature");
+    const feature = snapshot.projects[0]?.workspaces.find(
+      (workspace) => !workspace.isPrimary,
+    );
+    if (!feature) throw new Error("Fixture has no feature Plot");
+
+    const result = registry.reconcile(snapshot, [
+      {
+        workspaceId: "plot-184",
+        projectId: feature.projectId,
+        path: feature.path,
+        branch: feature.branch,
+        purpose: "Fix HEIC uploads",
+        task: {
+          title: "Fix HEIC uploads",
+          description: "HEIC images fail during conversion.",
+          issue: {
+            provider: "github",
+            number: 184,
+            title: "Fix HEIC uploads",
+            body: "HEIC images fail during conversion.",
+            url: "https://github.com/example/app/issues/184",
+            labels: ["bug"],
+            assignees: ["josua"],
+          },
+        },
+      },
+    ]);
+
+    expect(
+      result.snapshot.projects[0]?.workspaces.find(
+        (workspace) => workspace.workspaceId === "plot-184",
+      )?.task,
+    ).toEqual({
+      title: "Fix HEIC uploads",
+      description: "HEIC images fail during conversion.",
+      issue: expect.objectContaining({ number: 184, provider: "github" }),
+    });
+  });
+
   it("keeps a Workspace identity after a path move and preserves recorded lineage", () => {
     const registry = new WorkspaceRegistry();
     const snapshot = fixture("/projects/app-feature");

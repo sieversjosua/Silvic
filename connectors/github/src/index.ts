@@ -1,4 +1,8 @@
-import type { Connector, ConnectorObservation } from "@silvic/contracts";
+import type {
+  Connector,
+  ConnectorObservation,
+  IssueSummary,
+} from "@silvic/contracts";
 import type { CommandRunner } from "@silvic/core";
 
 interface PullRequestResponse {
@@ -12,6 +16,95 @@ interface PullRequestResponse {
     conclusion?: string;
     state?: string;
   }[];
+}
+
+interface IssueResponse {
+  number: number;
+  title: string;
+  body: string;
+  url: string;
+  labels: readonly { name: string }[];
+  assignees: readonly { login: string }[];
+}
+
+export async function listGitHubIssues(
+  runner: CommandRunner,
+  cwd: string,
+  query = "",
+): Promise<readonly IssueSummary[]> {
+  const arguments_ = [
+    "issue",
+    "list",
+    "--state",
+    "open",
+    "--limit",
+    "50",
+    "--json",
+    "number,title,body,url,labels,assignees",
+    ...(query.trim() ? ["--search", query.trim()] : []),
+  ];
+  const result = await runner.run({
+    executable: "gh",
+    arguments: arguments_,
+    cwd,
+  });
+  if (result.exitCode !== 0) {
+    throw new Error(
+      result.stderr.trim() ||
+        result.stdout.trim() ||
+        "GitHub CLI is unavailable",
+    );
+  }
+  return parseIssues(result.stdout).map((issue) => ({
+    provider: "github",
+    number: issue.number,
+    title: issue.title,
+    body: issue.body,
+    url: issue.url,
+    labels: issue.labels.map((label) => label.name),
+    assignees: issue.assignees.map((assignee) => assignee.login),
+  }));
+}
+
+function parseIssues(output: string): readonly IssueResponse[] {
+  const value: unknown = JSON.parse(output);
+  if (!Array.isArray(value) || !value.every(isIssueResponse)) {
+    throw new Error("GitHub returned an unreadable issue response");
+  }
+  return value;
+}
+
+function isIssueResponse(value: unknown): value is IssueResponse {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "number" in value &&
+    typeof value.number === "number" &&
+    "title" in value &&
+    typeof value.title === "string" &&
+    "body" in value &&
+    typeof value.body === "string" &&
+    "url" in value &&
+    typeof value.url === "string" &&
+    "labels" in value &&
+    Array.isArray(value.labels) &&
+    value.labels.every(
+      (label) =>
+        typeof label === "object" &&
+        label !== null &&
+        "name" in label &&
+        typeof label.name === "string",
+    ) &&
+    "assignees" in value &&
+    Array.isArray(value.assignees) &&
+    value.assignees.every(
+      (assignee) =>
+        typeof assignee === "object" &&
+        assignee !== null &&
+        "login" in assignee &&
+        typeof assignee.login === "string",
+    )
+  );
 }
 
 export function createGitHubConnector(runner: CommandRunner): Connector {

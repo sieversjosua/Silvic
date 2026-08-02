@@ -42,14 +42,21 @@ See [docs/PLOTS.md](docs/PLOTS.md) for the model and the decisions behind it.
 - GitHub pull requests and checks through your existing `gh` login
 - Convex deployments, localhost runtimes and Codex sessions surfaced per plot,
   each opening in the browser where it has an address
+- A dedicated Plot view that brings the task, branch, preview, logs,
+  deployments and every attached service into one operational screen
 
 **Creating it**
 
+- Open GitHub issues can seed a Plot; Silvic carries the issue title, body and
+  link into the Plot and proposes a readable branch name
 - A plot recipe per project, stored as `silvic.json` in the repository and
   editable in the app
 - Silvic inspects a repository — package manager, dev script, `convex/`, an
-  existing `work.config.js` marker — and proposes a recipe rather than opening
-  a blank form
+  existing `work.config.js` marker and common provider SDKs/scripts — and
+  proposes a recipe rather than opening a blank form
+- LiveKit, Stripe, Cloudflare, Vercel, Clerk and WorkOS are detected as Plot
+  resources; commands such as a LiveKit agent or Stripe webhook listener can be
+  supervised alongside the web runtime
 - `work.config.js` is only a migration signal. Silvic never imports, executes,
   or uses it as runtime configuration
 - Provisioning steps run in order at creation, streamed, each reporting what it
@@ -73,9 +80,9 @@ See [docs/PLOTS.md](docs/PLOTS.md) for the model and the decisions behind it.
 
 ## What does not work yet
 
-- **No universal provider setup.** A repository can declare custom tasks and
-  use Silvic's typed Convex step, but Silvic does not yet know how to configure
-  every auth or hosting provider on its own.
+- **Provider attachment is broader than provider provisioning.** Silvic can
+  detect, display, link and supervise common services, but Convex is currently
+  the only provider with a fully Silvic-owned isolated provisioning contract.
 - **Provider teardown is limited.** Silvic safely stops its own processes and
   can remove a worktree and branch, but Convex deployments still have to be
   removed in the provider dashboard because the CLI exposes no delete command.
@@ -143,8 +150,9 @@ coupling it to the UI. Architecture and product intent live in
 
 ## Status
 
-Early. Discovery, naming, the canvas, recipes, provisioning and supervised
-runtimes form the current foundation. Provider-specific setup and resource
+Early. Discovery, issue-driven creation, naming, the canvas, recipes, the
+dedicated Plot view, provisioning and supervised multi-service runtimes form
+the current foundation. More provider-specific provisioning and resource
 teardown are next.
 
 ## License

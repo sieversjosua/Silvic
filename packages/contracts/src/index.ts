@@ -119,6 +119,38 @@ export interface ConnectorResult {
   failures: readonly ConnectorFailure[];
 }
 
+/** External work that can seed a Task and its first Plot. */
+export interface IssueSummary {
+  provider: "github";
+  number: number;
+  title: string;
+  body: string;
+  url: string;
+  labels: readonly string[];
+  assignees: readonly string[];
+}
+
+export const issueSummarySchema = z
+  .object({
+    provider: z.literal("github"),
+    number: z.number().int().positive(),
+    title: z.string().min(1).max(500),
+    body: z.string().max(50_000),
+    url: z.url().max(4_000),
+    labels: z.array(z.string().min(1).max(120)).max(100),
+    assignees: z.array(z.string().min(1).max(120)).max(100),
+  })
+  .strict();
+
+export const taskContextSchema = z
+  .object({
+    title: z.string().min(1).max(500),
+    description: z.string().max(50_000).optional(),
+    issue: issueSummarySchema.optional(),
+  })
+  .strict();
+export type TaskContext = z.infer<typeof taskContextSchema>;
+
 export type WorkspaceLocationKind = "checkout" | "worktree";
 
 export interface GitStatus {
@@ -136,6 +168,8 @@ export interface GitStatus {
 export interface WorkspaceSnapshot extends WorkspaceTarget {
   name: string;
   purpose?: string;
+  /** Why this Workspace exists, independent of its branch or location. */
+  task?: TaskContext;
   locationKind: WorkspaceLocationKind;
   isPrimary: boolean;
   git: GitStatus;
@@ -254,6 +288,8 @@ export interface RepositoryFindings {
   envExample?: string;
   /** The repository's own scripts, so suggestions can be its own words. */
   scripts?: Readonly<Record<string, string>>;
+  /** Provider SDKs or scripts found without reading credential values. */
+  providers?: readonly PlotResourceProvider[];
 }
 
 /**
@@ -298,6 +334,70 @@ export const plotCommandSchema = z
   .strict();
 export type PlotCommand = z.infer<typeof plotCommandSchema>;
 
+export const plotResourceProviderSchema = z.enum([
+  "web",
+  "convex",
+  "livekit",
+  "stripe",
+  "cloudflare",
+  "vercel",
+  "clerk",
+  "workos",
+  "github",
+  "custom",
+]);
+export type PlotResourceProvider = z.infer<typeof plotResourceProviderSchema>;
+export const plotResourceKindSchema = z.enum([
+  "runtime",
+  "agent",
+  "backend",
+  "auth",
+  "payments",
+  "ingress",
+  "deployment",
+  "review",
+  "service",
+]);
+export type PlotResourceKind = z.infer<typeof plotResourceKindSchema>;
+export const resourceIsolationSchema = z.enum([
+  "isolated",
+  "namespaced",
+  "shared",
+  "manual",
+]);
+export type ResourceIsolation = z.infer<typeof resourceIsolationSchema>;
+
+export const plotResourceDefinitionSchema = z
+  .object({
+    provider: plotResourceProviderSchema,
+    label: z.string().min(1).max(120).optional(),
+    kind: plotResourceKindSchema.default("service"),
+    isolation: resourceIsolationSchema.default("shared"),
+    /** Optional recipe command whose process is this resource's live status. */
+    command: z.string().min(1).max(60).optional(),
+    url: z.url().max(4_000).optional(),
+    dashboardUrl: z.url().max(4_000).optional(),
+    detail: z.string().min(1).max(2_000).optional(),
+  })
+  .strict();
+export type PlotResourceDefinition = z.infer<
+  typeof plotResourceDefinitionSchema
+>;
+
+/** A resource projected for one Plot from its recipe and live evidence. */
+export interface PlotResource {
+  id: string;
+  provider: PlotResourceProvider;
+  label: string;
+  kind: PlotResourceKind;
+  isolation: ResourceIsolation;
+  state: ConnectorObservationState;
+  detail?: string;
+  url?: string;
+  dashboardUrl?: string;
+  commandId?: string;
+}
+
 export const recipeSchema = z
   .object({
     project: z.string().min(1).max(120).optional(),
@@ -313,6 +413,15 @@ export const recipeSchema = z
           .regex(/^[a-z][a-z0-9-]*$/)
           .max(60),
         plotCommandSchema,
+      )
+      .optional(),
+    resources: z
+      .record(
+        z
+          .string()
+          .regex(/^[a-z][a-z0-9-]*$/)
+          .max(60),
+        plotResourceDefinitionSchema,
       )
       .optional(),
     provision: z.array(provisionStepSchema).max(50).optional(),
@@ -425,11 +534,20 @@ export const createEnvironmentRequestSchema = z
      * local branch tracking it. Absent means a new branch, as before.
      */
     adopt: z.string().min(1).max(280).optional(),
+    task: taskContextSchema.optional(),
   })
   .strict();
 export type CreateEnvironmentRequest = z.infer<
   typeof createEnvironmentRequestSchema
 >;
+
+export const issueListRequestSchema = z
+  .object({
+    projectId: z.string().min(1).max(400),
+    query: z.string().trim().max(500).default(""),
+  })
+  .strict();
+export type IssueListRequest = z.infer<typeof issueListRequestSchema>;
 
 export const plotProvisionRequestSchema = z
   .object({
@@ -607,6 +725,7 @@ export interface SilvicDesktopApi {
   draftDelivery(request: WorkspacePathRequest): Promise<DeliveryDraft>;
   executeDelivery(request: DeliveryExecuteRequest): Promise<DeliveryResult>;
   connectGitHub(): Promise<void>;
+  listIssues(request: IssueListRequest): Promise<readonly IssueSummary[]>;
   openWorkspace(request: OpenWorkspaceRequest): Promise<void>;
   openLink(request: OpenLinkRequest): Promise<void>;
   getAppearance(): Promise<AppearancePreference>;
@@ -645,6 +764,7 @@ export const ipcChannels = {
   deliveryDraft: "silvic:delivery:draft",
   deliveryExecute: "silvic:delivery:execute",
   githubConnect: "silvic:github:connect",
+  issuesList: "silvic:issues:list",
   workspaceOpen: "silvic:workspace:open",
   linkOpen: "silvic:link:open",
   appearanceGet: "silvic:appearance:get",

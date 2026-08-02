@@ -34,6 +34,51 @@ async function repository(
 }
 
 describe("inspectRepository", () => {
+  it("recognises provider SDKs that belong in the Plot view", async () => {
+    const root = await repository({
+      "package.json": JSON.stringify({
+        scripts: {
+          dev: "next dev",
+          "agent:dev": "tsx src/livekit-agent.ts dev",
+          "stripe:listen":
+            "stripe listen --forward-to localhost:3000/api/stripe",
+        },
+        dependencies: {
+          "@clerk/nextjs": "latest",
+          "@livekit/agents": "latest",
+          "@workos-inc/authkit-nextjs": "latest",
+          stripe: "latest",
+        },
+        devDependencies: { wrangler: "latest", vercel: "latest" },
+      }),
+    });
+
+    const findings = await inspectRepository(root);
+
+    expect(findings.providers).toEqual([
+      "livekit",
+      "stripe",
+      "cloudflare",
+      "vercel",
+      "clerk",
+      "workos",
+    ]);
+    expect(suggestRecipe(findings).commands).toMatchObject({
+      agent: { run: "npm run agent:dev", autoStart: true },
+      stripe: { run: "npm run stripe:listen", autoStart: true },
+    });
+    expect(suggestRecipe(findings).resources).toMatchObject({
+      agent: { provider: "livekit", kind: "agent", command: "agent" },
+      stripe: {
+        provider: "stripe",
+        kind: "payments",
+        command: "stripe",
+      },
+      clerk: { provider: "clerk", kind: "auth", isolation: "shared" },
+      workos: { provider: "workos", kind: "auth", isolation: "shared" },
+    });
+  });
+
   it("reads the package manager from the lockfile, not the scripts", async () => {
     const root = await repository({
       "package.json": JSON.stringify({ scripts: { dev: "vite" } }),

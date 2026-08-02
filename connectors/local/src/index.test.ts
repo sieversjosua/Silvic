@@ -22,6 +22,15 @@ class FakeRunner implements CommandRunner {
     if (request.executable === "lsof") {
       return { exitCode: 0, stdout: "n/plots/app\n", stderr: "" };
     }
+    if (request.executable === "ps") {
+      return {
+        exitCode: 0,
+        stdout: request.arguments?.includes("-axo")
+          ? "  42  23\n  23  1\n"
+          : "  23\n",
+        stderr: "",
+      };
+    }
     return { exitCode: 0, stdout: "[]", stderr: "" };
   }
 }
@@ -38,7 +47,15 @@ describe("createLocalContextConnector", () => {
       branch: "test",
     };
 
-    expect(await connector.observe(target)).toHaveLength(1);
+    expect(await connector.observe(target)).toEqual([
+      expect.objectContaining({
+        metadata: {
+          processId: 42,
+          processGroupId: 23,
+          processLineage: "42,23,1",
+        },
+      }),
+    ]);
     runner.listening = false;
     expect(await connector.observe(target)).toHaveLength(1);
 

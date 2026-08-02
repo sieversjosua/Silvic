@@ -989,11 +989,11 @@ button {
   pointer-events: none;
   transition: opacity 140ms var(--ease);
   background-repeat: no-repeat;
-  background-image: linear-gradient(var(--t), var(--t)),
+  background-image:
     linear-gradient(var(--t), var(--t)), linear-gradient(var(--t), var(--t)),
     linear-gradient(var(--t), var(--t)), linear-gradient(var(--t), var(--t)),
     linear-gradient(var(--t), var(--t)), linear-gradient(var(--t), var(--t)),
-    linear-gradient(var(--t), var(--t));
+    linear-gradient(var(--t), var(--t)), linear-gradient(var(--t), var(--t));
   background-size:
     9px 1px,
     1px 9px,
@@ -1887,6 +1887,138 @@ button {
   margin: 0;
 }
 
+.task-source {
+  display: grid;
+  gap: 7px;
+}
+
+.issue-trigger,
+.selected-issue {
+  width: 100%;
+  min-height: 48px;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: var(--surface-sunk);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 11px;
+  text-align: left;
+}
+
+.issue-trigger > span,
+.selected-issue > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  flex: 1;
+}
+
+.issue-trigger small,
+.selected-issue strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.issue-trigger small,
+.issue-result small {
+  color: var(--ink-muted);
+}
+
+.issue-picker {
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--surface-sunk);
+}
+
+.issue-picker-head {
+  display: flex;
+  gap: 6px;
+  padding: 7px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.issue-picker-head .search {
+  flex: 1;
+}
+
+.issue-results {
+  max-height: 210px;
+  overflow: auto;
+  padding: 5px;
+}
+
+.issue-result {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  gap: 8px;
+  padding: 8px;
+  border-radius: 6px;
+  text-align: left;
+}
+
+.issue-result:hover {
+  background: var(--surface-raised);
+}
+
+.issue-result > span:last-child {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.issue-result strong,
+.issue-result small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.issue-failure {
+  display: grid;
+  gap: 8px;
+  padding: 8px;
+  justify-items: start;
+}
+
+.recipe-resource {
+  display: grid;
+  gap: 9px;
+  padding: 10px;
+  border: 1px solid var(--rule);
+  border-radius: var(--r-md);
+  background: var(--surface-sunk);
+}
+
+.recipe-resource-head {
+  display: grid;
+  grid-template-columns: minmax(90px, 0.8fr) minmax(120px, 1fr) minmax(
+      110px,
+      0.8fr
+    ) 24px;
+  gap: 6px;
+}
+
+.recipe-resource-fields {
+  display: grid;
+  grid-template-columns: minmax(130px, 0.7fr) minmax(220px, 1.3fr);
+  gap: 7px;
+}
+
+.recipe-resource-fields label {
+  display: grid;
+  gap: 4px;
+}
+
+.recipe-resource input,
+.recipe-resource select {
+  width: 100%;
+  min-width: 0;
+}
+
 /* --- recipe editor -------------------------------------------------------- */
 
 .dialog.teardown {
@@ -2213,8 +2345,6 @@ button {
   border-color: var(--accent-edge);
   box-shadow: 0 0 0 3px var(--accent-wash);
 }
-
-
 
 .recipe-section {
   display: flex;
@@ -2938,7 +3068,8 @@ button {
 
 .dialog-field input[aria-invalid="true"]:focus {
   border-color: var(--tone-attention);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--tone-attention) 14%, transparent);
+  box-shadow: 0 0 0 3px
+    color-mix(in srgb, var(--tone-attention) 14%, transparent);
 }
 
 /* Steps a finished run never reached: present, but plainly over. */
@@ -3283,4 +3414,276 @@ button {
 .command-run[data-note] {
   color: var(--tone-changed);
   white-space: normal;
+}
+
+/* --- dedicated Plot view ------------------------------------------------- */
+
+.inspector-plot-view {
+  width: 100%;
+  justify-content: center;
+  margin-top: 8px;
+}
+
+.plot-view-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: grid;
+  place-items: center;
+  padding: 28px;
+  background: color-mix(in srgb, var(--surface-sunk) 68%, transparent);
+  backdrop-filter: blur(8px);
+}
+
+.plot-view {
+  width: min(1120px, 100%);
+  height: min(820px, 100%);
+  overflow: auto;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--r-xl);
+  background: var(--surface);
+  box-shadow: var(--shadow-float);
+  padding: 26px;
+}
+
+.plot-view-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.plot-view-head h1 {
+  max-width: 760px;
+  margin-top: 8px;
+  font-size: 26px;
+  letter-spacing: -0.025em;
+}
+
+.plot-view-kicker,
+.plot-view-branch,
+.plot-view-actions,
+.resource-meta,
+.resource-card footer {
+  display: flex;
+  align-items: center;
+}
+
+.plot-view-kicker {
+  gap: 9px;
+}
+
+.plot-view-branch {
+  gap: 5px;
+  margin-top: 6px;
+  color: var(--ink-muted);
+}
+
+.plot-view-close {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--surface-sunk);
+}
+
+.plot-task {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  margin-top: 20px;
+  padding: 14px 16px;
+  border: 1px solid var(--rule);
+  border-radius: var(--r-lg);
+  background: var(--surface-sunk);
+}
+
+.plot-task > div {
+  display: grid;
+  gap: 5px;
+  max-width: 760px;
+}
+
+.plot-task p:not(.micro) {
+  color: var(--ink-muted);
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.plot-view-actions {
+  gap: 7px;
+  margin-top: 20px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.plot-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.plot-summary-fact {
+  display: grid;
+  grid-template-columns: 18px 1fr;
+  gap: 3px 7px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--rule);
+  border-radius: var(--r-lg);
+  background: var(--surface-raised);
+}
+
+.plot-summary-fact > svg {
+  grid-row: 1 / span 2;
+  margin-top: 2px;
+  color: var(--ink-faint);
+}
+
+.plot-summary-fact strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.plot-resources,
+.plot-logs {
+  margin-top: 26px;
+}
+
+.plot-section-title {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 12px;
+}
+
+.plot-section-title h2 {
+  margin-top: 3px;
+  font-size: 17px;
+}
+
+.resource-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.resource-card {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--rule);
+  border-radius: var(--r-lg);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-card);
+}
+
+.resource-card[data-state="attention"] {
+  border-color: color-mix(in srgb, var(--tone-attention) 42%, var(--rule));
+}
+
+.resource-card > header {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+}
+
+.resource-icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  color: var(--accent);
+  background: var(--accent-wash);
+}
+
+.resource-card h3 {
+  margin-top: 1px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.resource-state {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--ink-muted);
+  font-size: 10.5px;
+}
+
+.resource-detail {
+  margin-top: 12px;
+  overflow: hidden;
+  color: var(--ink-muted);
+  font-size: 10.5px;
+  line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resource-meta {
+  gap: 5px;
+  margin-top: 9px;
+}
+
+.resource-meta span {
+  padding: 2px 6px;
+  border-radius: 999px;
+  color: var(--ink-faint);
+  background: var(--surface-sunk);
+  font-size: 9.5px;
+  text-transform: capitalize;
+}
+
+.resource-card footer {
+  min-height: 25px;
+  gap: 11px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--rule);
+}
+
+.resource-card footer:empty {
+  display: none;
+}
+
+.resource-act {
+  margin-left: auto;
+}
+
+.plot-logs {
+  border: 1px solid var(--rule);
+  border-radius: var(--r-lg);
+  background: var(--surface-sunk);
+  padding: 14px;
+}
+
+.plot-logs pre {
+  max-height: 240px;
+  overflow: auto;
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: 10.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.plot-view-error {
+  margin-top: 16px;
+}
+
+@media (max-width: 960px) {
+  .plot-summary,
+  .resource-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }

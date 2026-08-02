@@ -11,6 +11,8 @@ import type { CommandRunner } from "@silvic/core";
 
 interface Listener {
   processId: number;
+  processGroupId?: number;
+  processLineage?: string;
   name: string;
   cwd: string;
   url: string;
@@ -76,6 +78,11 @@ async function readListeners(
   });
   if (result.exitCode !== 0) return [];
   const seeds = parseListenerSeeds(result.stdout);
+  const treeResult = await runner.run({
+    executable: "ps",
+    arguments: ["-axo", "pid=,ppid="],
+  });
+  const parents = parseProcessParents(treeResult.stdout);
   const listeners = await mapWithConcurrency(seeds, 6, async (seed) => {
     const cwdResult = await runner.run({
       executable: "lsof",
@@ -85,7 +92,21 @@ async function readListeners(
       .split(/\r?\n/)
       .find((line) => line.startsWith("n/"))
       ?.slice(1);
-    return cwd ? { ...seed, cwd } : undefined;
+    if (!cwd) return undefined;
+    const groupResult = await runner.run({
+      executable: "ps",
+      arguments: ["-o", "pgid=", "-p", String(seed.processId)],
+    });
+    const processGroupId = Number(groupResult.stdout.trim());
+    const lineage = processLineage(seed.processId, parents);
+    return {
+      ...seed,
+      cwd,
+      ...(lineage ? { processLineage: lineage } : {}),
+      ...(Number.isSafeInteger(processGroupId) && processGroupId > 0
+        ? { processGroupId }
+        : {}),
+    };
   });
   return listeners.filter((listener) => listener !== undefined);
 }
@@ -168,8 +189,43 @@ function runtimeObservation(
     label: listener.name,
     detail: listener.url,
     url: listener.url,
-    metadata: { processId: listener.processId },
+    metadata: {
+      processId: listener.processId,
+      ...(listener.processGroupId === undefined
+        ? {}
+        : { processGroupId: listener.processGroupId }),
+      ...(listener.processLineage === undefined
+        ? {}
+        : { processLineage: listener.processLineage }),
+    },
   };
+}
+
+function parseProcessParents(output: string): ReadonlyMap<number, number> {
+  return new Map(
+    output
+      .split(/\r?\n/)
+      .map((line) => line.trim().split(/\s+/).map(Number))
+      .filter(
+        (pair): pair is [number, number] =>
+          pair.length === 2 && pair.every(Number.isSafeInteger),
+      ),
+  );
+}
+
+function processLineage(
+  processId: number,
+  parents: ReadonlyMap<number, number>,
+): string | undefined {
+  const lineage = [processId];
+  let current = processId;
+  while (lineage.length < 16) {
+    const parent = parents.get(current);
+    if (!parent || parent === current) break;
+    lineage.push(parent);
+    current = parent;
+  }
+  return lineage.length > 1 ? lineage.join(",") : undefined;
 }
 
 function taskObservation(

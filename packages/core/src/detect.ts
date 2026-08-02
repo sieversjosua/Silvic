@@ -3,6 +3,8 @@ import { join, normalize } from "node:path";
 
 import type {
   PackageManager,
+  PlotResourceDefinition,
+  PlotResourceProvider,
   RecipeSuggestion,
   Recipe,
   RepositoryFindings,
@@ -34,13 +36,19 @@ export async function inspectRepository(
     }
   }
 
-  const scripts = await readScripts(join(root, "package.json"));
+  const packageMetadata = await readPackageMetadata(join(root, "package.json"));
+  const scripts = packageMetadata?.scripts;
   const devScript = ["dev", "develop", "start"].find((name) => scripts?.[name]);
   if (devScript) findings.devScript = devScript;
   if (scripts) findings.scripts = scripts;
   if (findings.packageManager === undefined && scripts) {
     findings.packageManager = "npm";
   }
+  const providers = detectProviders(
+    packageMetadata?.packages ?? [],
+    scripts ?? {},
+  );
+  if (providers.length > 0) findings.providers = providers;
 
   findings.convex =
     (await exists(join(root, "convex"))) ||
@@ -82,6 +90,8 @@ export function suggestRecipe(findings: RepositoryFindings): Recipe {
   if (findings.packageManager) recipe.packageManager = findings.packageManager;
   if (provision.length > 0) recipe.provision = provision;
   if (Object.keys(commands).length > 0) recipe.commands = commands;
+  const resources = suggestedResources(findings, commands);
+  if (Object.keys(resources).length > 0) recipe.resources = resources;
   return recipe;
 }
 
@@ -150,6 +160,69 @@ export function suggestedSteps(
   return suggestions;
 }
 
+function suggestedResources(
+  findings: RepositoryFindings,
+  commands: Readonly<Record<string, unknown>>,
+): Record<string, PlotResourceDefinition> {
+  return Object.fromEntries(
+    (findings.providers ?? []).map((provider) => {
+      const id = provider === "livekit" ? "agent" : provider;
+      const definition = providerResource(provider);
+      return [id, id in commands ? { ...definition, command: id } : definition];
+    }),
+  );
+}
+
+function providerResource(
+  provider: PlotResourceProvider,
+): PlotResourceDefinition {
+  switch (provider) {
+    case "livekit":
+      return { provider, kind: "agent", isolation: "shared" };
+    case "stripe":
+      return { provider, kind: "payments", isolation: "namespaced" };
+    case "cloudflare":
+      return { provider, kind: "ingress", isolation: "namespaced" };
+    case "vercel":
+      return { provider, kind: "deployment", isolation: "isolated" };
+    case "clerk":
+    case "workos":
+      return { provider, kind: "auth", isolation: "shared" };
+    default:
+      return { provider, kind: "service", isolation: "shared" };
+  }
+}
+
+function providerCommand(
+  provider: PlotResourceProvider,
+  findings: RepositoryFindings,
+): readonly [string, string] | undefined {
+  const scripts = Object.entries(findings.scripts ?? {});
+  const matches = (name: string, run: string, terms: readonly string[]) => {
+    const value = `${name} ${run}`.toLowerCase();
+    return terms.some((term) => value.includes(term));
+  };
+  if (provider === "livekit") {
+    const entry = scripts.find(([name, run]) =>
+      matches(name, run, ["livekit", "agent:dev"]),
+    );
+    return entry ? ["agent", entry[0]] : undefined;
+  }
+  if (provider === "stripe") {
+    const entry = scripts.find(([name, run]) =>
+      matches(name, run, ["stripe:listen", "stripe listen"]),
+    );
+    return entry ? ["stripe", entry[0]] : undefined;
+  }
+  if (provider === "cloudflare") {
+    const entry = scripts.find(([name, run]) =>
+      matches(name, run, ["wrangler dev", "cloudflare:dev"]),
+    );
+    return entry ? ["cloudflare", entry[0]] : undefined;
+  }
+  return undefined;
+}
+
 /** The same reading, for the things that run for as long as you work. */
 export function suggestedCommands(
   findings: RepositoryFindings,
@@ -180,6 +253,22 @@ export function suggestedCommands(
       command: {
         id: "convex",
         command: { run: "npx convex dev", autoStart: true },
+      },
+    });
+  }
+  for (const provider of findings.providers ?? []) {
+    const candidate = providerCommand(provider, findings);
+    if (!candidate) continue;
+    const [id, script] = candidate;
+    if (suggestions.some((suggestion) => suggestion.command?.id === id))
+      continue;
+    suggestions.push({
+      id: `provider:${provider}`,
+      label: id,
+      detail: runScript(manager, script),
+      command: {
+        id,
+        command: { run: runScript(manager, script), autoStart: true },
       },
     });
   }
@@ -226,22 +315,55 @@ async function exists(path: string): Promise<boolean> {
   }
 }
 
-async function readScripts(
-  path: string,
-): Promise<Record<string, string> | undefined> {
+async function readPackageMetadata(path: string): Promise<
+  | {
+      scripts?: Record<string, string>;
+      packages: readonly string[];
+    }
+  | undefined
+> {
   try {
     const parsed: unknown = JSON.parse(await readFile(path, "utf8"));
-    if (
-      typeof parsed === "object" &&
-      parsed !== null &&
-      "scripts" in parsed &&
-      typeof parsed.scripts === "object" &&
-      parsed.scripts !== null
-    ) {
-      return parsed.scripts as Record<string, string>;
-    }
+    if (typeof parsed !== "object" || parsed === null) return undefined;
+    const value = parsed as Record<string, unknown>;
+    const scripts = stringRecord(value.scripts);
+    const packages = [
+      ...Object.keys(stringRecord(value.dependencies) ?? {}),
+      ...Object.keys(stringRecord(value.devDependencies) ?? {}),
+    ];
+    return { ...(scripts ? { scripts } : {}), packages };
   } catch {
     // A repository without a readable package.json simply tells us less.
   }
   return undefined;
+}
+
+function stringRecord(value: unknown): Record<string, string> | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    return undefined;
+  const entries = Object.entries(value);
+  if (!entries.every(([, item]) => typeof item === "string")) return undefined;
+  return Object.fromEntries(entries) as Record<string, string>;
+}
+
+function detectProviders(
+  packages: readonly string[],
+  scripts: Readonly<Record<string, string>>,
+): readonly PlotResourceProvider[] {
+  const evidence = `${packages.join(" ")} ${Object.entries(scripts)
+    .flat()
+    .join(" ")}`.toLowerCase();
+  const candidates: ReadonlyArray<
+    readonly [PlotResourceProvider, readonly string[]]
+  > = [
+    ["livekit", ["@livekit/", "livekit-"]],
+    ["stripe", ["stripe"]],
+    ["cloudflare", ["wrangler", "@cloudflare/"]],
+    ["vercel", ["vercel", "@vercel/"]],
+    ["clerk", ["@clerk/"]],
+    ["workos", ["@workos-inc/", "workos"]],
+  ];
+  return candidates
+    .filter(([, terms]) => terms.some((term) => evidence.includes(term)))
+    .map(([provider]) => provider);
 }

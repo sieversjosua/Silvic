@@ -7,7 +7,7 @@ import type {
   CommandRunner,
 } from "@silvic/core";
 
-import { createGitHubConnector } from "./index";
+import { createGitHubConnector, listGitHubIssues } from "./index";
 
 const target: WorkspaceTarget = {
   workspaceId: "workspace-1",
@@ -18,6 +18,55 @@ const target: WorkspaceTarget = {
 };
 
 describe("GitHub connector", () => {
+  it("lists open issues as work that can become a Plot", async () => {
+    const runner = new RecordingRunner({
+      exitCode: 0,
+      stdout: JSON.stringify([
+        {
+          number: 184,
+          title: "Fix HEIC uploads",
+          body: "HEIC images fail during conversion.",
+          url: "https://github.com/example/silvic/issues/184",
+          labels: [{ name: "bug" }],
+          assignees: [{ login: "josua" }],
+        },
+      ]),
+      stderr: "",
+    });
+
+    await expect(
+      listGitHubIssues(runner, "/projects/silvic", "heic"),
+    ).resolves.toEqual([
+      {
+        provider: "github",
+        number: 184,
+        title: "Fix HEIC uploads",
+        body: "HEIC images fail during conversion.",
+        url: "https://github.com/example/silvic/issues/184",
+        labels: ["bug"],
+        assignees: ["josua"],
+      },
+    ]);
+    expect(runner.requests).toEqual([
+      {
+        executable: "gh",
+        arguments: [
+          "issue",
+          "list",
+          "--state",
+          "open",
+          "--limit",
+          "50",
+          "--json",
+          "number,title,body,url,labels,assignees",
+          "--search",
+          "heic",
+        ],
+        cwd: "/projects/silvic",
+      },
+    ]);
+  });
+
   it("maps the current branch pull request and check rollup", async () => {
     const runner = new RecordingRunner({
       exitCode: 0,

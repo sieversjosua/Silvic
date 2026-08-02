@@ -4,6 +4,7 @@ import { basename, join, normalize, resolve } from "node:path";
 import {
   recipeSchema,
   type PlotCommand,
+  type PlotResourceDefinition,
   type ProvisionStep,
   type Recipe,
 } from "@silvic/contracts";
@@ -19,6 +20,7 @@ export interface ResolvedRecipe {
   /** Absolute directory new plots are created in. */
   directory: string;
   commands: Readonly<Record<string, PlotCommand>>;
+  resources: Readonly<Record<string, PlotResourceDefinition>>;
   provision: readonly ProvisionStep[];
   /** False when the repository has no recipe and defaults were used. */
   configured: boolean;
@@ -74,6 +76,7 @@ function resolveRecipe(
     directory,
     ...(recipe.packageManager ? { packageManager: recipe.packageManager } : {}),
     commands: recipe.commands ?? {},
+    resources: recipe.resources ?? {},
     provision: recipe.provision ?? [],
     configured: true,
   };
@@ -131,6 +134,7 @@ function defaults(
     project,
     directory: resolve(root, "..", `${project}.plots`),
     commands: {},
+    resources: {},
     provision: [],
     configured,
   };

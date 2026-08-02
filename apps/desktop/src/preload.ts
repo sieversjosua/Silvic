@@ -6,6 +6,7 @@ import {
   type CreateEnvironmentRequest,
   type DeliveryExecuteRequest,
   type HarnessId,
+  type IssueListRequest,
   type OpenLinkRequest,
   type OpenWorkspaceRequest,
   type ProjectActivationRequest,
@@ -56,6 +57,8 @@ const api: SilvicDesktopApi = {
   executeDelivery: (request: DeliveryExecuteRequest) =>
     ipcRenderer.invoke(ipcChannels.deliveryExecute, request),
   connectGitHub: () => ipcRenderer.invoke(ipcChannels.githubConnect),
+  listIssues: (request: IssueListRequest) =>
+    ipcRenderer.invoke(ipcChannels.issuesList, request),
   openWorkspace: (request: OpenWorkspaceRequest) =>
     ipcRenderer.invoke(ipcChannels.workspaceOpen, request),
   openLink: (request: OpenLinkRequest) =>
