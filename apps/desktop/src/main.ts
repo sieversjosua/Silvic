@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
+import { homedir, platform } from "node:os";
 import { basename, join, normalize } from "node:path";
 import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
@@ -390,7 +390,7 @@ function registerIpc(): void {
   ipcMain.handle(ipcChannels.linkOpen, async (event, request: unknown) => {
     assertTrustedSender(event);
     const { url } = openLinkRequestSchema.parse(request);
-    await shell.openExternal(await knownLinkUrl(url));
+    await openExternalLink(await knownLinkUrl(url));
   });
   ipcMain.handle(ipcChannels.projectsActiveGet, (event) => {
     assertTrustedSender(event);
@@ -1266,6 +1266,23 @@ async function knownLinkUrl(url: string): Promise<string> {
     }
   }
   throw new Error("Silvic can only open a discovered or declared link");
+}
+
+async function openExternalLink(url: string): Promise<void> {
+  // Electron's generic development bundle can lose LaunchServices URL handoffs.
+  // Keep packaged builds on the user's configured default browser.
+  if (platform() === "darwin" && !app.isPackaged) {
+    try {
+      const result = await runner.run({
+        executable: "open",
+        arguments: ["-b", "com.google.Chrome", url],
+      });
+      if (result.exitCode === 0) return;
+    } catch {
+      // Chrome is optional. Preserve the system-default browser fallback.
+    }
+  }
+  await shell.openExternal(url, { activate: true });
 }
 
 function knownWorkspace(path: string) {
