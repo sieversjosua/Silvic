@@ -74,8 +74,17 @@ describe("inspectRepository", () => {
         kind: "payments",
         command: "stripe",
       },
-      clerk: { provider: "clerk", kind: "auth", isolation: "shared" },
-      workos: { provider: "workos", kind: "auth", isolation: "shared" },
+      clerk: {
+        provider: "clerk",
+        kind: "auth",
+        isolation: "manual",
+        detail: "Detected in package.json; not configured by Silvic",
+      },
+      workos: {
+        provider: "workos",
+        kind: "auth",
+        isolation: "manual",
+      },
     });
   });
 

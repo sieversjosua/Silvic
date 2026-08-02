@@ -1,15 +1,15 @@
 import { access, readFile } from "node:fs/promises";
 import { join, normalize } from "node:path";
 
-import type {
-  PackageManager,
-  PlotResourceDefinition,
-  PlotResourceProvider,
-  RecipeSuggestion,
-  Recipe,
-  RepositoryFindings,
+import {
+  plotResourceProviderCatalog,
+  type PackageManager,
+  type PlotResourceDefinition,
+  type PlotResourceProvider,
+  type RecipeSuggestion,
+  type Recipe,
+  type RepositoryFindings,
 } from "@silvic/contracts";
-
 const lockfiles: ReadonlyArray<readonly [string, PackageManager]> = [
   ["bun.lock", "bun"],
   ["bun.lockb", "bun"],
@@ -168,7 +168,16 @@ function suggestedResources(
     (findings.providers ?? []).map((provider) => {
       const id = provider === "livekit" ? "agent" : provider;
       const definition = providerResource(provider);
-      return [id, id in commands ? { ...definition, command: id } : definition];
+      return [
+        id,
+        id in commands
+          ? { ...definition, command: id }
+          : {
+              ...definition,
+              isolation: "manual" as const,
+              detail: "Detected in package.json; not configured by Silvic",
+            },
+      ];
     }),
   );
 }
@@ -176,21 +185,8 @@ function suggestedResources(
 function providerResource(
   provider: PlotResourceProvider,
 ): PlotResourceDefinition {
-  switch (provider) {
-    case "livekit":
-      return { provider, kind: "agent", isolation: "shared" };
-    case "stripe":
-      return { provider, kind: "payments", isolation: "namespaced" };
-    case "cloudflare":
-      return { provider, kind: "ingress", isolation: "namespaced" };
-    case "vercel":
-      return { provider, kind: "deployment", isolation: "isolated" };
-    case "clerk":
-    case "workos":
-      return { provider, kind: "auth", isolation: "shared" };
-    default:
-      return { provider, kind: "service", isolation: "shared" };
-  }
+  const { kind, isolation } = plotResourceProviderCatalog[provider];
+  return { provider, kind, isolation };
 }
 
 function providerCommand(

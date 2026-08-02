@@ -24,7 +24,6 @@ import {
 } from "@silvic/connector-github";
 import { harnessById } from "@silvic/connector-harnesses";
 import { createLocalContextConnector } from "@silvic/connector-local";
-import { createWorkCliConnector } from "@silvic/connector-work-cli";
 import {
   appearancePreferenceSchema,
   createEnvironmentRequestSchema,
@@ -67,6 +66,7 @@ import {
   inspectRepository,
   planTeardown,
   suggestedCommands,
+  suggestRecipe,
   suggestedSteps,
   provisionOutputLimit,
   remedyCommand,
@@ -82,7 +82,6 @@ import {
   mergeSnapshots,
   routeNameFor,
   readRecipeSource,
-  readWorkCliNames,
   writeRecipe,
   resolvedCommandPath,
   type SupervisedCommand,
@@ -120,12 +119,11 @@ const runner = new LocalCommandRunner();
 const connectors = new ConnectorRegistry([
   createGitHubConnector(runner),
   convexConnector,
-  createWorkCliConnector(runner),
   createLocalContextConnector(runner),
 ]);
 const projectService = new ProjectService({ runner, connectors });
 /**
- * Git state only. Connectors shell out to `gh`, `work` and the port table, which
+ * Git state only. Connectors shell out to `gh`, Convex and the port table, which
  * is most of the cost of a scan, so first paint uses this and the enrichment
  * arrives afterwards.
  */
@@ -538,6 +536,7 @@ function registerIpc(): void {
         findings,
         steps: suggestedSteps(findings),
         commands: suggestedCommands(findings),
+        recipe: suggestRecipe(findings),
       };
     },
   );
@@ -1156,12 +1155,9 @@ function refreshSnapshot(forceFresh = false): Promise<SilvicSnapshot> {
 }
 
 function startSnapshotRefresh(): Promise<SilvicSnapshot> {
-  const refresh = Promise.all([
-    projectService.snapshot(settings.get("roots")),
-    readWorkCliNames(),
-  ]).then(([rawSnapshot, workCliNames]) =>
-    publishSnapshot(rawSnapshot, workCliNames, "replace"),
-  );
+  const refresh = projectService
+    .snapshot(settings.get("roots"))
+    .then((rawSnapshot) => publishSnapshot(rawSnapshot, "replace"));
   activeRefresh = refresh;
   void refresh.then(
     () => {
@@ -1176,13 +1172,11 @@ function startSnapshotRefresh(): Promise<SilvicSnapshot> {
 
 function publishSnapshot(
   rawSnapshot: SilvicSnapshot,
-  workCliNames: ReadonlyMap<string, string>,
   mode: "replace" | "merge",
 ): SilvicSnapshot {
   const reconciled = workspaceRegistry.reconcile(
     rawSnapshot,
     settings.get("workspaceRecords"),
-    workCliNames,
   );
   settings.set("workspaceRecords", [...reconciled.records]);
   const decorated = withProvisioning(reconciled.snapshot);
@@ -1202,11 +1196,8 @@ async function paintFromGit(
   mode: "replace" | "merge" = "merge",
 ): Promise<void> {
   try {
-    const [rawSnapshot, workCliNames] = await Promise.all([
-      fastProjectService.snapshot(paths),
-      readWorkCliNames(),
-    ]);
-    publishSnapshot(rawSnapshot, workCliNames, mode);
+    const rawSnapshot = await fastProjectService.snapshot(paths);
+    publishSnapshot(rawSnapshot, mode);
   } catch {
     // The full refresh reports anything that genuinely failed.
   }

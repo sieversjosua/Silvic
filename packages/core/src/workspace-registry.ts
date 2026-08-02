@@ -7,7 +7,7 @@ import type {
   WorkspaceSnapshot,
 } from "@silvic/contracts";
 
-import { resolveDisplayName } from "./work-cli-names";
+import { resolveDisplayName } from "./workspace-names";
 
 export interface WorkspaceRecord {
   workspaceId: string;
@@ -26,16 +26,9 @@ export interface ReconciledWorkspaces {
 }
 
 export class WorkspaceRegistry {
-  /**
-   * `suggestedNames` maps a normalised path to a name discovered elsewhere,
-   * such as work-cli's slug for a harness-created worktree. It is applied at
-   * read time rather than stored, so it never masquerades as a name the user
-   * chose and never goes stale.
-   */
   reconcile(
     snapshot: SilvicSnapshot,
     existingRecords: readonly WorkspaceRecord[],
-    suggestedNames: ReadonlyMap<string, string> = new Map(),
   ): ReconciledWorkspaces {
     const records = existingRecords.map((record) => ({ ...record }));
     const claimed = new Set<string>();
@@ -81,13 +74,7 @@ export class WorkspaceRegistry {
       const primaryId = matched.find(({ workspace }) => workspace.isPrimary)
         ?.record.workspaceId;
       const workspaces = matched.map(({ workspace, record }) =>
-        stableWorkspace(
-          workspace,
-          record,
-          transientToStable,
-          primaryId,
-          suggestedNames.get(normalize(workspace.path)),
-        ),
+        stableWorkspace(workspace, record, transientToStable, primaryId),
       );
       return { ...project, workspaces };
     });
@@ -118,18 +105,22 @@ function stableWorkspace(
   record: WorkspaceRecord,
   transientToStable: ReadonlyMap<string, string>,
   primaryId: string | undefined,
-  suggestedName: string | undefined,
 ): WorkspaceSnapshot {
   const stableId = record.workspaceId;
   const parentWorkspaceId =
     record.parentWorkspaceId ?? (!workspace.isPrimary ? primaryId : undefined);
+  const sessionName = !workspace.isPrimary
+    ? workspace.observations.find(
+        (observation) => observation.kind === "session",
+      )?.label
+    : undefined;
   return {
     ...workspace,
     workspaceId: stableId,
     name: resolveDisplayName({
       path: workspace.path,
       recorded: record.displayName,
-      workCliName: suggestedName,
+      ...(sessionName ? { sessionName } : {}),
       gitName: workspace.name,
     }),
     ...(record.purpose ? { purpose: record.purpose } : {}),

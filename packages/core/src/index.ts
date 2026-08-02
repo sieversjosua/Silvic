@@ -14,5 +14,5 @@ export * from "./provisioner";
 export * from "./recipe";
 export * from "./snapshot-merge";
 export * from "./teardown";
-export * from "./work-cli-names";
+export * from "./workspace-names";
 export * from "./workspace-registry";

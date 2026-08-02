@@ -1,15 +1,14 @@
-import type {
-  ConnectorObservation,
-  PlotCommand,
-  PlotProcess,
-  PlotResource,
-  PlotResourceDefinition,
-  PlotResourceKind,
-  PlotResourceProvider,
-  ResourceIsolation,
-  WorkspaceSnapshot,
+import {
+  plotResourceProviderCatalog,
+  type ConnectorObservation,
+  type PlotCommand,
+  type PlotProcess,
+  type PlotResource,
+  type PlotResourceDefinition,
+  type PlotResourceKind,
+  type PlotResourceProvider,
+  type WorkspaceSnapshot,
 } from "@silvic/contracts";
-
 export function plotResources({
   workspace,
   commands,
@@ -61,11 +60,8 @@ function observationProcessIds(
     observation.metadata?.processGroupId,
   ].filter((processId): processId is number => typeof processId === "number");
   const lineage = observation.metadata?.processLineage;
-  if (typeof lineage !== "string") return direct;
-  return [
-    ...direct,
-    ...lineage.split(",").map(Number).filter(Number.isSafeInteger),
-  ];
+  if (!Array.isArray(lineage)) return direct;
+  return [...direct, ...lineage.filter(Number.isSafeInteger)];
 }
 
 function declaredResource(
@@ -154,29 +150,12 @@ function providerFor(id: string, detail: string): PlotResourceProvider {
 function providerProfile(
   provider: PlotResourceProvider,
   servesUrl: boolean,
-): { kind: PlotResourceKind; isolation: ResourceIsolation } {
-  switch (provider) {
-    case "convex":
-      return { kind: "backend", isolation: "isolated" };
-    case "livekit":
-      return { kind: "agent", isolation: "shared" };
-    case "stripe":
-      return { kind: "payments", isolation: "namespaced" };
-    case "cloudflare":
-      return { kind: "ingress", isolation: "namespaced" };
-    case "vercel":
-      return { kind: "deployment", isolation: "isolated" };
-    case "clerk":
-    case "workos":
-      return { kind: "auth", isolation: "shared" };
-    case "github":
-      return { kind: "review", isolation: "shared" };
-    default:
-      return {
-        kind: servesUrl ? "runtime" : "service",
-        isolation: servesUrl ? "isolated" : "shared",
-      };
+): Pick<PlotResourceDefinition, "kind" | "isolation"> {
+  if (provider === "custom" && servesUrl) {
+    return { kind: "runtime", isolation: "isolated" };
   }
+  const { kind, isolation } = plotResourceProviderCatalog[provider];
+  return { kind, isolation };
 }
 
 function observationKind(
@@ -193,9 +172,7 @@ function observationKind(
 }
 
 function providerLabel(provider: PlotResourceProvider): string {
-  if (provider === "livekit") return "LiveKit";
-  if (provider === "workos") return "WorkOS";
-  return title(provider);
+  return plotResourceProviderCatalog[provider].label;
 }
 
 function title(value: string): string {

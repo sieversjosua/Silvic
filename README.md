@@ -27,9 +27,8 @@ See [docs/PLOTS.md](docs/PLOTS.md) for the model and the decisions behind it.
 **Finding your work**
 
 - Recursive repository discovery, grouped into projects by normalized Git remote
-- Worktrees created by Codex and T3 Code named after what they are, by reading
-  work-cli's state or the harness directory, rather than repeating the repository
-  name
+- Worktrees created by Codex and T3 Code grouped from Git and harness evidence,
+  without depending on work-cli at runtime
 - A curated project list: nothing appears in the rail until you add it, and
   everything else is offered as a suggestion
 - Git branch, revision, upstream, ahead/behind and change state
@@ -140,7 +139,7 @@ apps/desktop        Electron main process, secure preload, packaging
 apps/web            React renderer, grove canvas, recipe editor
 packages/contracts  Shared connector, snapshot, recipe, and IPC types
 packages/core       Discovery, naming, recipes, provisioning, delivery
-connectors/*        GitHub, Convex, work-cli, and harness integrations
+connectors/*        GitHub, Convex, local-context, and harness integrations
 ```
 
 See [the connector guide](docs/CONNECTORS.md) to add a harness or service without

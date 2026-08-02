@@ -44,6 +44,7 @@ import type {
   ProjectSnapshot,
   ProvisionRemedyId,
   ProvisionResult,
+  Recipe,
   SilvicSnapshot,
   WorkspaceChanges,
   WorkspaceSnapshot,
@@ -354,6 +355,11 @@ export function App() {
           projectId={recipeProject.id}
           projectName={recipeProject.name}
           onClose={() => setRecipeProject(undefined)}
+          onSaved={(recipe: Recipe) => {
+            setCommands(Object.entries(recipe.commands ?? {}));
+            setDeclaredResources(recipe.resources ?? {});
+            setRecipeProject(undefined);
+          }}
         />
       )}
       {error && <div className="error-toast">{error}</div>}
@@ -739,6 +745,17 @@ function WorkspaceInspector({
   const preview = resources.find(
     (resource) => resource.provider === "web" && resource.url,
   )?.url;
+  const runtimeResources = resources.filter((resource) =>
+    ["runtime", "agent"].includes(resource.kind),
+  );
+  const reviewResources = resources.filter(
+    (resource) => resource.kind === "review",
+  );
+  const environmentResources = resources.filter(
+    (resource) =>
+      !runtimeResources.includes(resource) &&
+      !reviewResources.includes(resource),
+  );
 
   return (
     <>
@@ -874,23 +891,30 @@ function WorkspaceInspector({
             </button>
           </Section>
         )}
-        <Section icon={<PackageCheck size={12} />} title="Resources">
-          {resources.length === 0 ? (
-            <p className="section-empty">
-              This repository declares no services or commands. Add them to
-              <code> silvic.json </code> and they appear here.
-            </p>
-          ) : (
-            resources.map((resource) => (
-              <PlotResourceRow
-                key={resource.id}
-                workspace={workspace}
-                resource={resource}
-                processes={processes}
-              />
-            ))
-          )}
-        </Section>
+        <PlotResourceSection
+          icon={<Terminal size={12} />}
+          title="Runtime"
+          empty="No runtime attached"
+          workspace={workspace}
+          resources={runtimeResources}
+          processes={processes}
+        />
+        <PlotResourceSection
+          icon={<PackageCheck size={12} />}
+          title="Environment"
+          empty="No provider environment attached"
+          workspace={workspace}
+          resources={environmentResources}
+          processes={processes}
+        />
+        <PlotResourceSection
+          icon={<GitPullRequest size={12} />}
+          title="Review"
+          empty="No pull request"
+          workspace={workspace}
+          resources={reviewResources}
+          processes={processes}
+        />
         <Observations
           icon={<CodexMark size={12} />}
           title="Sessions"
@@ -900,6 +924,39 @@ function WorkspaceInspector({
         <p className="inspector-path mono">{workspace.path}</p>
       </div>
     </>
+  );
+}
+
+function PlotResourceSection({
+  icon,
+  title,
+  empty,
+  workspace,
+  resources,
+  processes,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  empty: string;
+  workspace: WorkspaceSnapshot;
+  resources: readonly PlotResource[];
+  processes: readonly PlotProcess[];
+}) {
+  return (
+    <Section icon={icon} title={title}>
+      {resources.length === 0 ? (
+        <p className="section-empty">{empty}</p>
+      ) : (
+        resources.map((resource) => (
+          <PlotResourceRow
+            key={resource.id}
+            workspace={workspace}
+            resource={resource}
+            processes={processes}
+          />
+        ))
+      )}
+    </Section>
   );
 }
 
@@ -937,6 +994,13 @@ function PlotResourceRow({
   const [working, setWorking] = useState(false);
   const [failure, setFailure] = useState<string>();
   const [logs, setLogs] = useState<string>();
+  const [copied, setCopied] = useState(false);
+  const address = resource.url ?? resource.dashboardUrl;
+  useEffect(() => {
+    if (!copied) return;
+    const timer = window.setTimeout(() => setCopied(false), 1_400);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
   const running = processes.some(
     (process) =>
       process.plotPath === workspace.path &&
@@ -982,12 +1046,12 @@ function PlotResourceRow({
           </span>
         </div>
         <div className="sidebar-resource-actions">
-          {(resource.url || resource.dashboardUrl) && (
+          {address && (
             <button
               type="button"
               aria-label={`Open ${resource.label}`}
               title={resource.url ? "Open" : "Open dashboard"}
-              onClick={() => open(resource.url ?? resource.dashboardUrl ?? "")}
+              onClick={() => open(address)}
             >
               <ExternalLink size={11} />
             </button>
@@ -1018,6 +1082,21 @@ function PlotResourceRow({
       <p className="sidebar-resource-detail mono truncate">
         {failure ?? resource.detail ?? resourceStateLabel(resource.state)}
       </p>
+      {address && (
+        <button
+          type="button"
+          className="sidebar-resource-url mono truncate"
+          title={`Copy ${address}`}
+          onClick={() =>
+            void window.silvic.copyText(address).then(() => setCopied(true))
+          }
+        >
+          <Copy size={10} />
+          <span className="truncate">
+            {copied ? "Copied" : address.replace(/^https?:\/\//, "")}
+          </span>
+        </button>
+      )}
       {logs !== undefined && (
         <pre className="sidebar-resource-logs mono">
           {logs || "No output yet"}

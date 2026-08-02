@@ -52,7 +52,7 @@ describe("createLocalContextConnector", () => {
         metadata: {
           processId: 42,
           processGroupId: 23,
-          processLineage: "42,23,1",
+          processLineage: [42, 23, 1],
         },
       }),
     ]);

@@ -12,7 +12,7 @@ import type { CommandRunner } from "@silvic/core";
 interface Listener {
   processId: number;
   processGroupId?: number;
-  processLineage?: string;
+  processLineage?: readonly number[];
   name: string;
   cwd: string;
   url: string;
@@ -216,7 +216,7 @@ function parseProcessParents(output: string): ReadonlyMap<number, number> {
 function processLineage(
   processId: number,
   parents: ReadonlyMap<number, number>,
-): string | undefined {
+): readonly number[] | undefined {
   const lineage = [processId];
   let current = processId;
   while (lineage.length < 16) {
@@ -225,7 +225,7 @@ function processLineage(
     lineage.push(parent);
     current = parent;
   }
-  return lineage.length > 1 ? lineage.join(",") : undefined;
+  return lineage.length > 1 ? lineage : undefined;
 }
 
 function taskObservation(

@@ -17,7 +17,6 @@
     "@silvic/connector-github": "workspace:*",
     "@silvic/connector-harnesses": "workspace:*",
     "@silvic/connector-local": "workspace:*",
-    "@silvic/connector-work-cli": "workspace:*",
     "@silvic/contracts": "workspace:*",
     "@silvic/core": "workspace:*",
     "electron-store": "^11.0.2"

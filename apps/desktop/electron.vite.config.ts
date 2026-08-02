@@ -17,7 +17,6 @@ export default defineConfig({
           "@silvic/connector-github",
           "@silvic/connector-harnesses",
           "@silvic/connector-local",
-          "@silvic/connector-work-cli",
         ],
       }),
     ],

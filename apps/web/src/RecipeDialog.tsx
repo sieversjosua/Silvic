@@ -11,6 +11,7 @@ import {
 
 import {
   isConvexStep,
+  plotResourceProviderCatalog,
   type PlotCommand,
   type PlotResourceDefinition,
   type PlotResourceProvider,
@@ -34,10 +35,12 @@ export function RecipeDialog({
   projectId,
   projectName,
   onClose,
+  onSaved,
 }: {
   projectId: string;
   projectName: string;
   onClose(): void;
+  onSaved(recipe: Recipe): void;
 }) {
   const [document, setDocument] = useState<RecipeDocument>();
   const [adding, setAdding] = useState<
@@ -156,8 +159,11 @@ export function RecipeDialog({
     setSaving(true);
     setFailure(undefined);
     try {
-      await window.silvic.saveRecipe({ projectId, recipe: draft });
-      onClose();
+      const saved = await window.silvic.saveRecipe({
+        projectId,
+        recipe: draft,
+      });
+      onSaved(saved.recipe);
     } catch (error) {
       setFailure(failureMessage(error));
       setSaving(false);
@@ -197,7 +203,13 @@ export function RecipeDialog({
           )}
         </header>
 
-        {findings && empty && <Suggestion findings={findings} onUse={apply} />}
+        {reading && empty && (
+          <Suggestion
+            findings={reading.findings}
+            recipe={reading.recipe}
+            onUse={apply}
+          />
+        )}
 
         <div className="recipe-body">
           <div className="recipe-panel">
@@ -843,47 +855,16 @@ const resourceProviders: readonly PlotResourceProvider[] = [
 function resourceDefaults(
   provider: PlotResourceProvider,
 ): PlotResourceDefinition {
-  switch (provider) {
-    case "convex":
-      return { provider, kind: "backend", isolation: "isolated" };
-    case "livekit":
-      return { provider, kind: "agent", isolation: "shared" };
-    case "stripe":
-      return { provider, kind: "payments", isolation: "namespaced" };
-    case "cloudflare":
-      return { provider, kind: "ingress", isolation: "namespaced" };
-    case "vercel":
-      return { provider, kind: "deployment", isolation: "isolated" };
-    case "clerk":
-    case "workos":
-      return { provider, kind: "auth", isolation: "shared" };
-    case "github":
-      return { provider, kind: "review", isolation: "shared" };
-    default:
-      return { provider, kind: "service", isolation: "shared" };
-  }
+  const { kind, isolation } = plotResourceProviderCatalog[provider];
+  return { provider, kind, isolation };
 }
 
 function providerName(provider: PlotResourceProvider): string {
-  if (provider === "livekit") return "LiveKit Agent";
-  if (provider === "workos") return "WorkOS";
-  return `${provider[0]?.toUpperCase() ?? ""}${provider.slice(1)}`;
+  return plotResourceProviderCatalog[provider].label;
 }
 
 function resourceDescription(provider: PlotResourceProvider): string {
-  const descriptions: Record<PlotResourceProvider, string> = {
-    web: "A browser-facing runtime",
-    convex: "An isolated backend deployment",
-    livekit: "An agent or worker attached to the Plot",
-    stripe: "Test payments and webhook forwarding",
-    cloudflare: "A Worker, tunnel or public ingress",
-    vercel: "A shareable Preview Deployment",
-    clerk: "Authentication origin and instance",
-    workos: "Authentication and callback configuration",
-    github: "Issue, pull request and checks",
-    custom: "Any external service Silvic should track",
-  };
-  return descriptions[provider];
+  return plotResourceProviderCatalog[provider].description;
 }
 
 function uniqueResourceId(
@@ -1016,9 +997,11 @@ function StepTest({
 
 function Suggestion({
   findings,
+  recipe,
   onUse,
 }: {
   findings: RepositoryFindings;
+  recipe: Recipe;
   onUse(recipe: Recipe): void;
 }) {
   const seen = [
@@ -1027,6 +1010,9 @@ function Suggestion({
     findings.convex ? "convex/" : undefined,
     findings.envExample,
     findings.workConfig ? "work.config.js" : undefined,
+    ...(findings.providers ?? []).map(
+      (provider) => plotResourceProviderCatalog[provider].label,
+    ),
   ].filter((item) => item !== undefined);
 
   if (seen.length === 0) return null;
@@ -1040,45 +1026,10 @@ function Suggestion({
       <button
         type="button"
         className="ghost-button"
-        onClick={() => onUse(suggestFrom(findings))}
+        onClick={() => onUse(recipe)}
       >
         Use as a start
       </button>
     </div>
   );
-}
-
-/** Mirrors core's suggestion so the editor can offer it before saving. */
-function suggestFrom(findings: RepositoryFindings): Recipe {
-  const manager = findings.packageManager;
-  const provision: ProvisionStep[] = [];
-  if (manager) {
-    provision.push({
-      label: "Install dependencies",
-      run: `${manager} install`,
-    });
-  }
-  if (findings.envExample) {
-    provision.push({
-      label: "Environment file",
-      run: `cp "$SILVIC_SOURCE_ROOT/.env.local" .env.local 2>/dev/null || cp ${findings.envExample} .env.local`,
-    });
-  }
-  if (findings.convex) provision.push({ convex: { name: "dev/{plot}" } });
-
-  return {
-    ...(manager ? { packageManager: manager } : {}),
-    ...(provision.length > 0 ? { provision } : {}),
-    ...(findings.devScript && manager
-      ? {
-          commands: {
-            web: {
-              run: `${manager} run ${findings.devScript}`,
-              url: true,
-              autoStart: true,
-            },
-          },
-        }
-      : {}),
-  };
 }

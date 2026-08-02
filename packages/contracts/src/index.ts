@@ -37,7 +37,9 @@ export interface ConnectorObservation {
   label: string;
   detail?: string | undefined;
   url?: string | undefined;
-  metadata?: Readonly<Record<string, string | number | boolean>> | undefined;
+  metadata?:
+    | Readonly<Record<string, string | number | boolean | readonly number[]>>
+    | undefined;
 }
 
 export const connectorObservationSchema = z
@@ -72,7 +74,12 @@ export const connectorObservationSchema = z
     metadata: z
       .record(
         z.string().max(120),
-        z.union([z.string().max(2_000), z.number().finite(), z.boolean()]),
+        z.union([
+          z.string().max(2_000),
+          z.number().finite(),
+          z.boolean(),
+          z.array(z.number().int()).max(32),
+        ]),
       )
       .refine((value) => Object.keys(value).length <= 50)
       .optional(),
@@ -311,6 +318,8 @@ export interface RepositoryReading {
   findings: RepositoryFindings;
   steps: readonly RecipeSuggestion[];
   commands: readonly RecipeSuggestion[];
+  /** The same complete inference used when no silvic.json exists. */
+  recipe: Recipe;
 }
 
 export const plotCommandSchema = z
@@ -383,6 +392,79 @@ export const plotResourceDefinitionSchema = z
 export type PlotResourceDefinition = z.infer<
   typeof plotResourceDefinitionSchema
 >;
+
+export const plotResourceProviderCatalog: Readonly<
+  Record<
+    PlotResourceProvider,
+    {
+      label: string;
+      description: string;
+      kind: PlotResourceKind;
+      isolation: ResourceIsolation;
+    }
+  >
+> = {
+  web: {
+    label: "Web",
+    description: "A browser-facing runtime",
+    kind: "runtime",
+    isolation: "isolated",
+  },
+  convex: {
+    label: "Convex",
+    description: "An isolated backend deployment",
+    kind: "backend",
+    isolation: "isolated",
+  },
+  livekit: {
+    label: "LiveKit Agent",
+    description: "An agent or worker attached to the Plot",
+    kind: "agent",
+    isolation: "shared",
+  },
+  stripe: {
+    label: "Stripe",
+    description: "Test payments and webhook forwarding",
+    kind: "payments",
+    isolation: "namespaced",
+  },
+  cloudflare: {
+    label: "Cloudflare",
+    description: "A Worker, tunnel or public ingress",
+    kind: "ingress",
+    isolation: "namespaced",
+  },
+  vercel: {
+    label: "Vercel",
+    description: "A shareable Preview Deployment",
+    kind: "deployment",
+    isolation: "isolated",
+  },
+  clerk: {
+    label: "Clerk",
+    description: "Authentication origin and instance",
+    kind: "auth",
+    isolation: "shared",
+  },
+  workos: {
+    label: "WorkOS",
+    description: "Authentication and callback configuration",
+    kind: "auth",
+    isolation: "shared",
+  },
+  github: {
+    label: "GitHub",
+    description: "Issue, pull request and checks",
+    kind: "review",
+    isolation: "shared",
+  },
+  custom: {
+    label: "Custom",
+    description: "Any external service Silvic should track",
+    kind: "service",
+    isolation: "shared",
+  },
+};
 
 /** A resource projected for one Plot from its recipe and live evidence. */
 export interface PlotResource {

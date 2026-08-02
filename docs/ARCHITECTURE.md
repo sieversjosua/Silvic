@@ -14,7 +14,7 @@ Electron preload
     │ typed IPC
     ▼
 Electron main ── ProjectService ── Git
-              └─ ConnectorRegistry ── GitHub / Convex / work-cli
+              └─ ConnectorRegistry ── GitHub / Convex / local context
 ```
 
 The BrowserWindow uses context isolation, sandboxing, and no Node integration.

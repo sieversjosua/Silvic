@@ -35,9 +35,6 @@ importers:
       '@silvic/connector-local':
         specifier: workspace:*
         version: link:../../connectors/local
-      '@silvic/connector-work-cli':
-        specifier: workspace:*
-        version: link:../../connectors/work-cli
       '@silvic/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
@@ -120,15 +117,6 @@ importers:
         version: link:../../packages/core
 
   connectors/local:
-    dependencies:
-      '@silvic/contracts':
-        specifier: workspace:*
-        version: link:../../packages/contracts
-      '@silvic/core':
-        specifier: workspace:*
-        version: link:../../packages/core
-
-  connectors/work-cli:
     dependencies:
       '@silvic/contracts':
         specifier: workspace:*

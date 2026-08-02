@@ -3480,6 +3480,25 @@ button {
   text-transform: none;
 }
 
+.sidebar-resource-url {
+  display: flex;
+  max-width: 100%;
+  gap: 5px;
+  align-items: center;
+  margin-top: 4px;
+  padding-left: 15px;
+  color: var(--ink-muted);
+  font-size: 9.5px;
+}
+
+.sidebar-resource-url:hover {
+  color: var(--ink);
+}
+
+.sidebar-resource-url svg {
+  flex: 0 0 auto;
+}
+
 .sidebar-resource-actions {
   display: flex;
   gap: 2px;

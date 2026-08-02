@@ -103,7 +103,9 @@ One optional file at the repository root. Every field optional.
 When no explicit recipe exists, Silvic also recognises LiveKit, Stripe,
 Cloudflare/Wrangler, Vercel, Clerk and WorkOS packages or scripts. A matching
 long-running script becomes a supervised command; every detected provider
-becomes a visible resource. Detection never reads credential values.
+becomes a visible resource. SDK-only findings are marked manual and “detected,
+not configured”; they never masquerade as an isolated deployment. Detection
+never reads credential values.
 
 `provision` steps are the extension point. `run` covers repository-specific
 tasks; named steps like `convex` are implemented by Silvic because they own an

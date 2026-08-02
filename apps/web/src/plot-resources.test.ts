@@ -115,7 +115,7 @@ describe("plotResources", () => {
             metadata: {
               processId: 9281,
               processGroupId: 8134,
-              processLineage: "9281,8134,7220",
+              processLineage: [9281, 8134, 7220],
             },
           },
         ],
