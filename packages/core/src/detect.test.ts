@@ -34,7 +34,7 @@ async function repository(
 }
 
 describe("inspectRepository", () => {
-  it("recognises provider SDKs that belong in the Plot view", async () => {
+  it("recognises provider SDKs that belong in the Plot inspector", async () => {
     const root = await repository({
       "package.json": JSON.stringify({
         scripts: {

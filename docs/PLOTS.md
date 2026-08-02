@@ -69,7 +69,7 @@ One optional file at the repository root. Every field optional.
     "agent": { "run": "bun run agent:dev", "autoStart": true },
   },
 
-  // Services shown in the Plot view. A command links live state and logs.
+  // Services shown in the Plot inspector. A command links live state and logs.
   "resources": {
     "agent": {
       "provider": "livekit",

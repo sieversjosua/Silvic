@@ -551,8 +551,7 @@ export function RecipeDialog({
               <div className="recipe-part-title">
                 <h3>Attached services</h3>
                 <p>
-                  Provider resources shown together in every dedicated Plot
-                  view.
+                  Provider resources shown together in every Plot's sidebar.
                 </p>
                 <div className="recipe-actions">
                   <AddMenu
