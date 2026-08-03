@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { RefObject } from "react";
 import { createPortal } from "react-dom";
 import {
   Background,
@@ -451,22 +452,16 @@ function WorkspaceNode({ data }: NodeProps<WorkspaceFlowNode>) {
             <i className="dot" />
             {state.label}
           </span>
-          <button
-            type="button"
-            className="plot-menu-trigger"
-            aria-label={`Actions for ${workspace.name}`}
-            aria-haspopup="menu"
-            aria-expanded={data.menuOpen}
-            ref={menuButton}
-            onClick={(event) => {
-              event.stopPropagation();
+          <PlotMenuTrigger
+            workspaceName={workspace.name}
+            expanded={data.menuOpen}
+            buttonRef={menuButton}
+            onToggle={() =>
               data.menuOpen
                 ? data.onCloseMenu()
-                : data.onOpenMenu(workspace.workspaceId);
-            }}
-          >
-            <MoreHorizontal size={14} />
-          </button>
+                : data.onOpenMenu(workspace.workspaceId)
+            }
+          />
         </span>
       </header>
 
@@ -642,6 +637,35 @@ function WorkspaceNode({ data }: NodeProps<WorkspaceFlowNode>) {
       )}
       <Handle id="out-right" type="source" position={Position.Right} />
     </article>
+  );
+}
+
+export function PlotMenuTrigger({
+  workspaceName,
+  expanded,
+  buttonRef,
+  onToggle,
+}: {
+  workspaceName: string;
+  expanded: boolean;
+  buttonRef: RefObject<HTMLButtonElement | null>;
+  onToggle(): void;
+}) {
+  return (
+    <button
+      type="button"
+      className="plot-menu-trigger"
+      aria-label={`Actions for ${workspaceName}`}
+      aria-haspopup="menu"
+      aria-expanded={expanded}
+      ref={buttonRef}
+      onClick={(event) => {
+        event.stopPropagation();
+        onToggle();
+      }}
+    >
+      <MoreHorizontal size={14} />
+    </button>
   );
 }
 
