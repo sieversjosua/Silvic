@@ -38,6 +38,7 @@ import type {
   PlotPreview,
   PlotProcess,
   PlotProgressStep,
+  PlotProvisionRunResult,
   PlotProvisioning,
   PlotResource,
   PlotResourceDefinition,
@@ -1596,52 +1597,7 @@ function NewPlotDialog({
               display={pathTail(result.plot.path)}
             />
           </div>
-          <div className="ready-section">
-            <p className="micro">
-              Runtimes
-              <span className="micro-value">
-                {result.runtime.status === "started"
-                  ? `Started in ${secondsLabel(result.runtime.durationMs)}`
-                  : result.runtime.status === "failed"
-                    ? "Startup failed"
-                    : "Not started"}
-              </span>
-            </p>
-            {result.runtime.detail && (
-              <p
-                className={
-                  result.runtime.status === "failed"
-                    ? "dialog-error"
-                    : "dialog-copy"
-                }
-              >
-                {result.runtime.detail}
-              </p>
-            )}
-          </div>
-          <div className="ready-section">
-            <p className="micro">
-              Preview
-              <span className="micro-value">
-                {result.readiness.status === "ready"
-                  ? `Live after ${secondsLabel(result.readiness.durationMs)}`
-                  : result.readiness.status === "failed"
-                    ? "Did not respond"
-                    : "No auto-starting web command"}
-              </span>
-            </p>
-            {result.readiness.detail && (
-              <p
-                className={
-                  result.readiness.status === "failed"
-                    ? "dialog-error"
-                    : "dialog-copy"
-                }
-              >
-                {result.readiness.detail}
-              </p>
-            )}
-          </div>
+          <PlotOnlineStatus result={result} />
           {attached.length > 0 && (
             <div className="ready-section">
               <p className="micro">Attached</p>
@@ -2091,6 +2047,63 @@ function NewPlotDialog({
   );
 }
 
+function PlotOnlineStatus({
+  result,
+}: {
+  result: Pick<PlotCreationResult, "runtime" | "readiness">;
+}) {
+  return (
+    <>
+      <div className="ready-section">
+        <p className="micro">
+          Runtimes
+          <span className="micro-value">
+            {result.runtime.status === "started"
+              ? `Started in ${secondsLabel(result.runtime.durationMs)}`
+              : result.runtime.status === "failed"
+                ? "Startup failed"
+                : "Not started"}
+          </span>
+        </p>
+        {result.runtime.detail && (
+          <p
+            className={
+              result.runtime.status === "failed"
+                ? "dialog-error"
+                : "dialog-copy"
+            }
+          >
+            {result.runtime.detail}
+          </p>
+        )}
+      </div>
+      <div className="ready-section">
+        <p className="micro">
+          Preview
+          <span className="micro-value">
+            {result.readiness.status === "ready"
+              ? `Live after ${secondsLabel(result.readiness.durationMs)}`
+              : result.readiness.status === "failed"
+                ? "Did not respond"
+                : "No auto-starting web command"}
+          </span>
+        </p>
+        {result.readiness.detail && (
+          <p
+            className={
+              result.readiness.status === "failed"
+                ? "dialog-error"
+                : "dialog-copy"
+            }
+          >
+            {result.readiness.detail}
+          </p>
+        )}
+      </div>
+    </>
+  );
+}
+
 /**
  * A finished run, step by step. Where Silvic recognised a failure it says so in
  * its own words and offers the repair; the tool's output is kept but folded, so
@@ -2164,6 +2177,7 @@ function ProvisionDialog({
   const [results, setResults] = useState<readonly ProvisionResult[]>(
     workspace.provisioning?.steps ?? [],
   );
+  const [online, setOnline] = useState<PlotProvisionRunResult>();
   const [failure, setFailure] = useState<string>();
 
   useEffect(
@@ -2177,10 +2191,14 @@ function ProvisionDialog({
   const run = (remedy?: ProvisionRemedyId) => {
     setFailure(undefined);
     setSteps([]);
+    setOnline(undefined);
     setRunning(true);
     void window.silvic
       .provisionPlot({ path: workspace.path, ...(remedy ? { remedy } : {}) })
-      .then((result) => setResults(result.provision))
+      .then((result) => {
+        setResults(result.provision);
+        setOnline(result);
+      })
       .catch((error: unknown) => setFailure(failureMessage(error)))
       .finally(() => setRunning(false));
   };
@@ -2197,7 +2215,11 @@ function ProvisionDialog({
             ? "Provisioning"
             : failed
               ? "Provisioning failed"
-              : "Provisioning"}
+              : online?.runtime.status === "failed"
+                ? "Runtime failed"
+                : online?.readiness.status === "failed"
+                  ? "Preview unavailable"
+                  : "Provisioning"}
         </p>
         <h2>{workspace.name}</h2>
         <p className="dialog-copy">
@@ -2214,6 +2236,7 @@ function ProvisionDialog({
             <ProvisionResults results={results} onRemedy={(id) => run(id)} />
           )
         )}
+        {!running && online && <PlotOnlineStatus result={online} />}
         {failure && <p className="dialog-error">{failure}</p>}
         <div className="dialog-actions">
           <button
