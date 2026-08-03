@@ -53,6 +53,7 @@ import {
   locationLabel,
   workingTreeLabel,
   workspaceState,
+  type CardRuntimeState,
   type CardSignal,
 } from "./state";
 import { failureMessage } from "./errors";
@@ -68,8 +69,8 @@ interface WorkspaceNodeData extends Record<string, unknown> {
   dimmed: boolean;
   menuOpen: boolean;
   project: ProjectSnapshot;
-  commands: readonly (readonly [string, PlotCommand])[];
-  processes: readonly PlotProcess[];
+  runtime: CardRuntimeState | undefined;
+  previewUrl: string | undefined;
   onSelect(id: string): void;
   onOpen(path: string, target: HarnessDefinition["id"]): void;
   onOpenMenu(id: string): void;
@@ -177,8 +178,13 @@ function GroveCanvas({
           dimmed: needle.length > 0 && !matches(workspace, needle),
           menuOpen: menuPlotId === workspace.workspaceId,
           project,
-          commands,
-          processes,
+          runtime: cardRuntimeState({ workspace, commands, processes }),
+          previewUrl: processes.find(
+            (process) =>
+              process.plotPath === workspace.path &&
+              process.status === "running" &&
+              process.url,
+          )?.url,
           onSelect,
           onOpen,
           onOpenMenu: setMenuPlotId,
@@ -376,11 +382,7 @@ function WorkspaceNode({ data }: NodeProps<WorkspaceFlowNode>) {
   const { workspace } = data;
   const [runtimeWorking, setRuntimeWorking] = useState(false);
   const [runtimeFailure, setRuntimeFailure] = useState<string>();
-  const runtime = cardRuntimeState({
-    workspace,
-    commands: data.commands,
-    processes: data.processes,
-  });
+  const runtime = data.runtime;
   const workspaceStatus = workspaceState(workspace);
   const state = runtime
     ? {
@@ -401,12 +403,7 @@ function WorkspaceNode({ data }: NodeProps<WorkspaceFlowNode>) {
   );
   const menuButton = useRef<HTMLButtonElement>(null);
   const { remoteUrl } = data.project;
-  const supervisedPreviewUrl = data.processes.find(
-    (process) =>
-      process.plotPath === workspace.path &&
-      process.status === "running" &&
-      process.url,
-  )?.url;
+  const supervisedPreviewUrl = data.previewUrl;
   const observedRuntimeUrl = workspace.observations.find(
     (observation) => observation.kind === "runtime" && observation.url,
   )?.url;
