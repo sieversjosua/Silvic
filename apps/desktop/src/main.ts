@@ -3,6 +3,11 @@ import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir, platform } from "node:os";
 import { basename, join, normalize } from "node:path";
 import { randomUUID } from "node:crypto";
+import {
+  request as httpRequest,
+  type RequestOptions as HttpRequestOptions,
+} from "node:http";
+import { request as httpsRequest } from "node:https";
 import { pathToFileURL } from "node:url";
 
 import {
@@ -78,6 +83,7 @@ import {
   provisionEnvironment,
   provisionCompleted,
   provisionStepLabel,
+  waitForReadiness,
   readRecipe,
   mergeSnapshots,
   routeNameFor,
@@ -625,6 +631,8 @@ function assertTrustedSender(event: IpcMainInvokeEvent): void {
 
 const checkoutStepId = "checkout";
 const surveyStepId = "survey";
+const runtimeStepId = "runtime";
+const readinessStepId = "readiness";
 const remedyStepId = "remedy";
 
 function provisionStepId(index: number): string {
@@ -658,6 +666,10 @@ async function createEnvironment(
   const address = addressFor(recipe, plot, port);
   await requireNamedRouting(address);
   const url = address.url;
+  const autoCommands = Object.values(recipe.commands).filter(
+    (command) => command.autoStart,
+  );
+  const servesAddress = autoCommands.some((command) => command.url === true);
 
   // Named before anything runs, so the dialog can show the whole plan and not
   // just the step that happens to be running.
@@ -676,6 +688,12 @@ async function createEnvironment(
         label: provisionStepLabel(step, index),
       })),
       { id: surveyStepId, label: "Survey the new plot" },
+      ...(autoCommands.length > 0
+        ? [{ id: runtimeStepId, label: "Start plot runtimes" }]
+        : []),
+      ...(servesAddress
+        ? [{ id: readinessStepId, label: "Wait for the preview" }]
+        : []),
     ],
     (payload) =>
       mainWindow?.webContents.send(ipcChannels.plotProgress, payload),
@@ -760,15 +778,43 @@ async function createEnvironment(
     progress.began(surveyStepId);
     await paintFromGit([project.rootPath, destinationPath]);
     progress.finished(surveyStepId);
+    let readiness: PlotCreationResult["readiness"] = {
+      status: "not-required",
+      durationMs: 0,
+      detail: "This repository declares no auto-starting preview command.",
+    };
     // The recipe said these should be up; the plot is handed over running.
     if (provisionCompleted(recipe.provision, provision)) {
-      await startAutoCommands(destinationPath, recipe.commands);
+      if (autoCommands.length > 0) {
+        progress.began(runtimeStepId);
+        await startAutoCommands(destinationPath, recipe.commands);
+        progress.finished(runtimeStepId);
+      }
+      if (servesAddress) {
+        progress.began(readinessStepId);
+        readiness = await waitForReadiness({ url, probe: probePreview });
+        if (readiness.status === "ready") {
+          progress.finished(readinessStepId, readiness.durationMs);
+        } else {
+          progress.failed(
+            readinessStepId,
+            readiness.detail ?? "Preview failed",
+          );
+        }
+      }
+    } else {
+      readiness = {
+        status: "not-required",
+        durationMs: 0,
+        detail: "Provisioning did not complete, so runtimes were not started.",
+      };
     }
     void refreshSnapshot(true);
     return {
       snapshot: latestSnapshot,
       plot: { name: plot, path: destinationPath, port, url },
       provision,
+      readiness,
       commands: recipe.commands,
     };
   } catch (error) {
@@ -913,6 +959,37 @@ async function startAutoCommands(
       // provisioned worktree back into a failed plot.
     }
   }
+}
+
+/** A response below 500 means the local preview itself is reachable. */
+function probePreview(url: string): Promise<boolean> {
+  const target = new URL(url);
+  const localTls =
+    target.protocol === "https:" &&
+    (target.hostname === "localhost" || target.hostname.endsWith(".localhost"));
+  const options: HttpRequestOptions & { rejectUnauthorized?: boolean } = {
+    protocol: target.protocol,
+    hostname: target.hostname,
+    ...(target.port ? { port: target.port } : {}),
+    path: `${target.pathname}${target.search}`,
+    method: "GET",
+    headers: { connection: "close" },
+    ...(localTls ? { rejectUnauthorized: false } : {}),
+  };
+
+  return new Promise<boolean>((resolve, reject) => {
+    const send = target.protocol === "https:" ? httpsRequest : httpRequest;
+    const request = send(options, (response) => {
+      response.resume();
+      const status = response.statusCode ?? 0;
+      resolve(status >= 200 && status < 500);
+    });
+    request.setTimeout(2_000, () => {
+      request.destroy(new Error("The preview check timed out"));
+    });
+    request.once("error", reject);
+    request.end();
+  });
 }
 
 function providerSourceRoots(

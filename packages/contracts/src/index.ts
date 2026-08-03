@@ -708,8 +708,16 @@ export interface PlotCreationResult {
   snapshot: SilvicSnapshot;
   plot: { name: string; path: string; port: number; url: string };
   provision: readonly ProvisionResult[];
+  /** Whether the published address actually answered after runtimes started. */
+  readiness: PlotReadiness;
   /** What the recipe says can be run in a plot, so a new one can say so too. */
   commands: Readonly<Record<string, PlotCommand>>;
+}
+
+export interface PlotReadiness {
+  status: "ready" | "failed" | "not-required";
+  durationMs: number;
+  detail?: string;
 }
 
 export interface PlotProgressStep {
