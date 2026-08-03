@@ -1038,6 +1038,18 @@ button {
   white-space: nowrap;
 }
 
+.plot[data-running] .plot-state {
+  padding: 3px 8px;
+  border: 1px solid color-mix(in srgb, var(--tone) 34%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--tone) 9%, transparent);
+  font-weight: 650;
+}
+
+.plot[data-running] .plot-state .dot {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--tone) 14%, transparent);
+}
+
 .plot-title {
   margin-top: 7px;
   display: flex;
@@ -1145,6 +1157,13 @@ button {
   margin-top: 7px;
 }
 
+.plot-runtime-state {
+  border-color: color-mix(in srgb, var(--tone) 32%, var(--rule));
+  background: color-mix(in srgb, var(--tone) 8%, var(--surface));
+  color: var(--tone);
+  font-weight: 620;
+}
+
 .chip {
   display: inline-flex;
   max-width: 100%;
@@ -1233,6 +1252,24 @@ button {
   color: var(--ink);
   border-color: var(--rule-strong);
   background: var(--surface-hover);
+}
+
+.plot-actions button.plot-runtime-toggle {
+  border-color: color-mix(in srgb, var(--tone-active) 36%, var(--rule));
+  background: color-mix(in srgb, var(--tone-active) 8%, var(--surface));
+  color: var(--tone-active);
+  font-weight: 650;
+}
+
+.plot-actions button.plot-runtime-toggle[data-action="start"] {
+  border-color: color-mix(in srgb, var(--ink) 22%, var(--rule));
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.plot-actions button.plot-runtime-toggle:disabled {
+  cursor: wait;
+  opacity: 0.62;
 }
 
 .plot-actions .icon {

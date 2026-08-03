@@ -1,4 +1,9 @@
-import type { ConnectorObservation, WorkspaceSnapshot } from "@silvic/contracts";
+import type {
+  ConnectorObservation,
+  PlotCommand,
+  PlotProcess,
+  WorkspaceSnapshot,
+} from "@silvic/contracts";
 
 export type Tone =
   | "attention"
@@ -61,6 +66,57 @@ export interface CardSignal {
   url?: string;
 }
 
+export interface CardRuntimeState {
+  tone: ConnectorObservation["state"];
+  label: string;
+  action: "start" | "stop";
+  targetIds: readonly string[];
+}
+
+/**
+ * The card controls the Plot's declared runtime set as one unit. A partially
+ * running Plot starts only what is missing; Stop appears only once everything
+ * the recipe declares is actually running.
+ */
+export function cardRuntimeState({
+  workspace,
+  commands,
+  processes,
+}: {
+  workspace: WorkspaceSnapshot;
+  commands: readonly (readonly [string, PlotCommand])[];
+  processes: readonly PlotProcess[];
+}): CardRuntimeState | undefined {
+  const ids = commands.map(([id]) => id);
+  if (ids.length === 0) return undefined;
+  const byId = new Map(
+    processes
+      .filter((process) => process.plotPath === workspace.path)
+      .map((process) => [process.id, process]),
+  );
+  const running = ids.filter((id) => byId.get(id)?.status === "running");
+  const missing = ids.filter((id) => !running.includes(id));
+  const failed = missing.some((id) => byId.get(id)?.status === "failed");
+
+  if (running.length === ids.length) {
+    return {
+      tone: "active",
+      label: `${running.length} running`,
+      action: "stop",
+      targetIds: running,
+    };
+  }
+  return {
+    tone: failed ? "attention" : running.length > 0 ? "waiting" : "quiet",
+    label:
+      running.length > 0
+        ? `${running.length} of ${ids.length} running`
+        : "Stopped",
+    action: "start",
+    targetIds: missing,
+  };
+}
+
 const severity: Record<ConnectorObservation["state"], number> = {
   attention: 0,
   active: 1,
@@ -100,7 +156,9 @@ export function cardSignals(workspace: WorkspaceSnapshot): CardSignal[] {
           ? `${items.length} ${plural[kind]}`
           : kind === "session"
             ? (worst.detail ?? worst.label)
-            : worst.label;
+            : kind === "runtime"
+              ? "Local preview"
+              : worst.label;
       const url = items.length === 1 ? worst.url : undefined;
       return { kind, tone: worst.state, text, ...(url ? { url } : {}) };
     })

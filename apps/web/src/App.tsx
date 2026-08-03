@@ -304,6 +304,8 @@ export function App() {
 
             <Grove
               project={project}
+              commands={commands}
+              processes={processes}
               query={query}
               appearance={appearance}
               selectedWorkspaceId={workspace?.workspaceId}

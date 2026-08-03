@@ -22,10 +22,12 @@ import {
   Maximize2,
   Minus,
   MoreHorizontal,
+  Monitor,
   Play,
   Plus,
   Radio,
   SlidersHorizontal,
+  Square,
   Trash2,
   Terminal,
   TriangleAlert,
@@ -36,29 +38,24 @@ import type {
   HarnessId,
   HarnessDefinition,
   ProjectSnapshot,
+  PlotCommand,
+  PlotProcess,
   WorkspaceSnapshot,
 } from "@silvic/contracts";
 
 import { substrate, type Appearance } from "./appearance";
-import {
-  CodexMark,
-  ConvexMark,
-  GitHubMark,
-  HarnessMark,
-} from "./providers";
-import {
-  QUIET_FOLD_MIN,
-  isQuiet,
-  layout,
-} from "./grove-layout";
+import { CodexMark, ConvexMark, GitHubMark, HarnessMark } from "./providers";
+import { QUIET_FOLD_MIN, isQuiet, layout } from "./grove-layout";
 import { HarnessRows, harnessLabel } from "./harnesses";
 import {
   cardSignals,
+  cardRuntimeState,
   locationLabel,
   workingTreeLabel,
   workspaceState,
   type CardSignal,
 } from "./state";
+import { failureMessage } from "./errors";
 
 const STORAGE_KEY = "silvic.grove.nudges.v2";
 
@@ -71,6 +68,8 @@ interface WorkspaceNodeData extends Record<string, unknown> {
   dimmed: boolean;
   menuOpen: boolean;
   project: ProjectSnapshot;
+  commands: readonly (readonly [string, PlotCommand])[];
+  processes: readonly PlotProcess[];
   onSelect(id: string): void;
   onOpen(path: string, target: HarnessDefinition["id"]): void;
   onOpenMenu(id: string): void;
@@ -93,6 +92,8 @@ type GroveNode = WorkspaceFlowNode | QuietFlowNode;
 
 interface GroveProps {
   project: ProjectSnapshot;
+  commands: readonly (readonly [string, PlotCommand])[];
+  processes: readonly PlotProcess[];
   query: string;
   appearance: Appearance;
   selectedWorkspaceId: string | undefined;
@@ -117,6 +118,8 @@ export function Grove(props: GroveProps) {
 
 function GroveCanvas({
   project,
+  commands,
+  processes,
   query,
   appearance,
   selectedWorkspaceId,
@@ -174,6 +177,8 @@ function GroveCanvas({
           dimmed: needle.length > 0 && !matches(workspace, needle),
           menuOpen: menuPlotId === workspace.workspaceId,
           project,
+          commands,
+          processes,
           onSelect,
           onOpen,
           onOpenMenu: setMenuPlotId,
@@ -189,6 +194,8 @@ function GroveCanvas({
   }, [
     tidy,
     project,
+    commands,
+    processes,
     nudges,
     query,
     menuPlotId,
@@ -331,7 +338,11 @@ function GroveCanvas({
           </>
         )}
         {nudged > 0 && (
-          <button type="button" className="tool-text" onClick={() => persist({})}>
+          <button
+            type="button"
+            className="tool-text"
+            onClick={() => persist({})}
+          >
             Retidy {nudged}
           </button>
         )}
@@ -363,20 +374,60 @@ function GroveCanvas({
 
 function WorkspaceNode({ data }: NodeProps<WorkspaceFlowNode>) {
   const { workspace } = data;
-  const state = workspaceState(workspace);
+  const [runtimeWorking, setRuntimeWorking] = useState(false);
+  const [runtimeFailure, setRuntimeFailure] = useState<string>();
+  const runtime = cardRuntimeState({
+    workspace,
+    commands: data.commands,
+    processes: data.processes,
+  });
+  const workspaceStatus = workspaceState(workspace);
+  const state = runtime
+    ? {
+        label:
+          runtime.tone === "active"
+            ? "Running"
+            : runtime.tone === "attention"
+              ? "Runtime issue"
+              : runtime.tone === "waiting"
+                ? "Partial"
+                : "Stopped",
+        tone: runtime.tone,
+      }
+    : workspaceStatus;
   const { ahead, behind } = workspace.git;
-  const signals = cardSignals(workspace);
+  const signals = cardSignals(workspace).filter(
+    (signal) => !(runtime && signal.kind === "runtime"),
+  );
   const menuButton = useRef<HTMLButtonElement>(null);
   const { remoteUrl } = data.project;
-  const runtimeUrl = workspace.observations.find(
+  const supervisedPreviewUrl = data.processes.find(
+    (process) =>
+      process.plotPath === workspace.path &&
+      process.status === "running" &&
+      process.url,
+  )?.url;
+  const observedRuntimeUrl = workspace.observations.find(
     (observation) => observation.kind === "runtime" && observation.url,
   )?.url;
+  const runtimeUrl = runtime ? supervisedPreviewUrl : observedRuntimeUrl;
+  const previewSignal: CardSignal | undefined = supervisedPreviewUrl
+    ? {
+        kind: "runtime",
+        tone: "active",
+        text: "Local preview",
+        url: supervisedPreviewUrl,
+      }
+    : undefined;
 
   return (
     <article
       className="plot"
       data-tone={state.tone}
-      data-running={state.tone === "active" || undefined}
+      data-running={
+        (runtime ? runtime.tone === "active" : state.tone === "active") ||
+        undefined
+      }
       data-primary={workspace.isPrimary || undefined}
       data-selected={data.selected || undefined}
       data-dimmed={data.dimmed || undefined}
@@ -450,8 +501,25 @@ function WorkspaceNode({ data }: NodeProps<WorkspaceFlowNode>) {
         </p>
       )}
 
-      {signals.length > 0 && (
+      {(runtime || previewSignal || runtimeFailure || signals.length > 0) && (
         <div className="plot-signals">
+          {runtime && (
+            <span className="chip plot-runtime-state" data-tone={runtime.tone}>
+              <Radio size={10} />
+              <span>{runtime.label}</span>
+            </span>
+          )}
+          {runtimeFailure && (
+            <span
+              className="chip plot-runtime-state"
+              data-tone="attention"
+              title={runtimeFailure}
+            >
+              <TriangleAlert size={10} />
+              <span>Runtime action failed</span>
+            </span>
+          )}
+          {previewSignal && <Signal signal={previewSignal} />}
           {signals.map((signal) => (
             <Signal key={signal.kind} signal={signal} />
           ))}
@@ -481,6 +549,54 @@ function WorkspaceNode({ data }: NodeProps<WorkspaceFlowNode>) {
           <Terminal size={12} />
         </button>
         <span className="plot-actions-gap" />
+        {runtime && (
+          <button
+            type="button"
+            className="plot-runtime-toggle"
+            data-action={runtime.action}
+            aria-label={`${runtime.action === "stop" ? "Stop" : "Start"} runtimes for ${workspace.name}`}
+            title={
+              runtime.action === "stop" ? "Stop runtimes" : "Start runtimes"
+            }
+            disabled={runtimeWorking}
+            onClick={(event) => {
+              event.stopPropagation();
+              setRuntimeWorking(true);
+              setRuntimeFailure(undefined);
+              const action = runtime.action;
+              void Promise.all(
+                runtime.targetIds.map((id) =>
+                  action === "stop"
+                    ? window.silvic.stopPlotCommand({
+                        path: workspace.path,
+                        id,
+                      })
+                    : window.silvic.startPlotCommand({
+                        path: workspace.path,
+                        id,
+                      }),
+                ),
+              )
+                .catch((error: unknown) =>
+                  setRuntimeFailure(failureMessage(error)),
+                )
+                .finally(() => setRuntimeWorking(false));
+            }}
+          >
+            {runtime.action === "stop" ? (
+              <Square size={10} />
+            ) : (
+              <Play size={10} />
+            )}
+            {runtimeWorking
+              ? runtime.action === "stop"
+                ? "Stopping…"
+                : "Starting…"
+              : runtime.action === "stop"
+                ? "Stop"
+                : "Start"}
+          </button>
+        )}
         {workspace.isPrimary && (
           <button
             type="button"
@@ -690,6 +806,7 @@ function Signal({ signal }: { signal: CardSignal }) {
       className="chip linked"
       data-tone={signal.tone}
       title={url}
+      aria-label={`Open ${signal.text}`}
       onClick={(event) => {
         event.stopPropagation();
         void window.silvic.openLink({ url });
@@ -701,13 +818,12 @@ function Signal({ signal }: { signal: CardSignal }) {
 }
 
 function signalIcon(kind: ConnectorObservation["kind"]) {
-  if (kind === "runtime") return <Play size={10} />;
+  if (kind === "runtime") return <Monitor size={10} />;
   if (kind === "deployment") return <ConvexMark size={10} />;
   if (kind === "review") return <GitPullRequest size={10} />;
   if (kind === "session") return <CodexMark size={10} />;
   return <Radio size={10} />;
 }
-
 
 function matches(workspace: WorkspaceSnapshot, needle: string): boolean {
   return [
