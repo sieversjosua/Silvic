@@ -1025,6 +1025,36 @@ button {
   gap: 10px;
 }
 
+.plot-head-tools {
+  display: inline-flex;
+  min-width: 0;
+  gap: 4px;
+  align-items: center;
+}
+
+.plot-menu-trigger {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: var(--r-sm);
+  color: var(--ink-faint);
+  opacity: 0.68;
+  transition:
+    color 120ms var(--ease),
+    background 120ms var(--ease),
+    opacity 120ms var(--ease);
+}
+
+.plot-menu-trigger:hover,
+.plot-menu-trigger[aria-expanded="true"],
+.plot-menu-trigger:focus-visible {
+  color: var(--ink);
+  background: var(--surface-hover);
+  opacity: 1;
+}
+
 .plot-state {
   display: inline-flex;
   gap: 5px;
@@ -1213,21 +1243,17 @@ button {
 }
 
 .plot-new,
-.plot-remote,
-.plot-actions .icon[aria-haspopup] {
+.plot-remote {
   opacity: 0;
   transition: opacity 120ms var(--ease);
 }
 
 .plot:hover .plot-new,
 .plot:hover .plot-remote,
-.plot:hover .plot-actions .icon[aria-haspopup],
 .plot[data-selected] .plot-new,
 .plot[data-selected] .plot-remote,
-.plot[data-selected] .plot-actions .icon[aria-haspopup],
 .plot:focus-within .plot-new,
-.plot:focus-within .plot-remote,
-.plot:focus-within .plot-actions .icon[aria-haspopup] {
+.plot:focus-within .plot-remote {
   opacity: 1;
 }
 

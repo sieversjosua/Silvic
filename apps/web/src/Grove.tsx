@@ -446,9 +446,27 @@ function WorkspaceNode({ data }: NodeProps<WorkspaceFlowNode>) {
         <span className="micro">
           {workspace.isPrimary ? "Project" : locationLabel(workspace)}
         </span>
-        <span className="plot-state">
-          <i className="dot" />
-          {state.label}
+        <span className="plot-head-tools">
+          <span className="plot-state">
+            <i className="dot" />
+            {state.label}
+          </span>
+          <button
+            type="button"
+            className="plot-menu-trigger"
+            aria-label={`Actions for ${workspace.name}`}
+            aria-haspopup="menu"
+            aria-expanded={data.menuOpen}
+            ref={menuButton}
+            onClick={(event) => {
+              event.stopPropagation();
+              data.menuOpen
+                ? data.onCloseMenu()
+                : data.onOpenMenu(workspace.workspaceId);
+            }}
+          >
+            <MoreHorizontal size={14} />
+          </button>
         </span>
       </header>
 
@@ -608,22 +626,6 @@ function WorkspaceNode({ data }: NodeProps<WorkspaceFlowNode>) {
             <Plus size={14} />
           </button>
         )}
-        <button
-          type="button"
-          className="icon"
-          aria-label={`Actions for ${workspace.name}`}
-          aria-haspopup="menu"
-          aria-expanded={data.menuOpen}
-          ref={menuButton}
-          onClick={(event) => {
-            event.stopPropagation();
-            data.menuOpen
-              ? data.onCloseMenu()
-              : data.onOpenMenu(workspace.workspaceId);
-          }}
-        >
-          <MoreHorizontal size={13} />
-        </button>
       </footer>
       {data.menuOpen && (
         <PlotMenu
