@@ -708,6 +708,8 @@ export interface PlotCreationResult {
   snapshot: SilvicSnapshot;
   plot: { name: string; path: string; port: number; url: string };
   provision: readonly ProvisionResult[];
+  /** Whether every command the recipe says should run stayed alive at startup. */
+  runtime: PlotRuntimeStart;
   /** Whether the published address actually answered after runtimes started. */
   readiness: PlotReadiness;
   /** What the recipe says can be run in a plot, so a new one can say so too. */
@@ -718,6 +720,19 @@ export interface PlotReadiness {
   status: "ready" | "failed" | "not-required";
   durationMs: number;
   detail?: string;
+}
+
+export interface PlotRuntimeStart {
+  status: "started" | "failed" | "not-required";
+  durationMs: number;
+  detail?: string;
+  failedCommands?: readonly string[];
+}
+
+export interface PlotProvisionRunResult {
+  provision: readonly ProvisionResult[];
+  runtime: PlotRuntimeStart;
+  readiness: PlotReadiness;
 }
 
 export interface PlotProgressStep {
@@ -808,9 +823,7 @@ export interface SilvicDesktopApi {
     listener: (processes: readonly PlotProcess[]) => void,
   ): () => void;
   /** Runs the recipe in an existing plot, after a named repair when given. */
-  provisionPlot(
-    request: PlotProvisionRequest,
-  ): Promise<readonly ProvisionResult[]>;
+  provisionPlot(request: PlotProvisionRequest): Promise<PlotProvisionRunResult>;
   getChanges(request: WorkspacePathRequest): Promise<WorkspaceChanges>;
   draftDelivery(request: WorkspacePathRequest): Promise<DeliveryDraft>;
   executeDelivery(request: DeliveryExecuteRequest): Promise<DeliveryResult>;

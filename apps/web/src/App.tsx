@@ -70,6 +70,7 @@ import { namedRoutingReady, pollNamedRouting } from "./named-routing";
 import { plotResources } from "./plot-resources";
 import { useSilvic } from "./store";
 import {
+  applyProvisionRun,
   branchForIssue,
   branchForPlotName,
   branchIsTaken,
@@ -1494,10 +1495,23 @@ function NewPlotDialog({
     });
   };
 
+  const acceptCreationResult = async (next: PlotCreationResult) => {
+    setResult(next);
+    if (!canOpenCreatedPlot(next)) return;
+    try {
+      await onOpen(next.plot.path, defaultHarness);
+    } catch (error) {
+      setFailure(
+        `The Plot is ready, but ${harnessLabel(defaultHarness)} could not be opened: ${failureMessage(error)}`,
+      );
+    }
+  };
+
   if (!source) return null;
 
   if (result) {
     const failed = result.provision.find((step) => step.exitCode !== 0);
+    const runtimeFailed = result.runtime.status === "failed";
     const previewFailed = result.readiness.status === "failed";
     const commands = Object.entries(result.commands);
     // Connectors run after creation returns, so a deployment appears a moment
@@ -1523,10 +1537,10 @@ function NewPlotDialog({
       setFailure(undefined);
       setSteps([]);
       setRepairing(true);
-      creatingBranch.current = branch.trim();
+      creatingBranch.current = createdFrom?.branch ?? branch.trim();
       void window.silvic
         .provisionPlot({ path: result.plot.path, remedy })
-        .then((provision) => setResult({ ...result, provision }))
+        .then((run) => acceptCreationResult(applyProvisionRun(result, run)))
         .catch((error: unknown) => setFailure(failureMessage(error)))
         .finally(() => {
           creatingBranch.current = undefined;
@@ -1543,6 +1557,11 @@ function NewPlotDialog({
             <p className="micro">Repairing</p>
           ) : failed ? (
             <p className="micro">Provisioning failed</p>
+          ) : runtimeFailed ? (
+            <p className="state-pill" data-tone="attention">
+              <AlertTriangle size={12} />
+              Runtime failed
+            </p>
           ) : previewFailed ? (
             <p className="state-pill" data-tone="attention">
               <AlertTriangle size={12} />
@@ -1576,6 +1595,29 @@ function NewPlotDialog({
               value={result.plot.path}
               display={pathTail(result.plot.path)}
             />
+          </div>
+          <div className="ready-section">
+            <p className="micro">
+              Runtimes
+              <span className="micro-value">
+                {result.runtime.status === "started"
+                  ? `Started in ${secondsLabel(result.runtime.durationMs)}`
+                  : result.runtime.status === "failed"
+                    ? "Startup failed"
+                    : "Not started"}
+              </span>
+            </p>
+            {result.runtime.detail && (
+              <p
+                className={
+                  result.runtime.status === "failed"
+                    ? "dialog-error"
+                    : "dialog-copy"
+                }
+              >
+                {result.runtime.detail}
+              </p>
+            )}
           </div>
           <div className="ready-section">
             <p className="micro">
@@ -1778,17 +1820,7 @@ function NewPlotDialog({
                 }
               : {}),
           })
-            .then(async (next) => {
-              setResult(next);
-              if (!canOpenCreatedPlot(next)) return;
-              try {
-                await onOpen(next.plot.path, defaultHarness);
-              } catch (error) {
-                setFailure(
-                  `The Plot is ready, but ${harnessLabel(defaultHarness)} could not be opened: ${failureMessage(error)}`,
-                );
-              }
-            })
+            .then(acceptCreationResult)
             .catch((error: unknown) => setFailure(failureMessage(error)))
             .finally(() => {
               creatingBranch.current = undefined;
@@ -2148,7 +2180,7 @@ function ProvisionDialog({
     setRunning(true);
     void window.silvic
       .provisionPlot({ path: workspace.path, ...(remedy ? { remedy } : {}) })
-      .then(setResults)
+      .then((result) => setResults(result.provision))
       .catch((error: unknown) => setFailure(failureMessage(error)))
       .finally(() => setRunning(false));
   };

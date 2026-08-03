@@ -51,8 +51,11 @@ import {
   type HarnessId,
   type PlotCreationResult,
   type PlotCommand,
+  type PlotProvisionRunResult,
   type PlotProvisioning,
   type PlotProvisionRequest,
+  type PlotReadiness,
+  type PlotRuntimeStart,
   type ProvisionResult,
   type RecipeDocument,
   type OpenWorkspaceRequest,
@@ -87,6 +90,7 @@ import {
   readRecipe,
   mergeSnapshots,
   routeNameFor,
+  runtimeStartResult,
   readRecipeSource,
   writeRecipe,
   resolvedCommandPath,
@@ -778,43 +782,22 @@ async function createEnvironment(
     progress.began(surveyStepId);
     await paintFromGit([project.rootPath, destinationPath]);
     progress.finished(surveyStepId);
-    let readiness: PlotCreationResult["readiness"] = {
-      status: "not-required",
-      durationMs: 0,
-      detail: "This repository declares no auto-starting preview command.",
-    };
-    // The recipe said these should be up; the plot is handed over running.
-    if (provisionCompleted(recipe.provision, provision)) {
-      if (autoCommands.length > 0) {
-        progress.began(runtimeStepId);
-        await startAutoCommands(destinationPath, recipe.commands);
-        progress.finished(runtimeStepId);
-      }
-      if (servesAddress) {
-        progress.began(readinessStepId);
-        readiness = await waitForReadiness({ url, probe: probePreview });
-        if (readiness.status === "ready") {
-          progress.finished(readinessStepId, readiness.durationMs);
-        } else {
-          progress.failed(
-            readinessStepId,
-            readiness.detail ?? "Preview failed",
-          );
-        }
-      }
-    } else {
-      readiness = {
-        status: "not-required",
-        durationMs: 0,
-        detail: "Provisioning did not complete, so runtimes were not started.",
-      };
-    }
+    const online = provisionCompleted(recipe.provision, provision)
+      ? await bringPlotOnline({
+          plotPath: destinationPath,
+          commands: recipe.commands,
+          url,
+          progress,
+        })
+      : blockedPlotStartup(
+          "Provisioning did not complete, so runtimes were not started.",
+        );
     void refreshSnapshot(true);
     return {
       snapshot: latestSnapshot,
       plot: { name: plot, path: destinationPath, port, url },
       provision,
-      readiness,
+      ...online,
       commands: recipe.commands,
     };
   } catch (error) {
@@ -833,7 +816,7 @@ async function createEnvironment(
  */
 async function provisionPlot(
   request: PlotProvisionRequest,
-): Promise<readonly ProvisionResult[]> {
+): Promise<PlotProvisionRunResult> {
   const workspace = knownWorkspace(request.path);
   const project = latestSnapshot.projects.find((candidate) =>
     candidate.workspaces.some(
@@ -854,6 +837,10 @@ async function provisionPlot(
     plotPort(recipe.project, plot, takenPlotPorts());
   const address = addressFor(recipe, plot, port);
   await requireNamedRouting(address);
+  const autoCommands = Object.values(recipe.commands).filter(
+    (command) => command.autoStart,
+  );
+  const servesAddress = autoCommands.some((command) => command.url === true);
   const sourceRoot =
     project.workspaces.find(
       (candidate) =>
@@ -868,6 +855,12 @@ async function provisionPlot(
         id: provisionStepId(index),
         label: provisionStepLabel(step, index),
       })),
+      ...(autoCommands.length > 0
+        ? [{ id: runtimeStepId, label: "Start plot runtimes" }]
+        : []),
+      ...(servesAddress
+        ? [{ id: readinessStepId, label: "Wait for the preview" }]
+        : []),
     ],
     (payload) =>
       mainWindow?.webContents.send(ipcChannels.plotProgress, payload),
@@ -899,7 +892,12 @@ async function provisionPlot(
         progress.failed(remedyStepId, repair.output);
         recordProvisioning(workspace.path, [repair]);
         void refreshSnapshot(true);
-        return [repair];
+        return {
+          provision: [repair],
+          ...blockedPlotStartup(
+            "The repair did not complete, so runtimes were not started.",
+          ),
+        };
       }
       progress.finished(remedyStepId, repair.durationMs);
     }
@@ -933,11 +931,18 @@ async function provisionPlot(
     const results = repair ? [repair, ...provision] : provision;
     recordProvisioning(workspace.path, results);
     await paintFromGit([workspace.path]);
-    if (provisionCompleted(recipe.provision, provision)) {
-      await startAutoCommands(workspace.path, recipe.commands);
-    }
+    const online = provisionCompleted(recipe.provision, provision)
+      ? await bringPlotOnline({
+          plotPath: workspace.path,
+          commands: recipe.commands,
+          url: address.url,
+          progress,
+        })
+      : blockedPlotStartup(
+          "Provisioning did not complete, so runtimes were not started.",
+        );
     void refreshSnapshot(true);
-    return results;
+    return { provision: results, ...online };
   } catch (error) {
     progress.stumbled(error instanceof Error ? error.message : String(error));
     throw error;
@@ -949,16 +954,120 @@ async function provisionPlot(
 async function startAutoCommands(
   plotPath: string,
   commands: Readonly<Record<string, PlotCommand>>,
-): Promise<void> {
-  for (const [id, command] of Object.entries(commands)) {
-    if (!command.autoStart) continue;
+): Promise<PlotRuntimeStart> {
+  const declared = Object.entries(commands).filter(
+    ([, command]) => command.autoStart,
+  );
+  if (declared.length === 0) {
+    return {
+      status: "not-required",
+      durationMs: 0,
+      detail: "This repository declares no auto-starting runtimes.",
+    };
+  }
+
+  const startedAt = Date.now();
+  const failures = new Map<string, string>();
+  for (const [id] of declared) {
     try {
       await startPlotCommand(plotPath, id);
-    } catch {
-      // A runtime failure remains visible in its log, without turning a fully
-      // provisioned worktree back into a failed plot.
+    } catch (error) {
+      failures.set(id, error instanceof Error ? error.message : String(error));
     }
   }
+
+  // Spawn succeeding only proves that the process existed. Commands that are
+  // misconfigured usually exit immediately, so give every declared runtime a
+  // short settling window before calling the Plot ready.
+  await new Promise<void>((resolve) => setTimeout(resolve, 1_000));
+  return runtimeStartResult({
+    commands: declared.map(([id]) => id),
+    processes: supervisor
+      .list()
+      .filter((process) => normalize(process.plotPath) === normalize(plotPath)),
+    failures: Object.fromEntries(failures),
+    durationMs: Date.now() - startedAt,
+  });
+}
+
+function blockedPlotStartup(detail: string): {
+  runtime: PlotRuntimeStart;
+  readiness: PlotReadiness;
+} {
+  return {
+    runtime: { status: "not-required", durationMs: 0, detail },
+    readiness: {
+      status: "not-required",
+      durationMs: 0,
+      detail: "Preview readiness was not checked.",
+    },
+  };
+}
+
+async function bringPlotOnline({
+  plotPath,
+  commands,
+  url,
+  progress,
+}: {
+  plotPath: string;
+  commands: Readonly<Record<string, PlotCommand>>;
+  url: string;
+  progress: PlotProgressReporter;
+}): Promise<{ runtime: PlotRuntimeStart; readiness: PlotReadiness }> {
+  const autoCommands = Object.entries(commands).filter(
+    ([, command]) => command.autoStart,
+  );
+  let runtime: PlotRuntimeStart = {
+    status: "not-required",
+    durationMs: 0,
+    detail: "This repository declares no auto-starting runtimes.",
+  };
+  if (autoCommands.length > 0) {
+    progress.began(runtimeStepId);
+    runtime = await startAutoCommands(plotPath, commands);
+    if (runtime.status === "failed") {
+      progress.failed(
+        runtimeStepId,
+        runtime.detail ?? "A runtime failed during startup",
+      );
+    } else {
+      progress.finished(runtimeStepId, runtime.durationMs);
+    }
+  }
+
+  const servingCommands = autoCommands.filter(
+    ([, command]) => command.url === true,
+  );
+  if (servingCommands.length === 0) {
+    return {
+      runtime,
+      readiness: {
+        status: "not-required",
+        durationMs: 0,
+        detail: "This repository declares no auto-starting preview command.",
+      },
+    };
+  }
+
+  progress.began(readinessStepId);
+  const failedPreviewCommands = servingCommands
+    .map(([id]) => id)
+    .filter((id) => runtime.failedCommands?.includes(id));
+  const readiness: PlotReadiness =
+    failedPreviewCommands.length > 0
+      ? {
+          status: "failed",
+          durationMs: 0,
+          detail: `Preview runtimes stopped during startup: ${failedPreviewCommands.join(", ")}`,
+        }
+      : await waitForReadiness({ url, probe: probePreview });
+  if (readiness.status === "ready") {
+    progress.finished(readinessStepId, readiness.durationMs);
+  } else {
+    progress.failed(readinessStepId, readiness.detail ?? "Preview failed");
+  }
+  return { runtime, readiness };
 }
 
 /** A response below 500 means the local preview itself is reachable. */

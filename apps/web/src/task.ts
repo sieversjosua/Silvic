@@ -1,4 +1,8 @@
-import type { IssueSummary, PlotCreationResult } from "@silvic/contracts";
+import type {
+  IssueSummary,
+  PlotCreationResult,
+  PlotProvisionRunResult,
+} from "@silvic/contracts";
 
 function branchSegment(value: string): string {
   return value
@@ -22,12 +26,19 @@ export function branchForPlotName(name: string): string {
 }
 
 export function canOpenCreatedPlot(
-  result: Pick<PlotCreationResult, "provision" | "readiness">,
+  result: Pick<PlotCreationResult, "provision" | "runtime" | "readiness">,
 ): boolean {
   return (
     result.provision.every((step) => step.exitCode === 0) &&
+    result.runtime.status !== "failed" &&
     result.readiness.status !== "failed"
   );
+}
+
+export function applyProvisionRun<
+  T extends Pick<PlotCreationResult, "provision" | "runtime" | "readiness">,
+>(result: T, run: PlotProvisionRunResult): T {
+  return { ...result, ...run };
 }
 
 export function branchIsTaken({
