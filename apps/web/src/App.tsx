@@ -120,9 +120,33 @@ export function App() {
     return () => dispose();
   }, [initialize]);
 
+  // Freshness is for whoever is looking. A hidden or occluded window stops
+  // polling entirely — every sweep spawns git and gh across all workspaces —
+  // and catches up the moment it comes back.
   useEffect(() => {
-    const interval = window.setInterval(() => void refresh(), 30_000);
-    return () => window.clearInterval(interval);
+    let interval: number | undefined;
+    const stop = () => {
+      if (interval !== undefined) window.clearInterval(interval);
+      interval = undefined;
+    };
+    const start = () => {
+      stop();
+      interval = window.setInterval(() => void refresh(), 30_000);
+    };
+    const onVisibility = () => {
+      if (document.hidden) {
+        stop();
+      } else {
+        void refresh();
+        start();
+      }
+    };
+    if (!document.hidden) start();
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      stop();
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
   }, [refresh]);
 
   const activeProjects = snapshot.projects.filter((candidate) =>
