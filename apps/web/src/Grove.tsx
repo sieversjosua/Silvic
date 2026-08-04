@@ -381,23 +381,14 @@ function GroveCanvas({
 
 function WorkspaceNode({ data }: NodeProps<WorkspaceFlowNode>) {
   const { workspace } = data;
-  const [runtimeWorking, setRuntimeWorking] = useState(false);
+  const [runtimeWorking, setRuntimeWorking] = useState<"start" | "stop">();
   const [runtimeFailure, setRuntimeFailure] = useState<string>();
   const runtime = data.runtime;
-  const workspaceStatus = workspaceState(workspace);
+  // Supervised runtimes speak once, in the head: the runtime label is the
+  // card's state word, not an extra chip next to it.
   const state = runtime
-    ? {
-        label:
-          runtime.tone === "active"
-            ? "Running"
-            : runtime.tone === "attention"
-              ? "Runtime issue"
-              : runtime.tone === "waiting"
-                ? "Partial"
-                : "Stopped",
-        tone: runtime.tone,
-      }
-    : workspaceStatus;
+    ? { label: runtime.label, tone: runtime.tone }
+    : workspaceState(workspace);
   const { ahead, behind } = workspace.git;
   const signals = cardSignals(workspace).filter(
     (signal) => !(runtime && signal.kind === "runtime"),
@@ -418,14 +409,25 @@ function WorkspaceNode({ data }: NodeProps<WorkspaceFlowNode>) {
       }
     : undefined;
 
+  const runRuntimes = (action: "start" | "stop", ids: readonly string[]) => {
+    setRuntimeWorking(action);
+    setRuntimeFailure(undefined);
+    void Promise.all(
+      ids.map((id) =>
+        action === "stop"
+          ? window.silvic.stopPlotCommand({ path: workspace.path, id })
+          : window.silvic.startPlotCommand({ path: workspace.path, id }),
+      ),
+    )
+      .catch((error: unknown) => setRuntimeFailure(failureMessage(error)))
+      .finally(() => setRuntimeWorking(undefined));
+  };
+
   return (
     <article
       className="plot"
       data-tone={state.tone}
-      data-running={
-        (runtime ? runtime.tone === "active" : state.tone === "active") ||
-        undefined
-      }
+      data-running={state.tone === "active" || undefined}
       data-primary={workspace.isPrimary || undefined}
       data-selected={data.selected || undefined}
       data-dimmed={data.dimmed || undefined}
@@ -442,6 +444,9 @@ function WorkspaceNode({ data }: NodeProps<WorkspaceFlowNode>) {
       <Handle id="in-right" type="target" position={Position.Right} />
       <Handle id="out-left" type="source" position={Position.Left} />
       <span className="plot-ticks" aria-hidden="true" />
+      {state.tone === "active" && (
+        <span className="plot-sweep" aria-hidden="true" />
+      )}
 
       <header className="plot-head">
         <span className="micro">
@@ -466,9 +471,22 @@ function WorkspaceNode({ data }: NodeProps<WorkspaceFlowNode>) {
       </header>
 
       <div className="plot-title">
-        <h3 className="plot-name">
+        <h3
+          className="plot-name"
+          title={workspace.isPrimary ? data.project.name : workspace.name}
+        >
           {workspace.isPrimary ? data.project.name : workspace.name}
         </h3>
+        {/* The branch spells itself out on hover instead of taking a row of
+            its own — a plot is usually named after it anyway. */}
+        <span
+          className="plot-branch-hint"
+          title={workspace.branch || "Detached"}
+          aria-label={`Branch: ${workspace.branch || "Detached"}`}
+          role="img"
+        >
+          <GitBranch size={12} />
+        </span>
         {workspace.isPrimary && remoteUrl && (
           <button
             type="button"
@@ -484,18 +502,20 @@ function WorkspaceNode({ data }: NodeProps<WorkspaceFlowNode>) {
           </button>
         )}
       </div>
-      <p className="plot-branch">
-        <GitBranch size={11} />
-        <span>{workspace.branch || "Detached"}</span>
-      </p>
 
       {/* Each fact carries its own leading separator, so a line that has to
-          wrap breaks between facts and never inside one. */}
+          wrap breaks between facts and never inside one. Zero counts say
+          nothing and stay off the card. */}
       <p className="plot-facts">
         <span className="fact">{workingTreeLabel(workspace)}</span>
-        <span className="fact">
-          <i className="fact-sep" />↑{ahead} ↓{behind}
-        </span>
+        {(ahead > 0 || behind > 0) && (
+          <span className="fact">
+            <i className="fact-sep" />
+            {[ahead > 0 ? `↑${ahead}` : "", behind > 0 ? `↓${behind}` : ""]
+              .filter(Boolean)
+              .join(" ")}
+          </span>
+        )}
         {workspace.isPrimary && (
           <span className="fact">
             <i className="fact-sep" />
@@ -511,14 +531,8 @@ function WorkspaceNode({ data }: NodeProps<WorkspaceFlowNode>) {
         </p>
       )}
 
-      {(runtime || previewSignal || runtimeFailure || signals.length > 0) && (
+      {(previewSignal || runtimeFailure || signals.length > 0) && (
         <div className="plot-signals">
-          {runtime && (
-            <span className="chip plot-runtime-state" data-tone={runtime.tone}>
-              <Radio size={10} />
-              <span>{runtime.label}</span>
-            </span>
-          )}
           {runtimeFailure && (
             <span
               className="chip plot-runtime-state"
@@ -559,52 +573,46 @@ function WorkspaceNode({ data }: NodeProps<WorkspaceFlowNode>) {
           <Terminal size={12} />
         </button>
         <span className="plot-actions-gap" />
-        {runtime && (
+        {runtime && runtime.stopIds.length > 0 && (
           <button
             type="button"
             className="plot-runtime-toggle"
-            data-action={runtime.action}
-            aria-label={`${runtime.action === "stop" ? "Stop" : "Start"} runtimes for ${workspace.name}`}
+            data-action="stop"
+            aria-label={`Stop runtimes for ${workspace.name}`}
             title={
-              runtime.action === "stop" ? "Stop runtimes" : "Start runtimes"
+              runtime.startIds.length > 0
+                ? "Stop the running runtimes"
+                : "Stop runtimes"
             }
-            disabled={runtimeWorking}
+            disabled={runtimeWorking !== undefined}
             onClick={(event) => {
               event.stopPropagation();
-              setRuntimeWorking(true);
-              setRuntimeFailure(undefined);
-              const action = runtime.action;
-              void Promise.all(
-                runtime.targetIds.map((id) =>
-                  action === "stop"
-                    ? window.silvic.stopPlotCommand({
-                        path: workspace.path,
-                        id,
-                      })
-                    : window.silvic.startPlotCommand({
-                        path: workspace.path,
-                        id,
-                      }),
-                ),
-              )
-                .catch((error: unknown) =>
-                  setRuntimeFailure(failureMessage(error)),
-                )
-                .finally(() => setRuntimeWorking(false));
+              runRuntimes("stop", runtime.stopIds);
             }}
           >
-            {runtime.action === "stop" ? (
-              <Square size={10} />
-            ) : (
-              <Play size={10} />
-            )}
-            {runtimeWorking
-              ? runtime.action === "stop"
-                ? "Stopping…"
-                : "Starting…"
-              : runtime.action === "stop"
-                ? "Stop"
-                : "Start"}
+            <Square size={10} />
+            {runtimeWorking === "stop" ? "Stopping…" : "Stop"}
+          </button>
+        )}
+        {runtime && runtime.startIds.length > 0 && (
+          <button
+            type="button"
+            className="plot-runtime-toggle"
+            data-action="start"
+            aria-label={`Start runtimes for ${workspace.name}`}
+            title={
+              runtime.stopIds.length > 0
+                ? "Start the missing runtimes"
+                : "Start runtimes"
+            }
+            disabled={runtimeWorking !== undefined}
+            onClick={(event) => {
+              event.stopPropagation();
+              runRuntimes("start", runtime.startIds);
+            }}
+          >
+            <Play size={10} />
+            {runtimeWorking === "start" ? "Starting…" : "Start"}
           </button>
         )}
         {workspace.isPrimary && (
@@ -809,7 +817,7 @@ function plotSummary(project: ProjectSnapshot): string {
 }
 
 function Signal({ signal }: { signal: CardSignal }) {
-  const { url } = signal;
+  const { url, hint } = signal;
   const body = (
     <>
       {signalIcon(signal.kind)}
@@ -818,7 +826,7 @@ function Signal({ signal }: { signal: CardSignal }) {
   );
   if (!url) {
     return (
-      <span className="chip" data-tone={signal.tone}>
+      <span className="chip" data-tone={signal.tone} title={hint}>
         {body}
       </span>
     );
@@ -828,7 +836,7 @@ function Signal({ signal }: { signal: CardSignal }) {
       type="button"
       className="chip linked"
       data-tone={signal.tone}
-      title={url}
+      title={hint ?? url}
       aria-label={`Open ${signal.text}`}
       onClick={(event) => {
         event.stopPropagation();

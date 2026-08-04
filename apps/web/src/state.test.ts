@@ -44,12 +44,12 @@ describe("cardRuntimeState", () => {
     ).toEqual({
       tone: "active",
       label: "2 running",
-      action: "stop",
-      targetIds: ["web", "convex"],
+      startIds: [],
+      stopIds: ["web", "convex"],
     });
   });
 
-  it("offers to start only missing runtimes when a Plot is partially running", () => {
+  it("offers both Start and Stop when a Plot is partially running", () => {
     expect(
       cardRuntimeState({
         workspace,
@@ -61,9 +61,9 @@ describe("cardRuntimeState", () => {
       }),
     ).toEqual({
       tone: "attention",
-      label: "1 of 2 running",
-      action: "start",
-      targetIds: ["convex"],
+      label: "1/2 running",
+      startIds: ["convex"],
+      stopIds: ["web"],
     });
   });
 
@@ -71,8 +71,41 @@ describe("cardRuntimeState", () => {
     expect(cardRuntimeState({ workspace, commands, processes: [] })).toEqual({
       tone: "quiet",
       label: "Stopped",
-      action: "start",
-      targetIds: ["web", "convex"],
+      startIds: ["web", "convex"],
+      stopIds: [],
+    });
+  });
+
+  it("calls a fully failed runtime set Failed, not merely Stopped", () => {
+    expect(
+      cardRuntimeState({
+        workspace,
+        commands,
+        processes: [
+          { plotPath: workspace.path, id: "web", status: "failed" },
+          { plotPath: workspace.path, id: "convex", status: "failed" },
+        ],
+      }),
+    ).toEqual({
+      tone: "attention",
+      label: "Failed",
+      startIds: ["web", "convex"],
+      stopIds: [],
+    });
+  });
+
+  it("drops the count when a Plot declares a single runtime", () => {
+    expect(
+      cardRuntimeState({
+        workspace,
+        commands: [commands[0]],
+        processes: [{ plotPath: workspace.path, id: "web", status: "running" }],
+      }),
+    ).toEqual({
+      tone: "active",
+      label: "Running",
+      startIds: [],
+      stopIds: ["web"],
     });
   });
 });
@@ -98,6 +131,54 @@ describe("cardSignals", () => {
       tone: "active",
       text: "Local preview",
       url: "http://localhost:3000",
+    });
+  });
+
+  it("labels a deployment by kind and keeps its name for the tooltip", () => {
+    expect(
+      cardSignals({
+        ...workspace,
+        observations: [
+          {
+            connectorId: "convex",
+            workspaceId: workspace.workspaceId,
+            kind: "deployment",
+            state: "active",
+            label: "proficient-hare-568",
+            detail: "dev",
+            url: "https://dashboard.convex.dev/d/proficient-hare-568",
+          },
+        ],
+      })[0],
+    ).toEqual({
+      kind: "deployment",
+      tone: "active",
+      text: "Deployment",
+      hint: "dev · proficient-hare-568",
+      url: "https://dashboard.convex.dev/d/proficient-hare-568",
+    });
+  });
+
+  it("labels a session by kind and keeps its codename for the tooltip", () => {
+    expect(
+      cardSignals({
+        ...workspace,
+        observations: [
+          {
+            connectorId: "codex",
+            workspaceId: workspace.workspaceId,
+            kind: "session",
+            state: "active",
+            label: "calculating-heron-688",
+            detail: "Fix the named HTTPS e2e flake",
+          },
+        ],
+      })[0],
+    ).toEqual({
+      kind: "session",
+      tone: "active",
+      text: "Session",
+      hint: "Fix the named HTTPS e2e flake",
     });
   });
 });

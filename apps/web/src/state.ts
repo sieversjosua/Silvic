@@ -64,19 +64,24 @@ export interface CardSignal {
   text: string;
   /** Present when the chip has somewhere to go, which makes it clickable. */
   url?: string;
+  /** Detail worth a tooltip but not card space, like a session's title. */
+  hint?: string;
 }
 
 export interface CardRuntimeState {
   tone: ConnectorObservation["state"];
   label: string;
-  action: "start" | "stop";
-  targetIds: readonly string[];
+  /** Declared runtimes not running, which Start would launch. */
+  startIds: readonly string[];
+  /** Running runtimes, which Stop would end. */
+  stopIds: readonly string[];
 }
 
 /**
  * The card controls the Plot's declared runtime set as one unit. A partially
- * running Plot starts only what is missing; Stop appears only once everything
- * the recipe declares is actually running.
+ * running Plot offers both ways out of the in-between: Start completes the
+ * set, Stop ends what runs — because "half running" is as often a stop that
+ * did not finish as a start that did not.
  */
 export function cardRuntimeState({
   workspace,
@@ -101,19 +106,21 @@ export function cardRuntimeState({
   if (running.length === ids.length) {
     return {
       tone: "active",
-      label: `${running.length} running`,
-      action: "stop",
-      targetIds: running,
+      label: ids.length === 1 ? "Running" : `${running.length} running`,
+      startIds: [],
+      stopIds: running,
     };
   }
   return {
     tone: failed ? "attention" : running.length > 0 ? "waiting" : "quiet",
     label:
       running.length > 0
-        ? `${running.length} of ${ids.length} running`
-        : "Stopped",
-    action: "start",
-    targetIds: missing,
+        ? `${running.length}/${ids.length} running`
+        : failed
+          ? "Failed"
+          : "Stopped",
+    startIds: missing,
+    stopIds: running,
   };
 }
 
@@ -135,9 +142,10 @@ const plural: Record<ConnectorObservation["kind"], string> = {
 };
 
 /**
- * One chip per kind of attachment, most urgent first. Agent task titles are
- * free-form sentences, so a card shows what kind of thing is attached and the
- * inspector carries the actual title.
+ * One chip per kind of attachment, most urgent first. Session codenames and
+ * deployment names are noise at card size, so a card shows what kind of thing
+ * is attached; the name rides along as a tooltip and the inspector carries it
+ * in full.
  */
 export function cardSignals(workspace: WorkspaceSnapshot): CardSignal[] {
   const byKind = Map.groupBy(
@@ -151,16 +159,33 @@ export function cardSignals(workspace: WorkspaceSnapshot): CardSignal[] {
       );
       const worst = ranked[0];
       if (!worst) return undefined;
-      const text =
-        items.length > 1
-          ? `${items.length} ${plural[kind]}`
-          : kind === "session"
-            ? (worst.detail ?? worst.label)
-            : kind === "runtime"
-              ? "Local preview"
-              : worst.label;
-      const url = items.length === 1 ? worst.url : undefined;
-      return { kind, tone: worst.state, text, ...(url ? { url } : {}) };
+      const single = items.length === 1 ? worst : undefined;
+      let text: string;
+      let hint: string | undefined;
+      if (!single) {
+        text = `${items.length} ${plural[kind]}`;
+      } else if (kind === "session") {
+        text = "Session";
+        hint = single.detail ?? single.label;
+      } else if (kind === "deployment") {
+        text = "Deployment";
+        hint = single.detail
+          ? `${single.detail} · ${single.label}`
+          : single.label;
+      } else if (kind === "runtime") {
+        text = "Local preview";
+      } else {
+        text = single.label;
+        hint = single.detail;
+      }
+      const url = single?.url;
+      return {
+        kind,
+        tone: worst.state,
+        text,
+        ...(url ? { url } : {}),
+        ...(hint ? { hint } : {}),
+      };
     })
     .filter((signal) => signal !== undefined)
     .sort((left, right) => severity[left.tone] - severity[right.tone]);
