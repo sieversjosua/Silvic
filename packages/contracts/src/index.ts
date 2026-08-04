@@ -753,7 +753,7 @@ export interface PlotProgressStep {
 export interface PlotProcess {
   plotPath: string;
   id: string;
-  status: "running" | "stopped" | "failed";
+  status: "running" | "stopping" | "stopped" | "failed";
   processId?: number;
   /** Where it can be reached, when it was published under a name. */
   url?: string;

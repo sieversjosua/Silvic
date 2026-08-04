@@ -1034,12 +1034,12 @@ function PlotResourceRow({
     const timer = window.setTimeout(() => setCopied(false), 1_400);
     return () => window.clearTimeout(timer);
   }, [copied]);
-  const running = processes.some(
+  const processStatus = processes.find(
     (process) =>
-      process.plotPath === workspace.path &&
-      process.id === resource.commandId &&
-      process.status === "running",
-  );
+      process.plotPath === workspace.path && process.id === resource.commandId,
+  )?.status;
+  const running = processStatus === "running";
+  const stopping = processStatus === "stopping";
   const open = (url: string) =>
     void window.silvic
       .openLink({ url })
@@ -1102,12 +1102,12 @@ function PlotResourceRow({
           {resource.commandId && (
             <button
               type="button"
-              aria-label={`${running ? "Stop" : "Start"} ${resource.label}`}
-              title={running ? "Stop" : "Start"}
+              aria-label={`${stopping ? "Stopping" : running ? "Stop" : "Start"} ${resource.label}`}
+              title={stopping ? "Stopping…" : running ? "Stop" : "Start"}
               onClick={act}
-              disabled={working}
+              disabled={working || stopping}
             >
-              {running ? <Square size={10} /> : <Play size={10} />}
+              {running || stopping ? <Square size={10} /> : <Play size={10} />}
             </button>
           )}
         </div>

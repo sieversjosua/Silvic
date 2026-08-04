@@ -13,7 +13,7 @@ export interface SupervisedCommand {
   plotPath: string;
   /** The command's id in the recipe, `web` or `convex`. */
   id: string;
-  status: "running" | "stopped" | "failed";
+  status: "running" | "stopping" | "stopped" | "failed";
   processId?: number;
   /** Where a serving command can be reached. */
   url?: string;
@@ -81,7 +81,10 @@ export class CommandSupervisor {
 
   async start(request: StartRequest): Promise<void> {
     const key = keyFor(request.plotPath, request.id);
-    if (this.running.get(key)?.status === "running") return;
+    const status = this.running.get(key)?.status;
+    // A stopping command's group is still dying and still holds its port;
+    // starting into that would race the corpse for the address.
+    if (status === "running" || status === "stopping") return;
     const named = routes(request.command);
     if (named && !request.canRoute) {
       this.refuse(request, proxyAdvice);
@@ -183,13 +186,17 @@ export class CommandSupervisor {
   stop(plotPath: string, id: string): void {
     const key = keyFor(plotPath, id);
     const entry = this.running.get(key);
-    if (!entry?.processId) return;
+    if (!entry?.processId || entry.status === "stopping") return;
     this.stopping.add(key);
     try {
       process.kill(-entry.processId, "SIGTERM");
+      // Dying can take seconds. Saying "stopping" out loud is what separates
+      // a stop that is working from a stop that did nothing.
+      this.running.set(key, { ...entry, status: "stopping" });
+      this.announce();
       // The close event settles the usual case, but not every runtime obliges:
       // one that shrugs off SIGTERM, or a fork holding the pipes open, would
-      // stay "running" forever with nothing left to press. Watch it out.
+      // stay "stopping" forever with nothing left to press. Watch it out.
       this.ensureStopped(key, entry.processId);
     } catch {
       // Already gone, which is the state being asked for.

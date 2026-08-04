@@ -2,7 +2,7 @@ import type { PlotRuntimeStart } from "@silvic/contracts";
 
 export interface RuntimeStartupProcess {
   id: string;
-  status: "running" | "stopped" | "failed";
+  status: "running" | "stopping" | "stopped" | "failed";
   exitCode?: number;
   advice?: string;
 }

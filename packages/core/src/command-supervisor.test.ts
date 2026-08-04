@@ -234,6 +234,7 @@ describe("CommandSupervisor", () => {
   it("escalates to SIGKILL when a stopped command ignores SIGTERM", async () => {
     const logDirectory = await mkdtemp(join(tmpdir(), "silvic-supervisor-"));
     temporaryDirectories.push(logDirectory);
+    const seenStatuses: string[] = [];
     let resolveStopped: (() => void) | undefined;
     const stopped = new Promise<void>((resolve) => {
       resolveStopped = resolve;
@@ -241,6 +242,7 @@ describe("CommandSupervisor", () => {
     const supervisor = new CommandSupervisor({
       logDirectory,
       onChange: (commands) => {
+        seenStatuses.push(...commands.map((command) => command.status));
         if (commands.length === 0) resolveStopped?.();
       },
       stopPatience: 3,
@@ -259,6 +261,8 @@ describe("CommandSupervisor", () => {
     await stopped;
 
     expect(supervisor.list()).toEqual([]);
+    // The wait for SIGKILL was visible, not a silent "running" that lied.
+    expect(seenStatuses).toContain("stopping");
   });
 
   it("observes an adopted command exiting after Stop", async () => {
