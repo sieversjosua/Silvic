@@ -31,13 +31,13 @@ async function discoverDeployments(
         // comment carries the team and project, and belongs to neither the
         // kind nor the name. Splitting on a limit would keep half of it.
         const separator = deployment.indexOf(":");
-        const kind =
-          separator > 0 ? deployment.slice(0, separator) : "unknown";
+        const kind = separator > 0 ? deployment.slice(0, separator) : "unknown";
         const name =
           (separator > 0 ? deployment.slice(separator + 1) : deployment)
             .split("#")[0]
             ?.trim() || deployment;
-        const deploymentUrl = values.NEXT_PUBLIC_CONVEX_URL ?? values.CONVEX_URL;
+        const deploymentUrl =
+          values.NEXT_PUBLIC_CONVEX_URL ?? values.CONVEX_URL;
         const dashboard = dashboardUrl(kind, name);
         return {
           connectorId: "convex",
@@ -49,7 +49,9 @@ async function discoverDeployments(
           // Somewhere worth arriving. The deployment's own address answers
           // clients, not people: opening it in a browser shows nothing you
           // could do anything with. It is kept for whoever needs to call it.
-          ...(dashboard ?? deploymentUrl ? { url: dashboard ?? deploymentUrl } : {}),
+          ...((dashboard ?? deploymentUrl)
+            ? { url: dashboard ?? deploymentUrl }
+            : {}),
           metadata: {
             source: relative(target.path, file),
             ...(deploymentUrl ? { deploymentUrl } : {}),
