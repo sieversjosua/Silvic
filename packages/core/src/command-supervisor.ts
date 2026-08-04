@@ -49,12 +49,13 @@ export class CommandSupervisor {
   private readonly running = new Map<string, SupervisedCommand>();
   private readonly logs = new Map<string, WriteStream>();
   private readonly stopping = new Set<string>();
-  private readonly adopted = new Set<string>();
 
   constructor(
     private readonly options: {
       logDirectory: string;
       onChange: (commands: readonly SupervisedCommand[]) => void;
+      /** How many 100ms glances Stop allows before reaching for SIGKILL. */
+      stopPatience?: number;
     },
   ) {}
 
@@ -74,7 +75,6 @@ export class CommandSupervisor {
       if (!stillRunning(entry.processId, entry.startedAt)) continue;
       const key = keyFor(entry.plotPath, entry.id);
       this.running.set(key, entry);
-      this.adopted.add(key);
     }
     if (this.running.size > 0) this.announce();
   }
@@ -96,7 +96,6 @@ export class CommandSupervisor {
     advice?: string,
   ): Promise<void> {
     const key = keyFor(request.plotPath, request.id);
-    this.adopted.delete(key);
     const log = await this.openLog(key, advice !== undefined);
     const startedAt = Date.now();
     let recent = "";
@@ -188,9 +187,10 @@ export class CommandSupervisor {
     this.stopping.add(key);
     try {
       process.kill(-entry.processId, "SIGTERM");
-      if (this.adopted.has(key)) {
-        this.observeAdoptedStop(key, entry.processId);
-      }
+      // The close event settles the usual case, but not every runtime obliges:
+      // one that shrugs off SIGTERM, or a fork holding the pipes open, would
+      // stay "running" forever with nothing left to press. Watch it out.
+      this.ensureStopped(key, entry.processId);
     } catch {
       // Already gone, which is the state being asked for.
       this.settle(key, 0);
@@ -222,7 +222,6 @@ export class CommandSupervisor {
     const wasStopped = this.stopping.delete(key);
     if (exitCode === 0 || wasStopped) {
       this.running.delete(key);
-      this.adopted.delete(key);
       this.logs.get(key)?.end();
       this.logs.delete(key);
       this.announce();
@@ -241,28 +240,30 @@ export class CommandSupervisor {
     this.announce();
   }
 
-  private observeAdoptedStop(
-    key: string,
-    processId: number,
-    attempt = 0,
-  ): void {
+  /**
+   * Stands over a stopped command until it is actually gone. SIGTERM is a
+   * request; after a grace period the whole group gets SIGKILL, which is not.
+   * When the command died but its close event never came — a survivor is
+   * holding the pipes — the group is swept for that survivor too.
+   */
+  private ensureStopped(key: string, processId: number, attempt = 0): void {
     setTimeout(() => {
       const entry = this.running.get(key);
       if (!entry || entry.processId !== processId) return;
-      if (!stillRunning(processId, entry.startedAt)) {
-        this.settle(key, 0);
-        return;
-      }
-      if (attempt >= 49) {
+      const patience = this.options.stopPatience ?? 50;
+      if (
+        !stillRunning(processId, entry.startedAt) ||
+        attempt >= patience - 1
+      ) {
         try {
           process.kill(-processId, "SIGKILL");
         } catch {
-          // It exited between the observation and the escalation.
+          // The group is empty, which is the state being asked for.
         }
         this.settle(key, 0);
         return;
       }
-      this.observeAdoptedStop(key, processId, attempt + 1);
+      this.ensureStopped(key, processId, attempt + 1);
     }, 100);
   }
 

@@ -11,10 +11,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import {
-  CommandSupervisor,
-  needsProxy,
-} from "./command-supervisor";
+import { CommandSupervisor, needsProxy } from "./command-supervisor";
 
 const temporaryDirectories: string[] = [];
 
@@ -228,6 +225,36 @@ describe("CommandSupervisor", () => {
     expect(await supervisor.output(logDirectory, "web")).toContain(
       "proxy is not running",
     );
+    supervisor.stopAll();
+    await stopped;
+
+    expect(supervisor.list()).toEqual([]);
+  });
+
+  it("escalates to SIGKILL when a stopped command ignores SIGTERM", async () => {
+    const logDirectory = await mkdtemp(join(tmpdir(), "silvic-supervisor-"));
+    temporaryDirectories.push(logDirectory);
+    let resolveStopped: (() => void) | undefined;
+    const stopped = new Promise<void>((resolve) => {
+      resolveStopped = resolve;
+    });
+    const supervisor = new CommandSupervisor({
+      logDirectory,
+      onChange: (commands) => {
+        if (commands.length === 0) resolveStopped?.();
+      },
+      stopPatience: 3,
+    });
+
+    await supervisor.start({
+      plotPath: logDirectory,
+      id: "web",
+      command: { run: "trap '' TERM; while :; do sleep 1; done" },
+      routeName: "web-test",
+      environment: {},
+      canRoute: false,
+      detached: false,
+    });
     supervisor.stopAll();
     await stopped;
 
