@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { PlotMenuTrigger } from "./Grove";
+import { PlotMenuTrigger } from "./PlotCard";
 
 describe("PlotMenuTrigger", () => {
   it("stays independently visible and toggles the card menu", () => {
