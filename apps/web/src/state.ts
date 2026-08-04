@@ -43,6 +43,15 @@ export function workspaceState(workspace: WorkspaceSnapshot): OperationalState {
   if (has(["runtime", "session"], "active")) {
     return { label: "Active", tone: "active" };
   }
+  // A concluded pull request outranks leftover local changes: the plot's
+  // story has ended, and the card's job shifts to seeing it off.
+  const conclusion = plotConclusion(workspace);
+  if (conclusion) {
+    return {
+      label: conclusion === "merged" ? "Merged" : "PR closed",
+      tone: "ready",
+    };
+  }
   if (localChangeCount(workspace) > 0 || workspace.git.ahead > 0) {
     return { label: "Changed", tone: "changed" };
   }
@@ -75,6 +84,26 @@ export interface CardRuntimeState {
   startIds: readonly string[];
   /** Running runtimes, which Stop would end. */
   stopIds: readonly string[];
+  /** Why a runtime failed, when the supervisor knows. */
+  advice?: string;
+}
+
+/**
+ * The end of a plot's story, read from its pull request. A merged branch is
+ * work that arrived; a closed one is work that was abandoned. Either way the
+ * plot itself is finished and ready to be seen off.
+ */
+export function plotConclusion(
+  workspace: WorkspaceSnapshot,
+): "merged" | "closed" | undefined {
+  if (workspace.isPrimary) return undefined;
+  const review = workspace.observations.find(
+    (observation) => observation.kind === "review",
+  );
+  const state = review?.metadata?.["state"];
+  if (state === "MERGED") return "merged";
+  if (state === "CLOSED") return "closed";
+  return undefined;
 }
 
 /**
@@ -103,6 +132,11 @@ export function cardRuntimeState({
   const missing = ids.filter((id) => !running.includes(id));
   const failed = missing.some((id) => byId.get(id)?.status === "failed");
 
+  // A stop in progress is its own state, not a lie about running: the card
+  // says so and offers nothing to press until the group is actually gone.
+  if (ids.some((id) => byId.get(id)?.status === "stopping")) {
+    return { tone: "waiting", label: "Stopping…", startIds: [], stopIds: [] };
+  }
   if (running.length === ids.length) {
     return {
       tone: "active",
@@ -111,6 +145,14 @@ export function cardRuntimeState({
       stopIds: running,
     };
   }
+  const troubled = ids
+    .map((id) => byId.get(id))
+    .find((process) => process?.status === "failed");
+  const advice =
+    troubled?.advice ??
+    (troubled?.exitCode !== undefined
+      ? `Exited with code ${troubled.exitCode}`
+      : undefined);
   return {
     tone: failed ? "attention" : running.length > 0 ? "waiting" : "quiet",
     label:
@@ -121,6 +163,7 @@ export function cardRuntimeState({
           : "Stopped",
     startIds: missing,
     stopIds: running,
+    ...(advice ? { advice } : {}),
   };
 }
 

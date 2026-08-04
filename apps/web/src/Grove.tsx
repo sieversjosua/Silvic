@@ -52,6 +52,7 @@ import {
   cardSignals,
   cardRuntimeState,
   locationLabel,
+  plotConclusion,
   workingTreeLabel,
   workspaceState,
   type CardRuntimeState,
@@ -384,11 +385,14 @@ function WorkspaceNode({ data }: NodeProps<WorkspaceFlowNode>) {
   const [runtimeWorking, setRuntimeWorking] = useState<"start" | "stop">();
   const [runtimeFailure, setRuntimeFailure] = useState<string>();
   const runtime = data.runtime;
+  const conclusion = plotConclusion(workspace);
   // Supervised runtimes speak once, in the head: the runtime label is the
-  // card's state word, not an extra chip next to it.
-  const state = runtime
-    ? { label: runtime.label, tone: runtime.tone }
-    : workspaceState(workspace);
+  // card's state word, not an extra chip next to it. Except when the story
+  // has ended — "Merged" says more than "Stopped" ever will.
+  const state =
+    runtime && !(conclusion && runtime.tone === "quiet")
+      ? { label: runtime.label, tone: runtime.tone }
+      : workspaceState(workspace);
   const { ahead, behind } = workspace.git;
   const signals = cardSignals(workspace).filter(
     (signal) => !(runtime && signal.kind === "runtime"),
@@ -408,6 +412,12 @@ function WorkspaceNode({ data }: NodeProps<WorkspaceFlowNode>) {
         url: supervisedPreviewUrl,
       }
     : undefined;
+
+  // Ready to be seen off: the pull request has concluded and nothing is
+  // running or midway through stopping.
+  const sendOff =
+    conclusion !== undefined &&
+    (!runtime || (runtime.stopIds.length === 0 && runtime.startIds.length > 0));
 
   const runRuntimes = (action: "start" | "stop", ids: readonly string[]) => {
     setRuntimeWorking(action);
@@ -453,7 +463,7 @@ function WorkspaceNode({ data }: NodeProps<WorkspaceFlowNode>) {
           {workspace.isPrimary ? "Project" : locationLabel(workspace)}
         </span>
         <span className="plot-head-tools">
-          <span className="plot-state">
+          <span className="plot-state" title={runtime?.advice}>
             <i className="dot" />
             {state.label}
           </span>
@@ -573,7 +583,28 @@ function WorkspaceNode({ data }: NodeProps<WorkspaceFlowNode>) {
           <Terminal size={12} />
         </button>
         <span className="plot-actions-gap" />
-        {runtime && runtime.stopIds.length > 0 && (
+        {sendOff && (
+          /* The plot's work has landed (or been abandoned); the card's one
+             offer is to see it off — worktree, branch and all. */
+          <button
+            type="button"
+            className="plot-teardown"
+            aria-label={`Tear down ${workspace.name}`}
+            title={
+              conclusion === "merged"
+                ? "The pull request is merged — remove the worktree and branch"
+                : "The pull request is closed — remove this plot"
+            }
+            onClick={(event) => {
+              event.stopPropagation();
+              data.onTeardown(workspace);
+            }}
+          >
+            <Trash2 size={11} />
+            Tear down…
+          </button>
+        )}
+        {!sendOff && runtime && runtime.stopIds.length > 0 && (
           <button
             type="button"
             className="plot-runtime-toggle"
@@ -594,7 +625,7 @@ function WorkspaceNode({ data }: NodeProps<WorkspaceFlowNode>) {
             {runtimeWorking === "stop" ? "Stopping…" : "Stop"}
           </button>
         )}
-        {runtime && runtime.startIds.length > 0 && (
+        {!sendOff && runtime && runtime.startIds.length > 0 && (
           <button
             type="button"
             className="plot-runtime-toggle"

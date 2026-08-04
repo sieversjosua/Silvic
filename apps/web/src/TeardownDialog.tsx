@@ -8,6 +8,7 @@ import type {
 } from "@silvic/contracts";
 
 import { failureMessage } from "./errors";
+import { plotConclusion } from "./state";
 
 type Scope = TeardownPlanPayload["scope"];
 
@@ -34,8 +35,12 @@ export function TeardownDialog({
   onClose(): void;
   onDone(): void;
 }) {
-  const [scope, setScope] = useState<Scope>("archive");
-  const [deleteBranch, setDeleteBranch] = useState(false);
+  // A merged plot arrives here to disappear completely: worktree and branch.
+  // The defaults say so, the plan still spells out every step, and `-d`'s
+  // refusal to delete unmerged work keeps guarding the closed-not-merged case.
+  const merged = plotConclusion(workspace) === "merged";
+  const [scope, setScope] = useState<Scope>(merged ? "remove" : "archive");
+  const [deleteBranch, setDeleteBranch] = useState(merged);
   const [discardChanges, setDiscardChanges] = useState(false);
   const [plan, setPlan] = useState<TeardownPlanPayload>();
   const [result, setResult] = useState<TeardownRunResult>();
@@ -44,11 +49,14 @@ export function TeardownDialog({
 
   useEffect(() => {
     void window.silvic
-      .planTeardown({ path: workspace.path, scope, deleteBranch, discardChanges })
+      .planTeardown({
+        path: workspace.path,
+        scope,
+        deleteBranch,
+        discardChanges,
+      })
       .then(setPlan)
-      .catch((error: unknown) =>
-        setFailure(failureMessage(error)),
-      );
+      .catch((error: unknown) => setFailure(failureMessage(error)));
   }, [workspace.path, scope, deleteBranch, discardChanges]);
 
   const run = async () => {
@@ -92,7 +100,10 @@ export function TeardownDialog({
           <>
             <ol className="provision-steps">
               {result.results.map((step) => (
-                <li key={step.id} data-failed={step.status === "failed" || undefined}>
+                <li
+                  key={step.id}
+                  data-failed={step.status === "failed" || undefined}
+                >
                   <div className="provision-head">
                     <strong>{step.label}</strong>
                     <span className="mono">{step.status}</span>
@@ -102,7 +113,11 @@ export function TeardownDialog({
               ))}
             </ol>
             <div className="dialog-actions">
-              <button type="button" className="primary-button" onClick={onClose}>
+              <button
+                type="button"
+                className="primary-button"
+                onClick={onClose}
+              >
                 Done
               </button>
             </div>
@@ -162,7 +177,10 @@ export function TeardownDialog({
             {plan && plan.steps.length > 0 && (
               <ol className="teardown-plan">
                 {plan.steps.map((step) => (
-                  <li key={step.id} data-manual={step.manual ? true : undefined}>
+                  <li
+                    key={step.id}
+                    data-manual={step.manual ? true : undefined}
+                  >
                     <div className="provision-head">
                       <strong>{step.label}</strong>
                       {step.manual && (
@@ -172,13 +190,17 @@ export function TeardownDialog({
                       )}
                     </div>
                     <code className="mono">{step.detail}</code>
-                    {step.manual && <p className="recipe-hint">{step.manual}</p>}
+                    {step.manual && (
+                      <p className="recipe-hint">{step.manual}</p>
+                    )}
                     {step.url && (
                       <button
                         type="button"
                         className="ghost-button teardown-link"
                         onClick={() =>
-                          void window.silvic.openLink({ url: step.url as string })
+                          void window.silvic.openLink({
+                            url: step.url as string,
+                          })
                         }
                       >
                         <ExternalLink size={12} /> Open

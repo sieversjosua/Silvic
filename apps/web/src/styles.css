@@ -1308,6 +1308,21 @@ button {
   opacity: 0.62;
 }
 
+/* Seeing off a finished plot is completion, not danger: it wears the ready
+   tone, and the dialog behind it still shows the exact plan first. */
+.plot-actions button.plot-teardown {
+  border-color: color-mix(in srgb, var(--tone-ready) 42%, var(--rule));
+  background: color-mix(in srgb, var(--tone-ready) 9%, var(--surface));
+  color: var(--tone-ready);
+  font-weight: 650;
+}
+
+.plot-actions button.plot-teardown:hover {
+  border-color: var(--tone-ready);
+  background: color-mix(in srgb, var(--tone-ready) 16%, var(--surface));
+  color: var(--tone-ready);
+}
+
 .plot-actions .icon {
   width: 27px;
   padding: 0;

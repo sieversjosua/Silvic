@@ -2,7 +2,12 @@ import { describe, expect, it } from "vitest";
 
 import type { WorkspaceSnapshot } from "@silvic/contracts";
 
-import { cardRuntimeState, cardSignals } from "./state";
+import {
+  cardRuntimeState,
+  cardSignals,
+  plotConclusion,
+  workspaceState,
+} from "./state";
 
 const workspace: WorkspaceSnapshot = {
   workspaceId: "plot-1",
@@ -94,6 +99,45 @@ describe("cardRuntimeState", () => {
     });
   });
 
+  it("shows a stop in progress and offers nothing to press meanwhile", () => {
+    expect(
+      cardRuntimeState({
+        workspace,
+        commands,
+        processes: [
+          { plotPath: workspace.path, id: "web", status: "stopping" },
+          { plotPath: workspace.path, id: "convex", status: "running" },
+        ],
+      }),
+    ).toEqual({
+      tone: "waiting",
+      label: "Stopping…",
+      startIds: [],
+      stopIds: [],
+    });
+  });
+
+  it("carries the supervisor's advice for a failed runtime", () => {
+    expect(
+      cardRuntimeState({
+        workspace,
+        commands: [commands[0]],
+        processes: [
+          {
+            plotPath: workspace.path,
+            id: "web",
+            status: "failed",
+            exitCode: 1,
+            advice: "The named HTTPS URL needs portless.",
+          },
+        ],
+      }),
+    ).toMatchObject({
+      label: "Failed",
+      advice: "The named HTTPS URL needs portless.",
+    });
+  });
+
   it("drops the count when a Plot declares a single runtime", () => {
     expect(
       cardRuntimeState({
@@ -107,6 +151,43 @@ describe("cardRuntimeState", () => {
       startIds: [],
       stopIds: ["web"],
     });
+  });
+});
+
+describe("plotConclusion", () => {
+  const mergedReview = {
+    connectorId: "github",
+    workspaceId: workspace.workspaceId,
+    kind: "review",
+    state: "quiet",
+    label: "#251 merged",
+    metadata: { number: 251, state: "MERGED" },
+  } as const;
+
+  it("reads a merged pull request as the plot's ending", () => {
+    expect(plotConclusion({ ...workspace, observations: [mergedReview] })).toBe(
+      "merged",
+    );
+  });
+
+  it("never concludes the primary checkout", () => {
+    expect(
+      plotConclusion({
+        ...workspace,
+        isPrimary: true,
+        observations: [mergedReview],
+      }),
+    ).toBeUndefined();
+  });
+
+  it("lets Merged outrank leftover local changes in the state word", () => {
+    expect(
+      workspaceState({
+        ...workspace,
+        git: { ...workspace.git, unstaged: 5 },
+        observations: [mergedReview],
+      }),
+    ).toEqual({ label: "Merged", tone: "ready" });
   });
 });
 
