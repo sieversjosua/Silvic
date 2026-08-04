@@ -11,8 +11,9 @@ import {
   type Edge,
   type Node,
   type NodeProps,
+  type Viewport,
 } from "@xyflow/react";
-import { Maximize2, Minus, Plus } from "lucide-react";
+import { Compass, Maximize2, Minus, Plus } from "lucide-react";
 
 import type {
   HarnessId,
@@ -24,7 +25,7 @@ import type {
 } from "@silvic/contracts";
 
 import { substrate, type Appearance } from "./appearance";
-import { QUIET_FOLD_MIN, isQuiet, layout } from "./grove-layout";
+import { QUIET_FOLD_MIN, anyNodeInView, isQuiet, layout } from "./grove-layout";
 import { WorkspaceNode, type WorkspaceFlowNode } from "./PlotCard";
 import { cardRuntimeState } from "./state";
 
@@ -88,8 +89,10 @@ function GroveCanvas({
   const [showLegend, setShowLegend] = useState(true);
   const [showQuiet, setShowQuiet] = useState(false);
   const [menuPlotId, setMenuPlotId] = useState<string>();
+  const [lost, setLost] = useState(false);
   const dragging = useRef(false);
-  const { zoomIn, zoomOut, fitView } = useReactFlow();
+  const canvas = useRef<HTMLDivElement>(null);
+  const { zoomIn, zoomOut, fitView, getViewport } = useReactFlow();
 
   useEffect(() => setNudges(readNudges(project.id)), [project.id]);
   useEffect(() => setShowQuiet(false), [project.id]);
@@ -173,6 +176,32 @@ function GroveCanvas({
     if (!dragging.current) setNodes(computed);
   }, [computed, setNodes]);
 
+  // Panned into empty paper, every card out of sight: the way back appears in
+  // the middle of the canvas rather than hiding behind the fit icon.
+  const assessLost = useCallback(
+    (viewport: Viewport) => {
+      const element = canvas.current;
+      if (!element || nodes.length === 0) {
+        setLost(false);
+        return;
+      }
+      setLost(
+        !anyNodeInView(nodes, {
+          ...viewport,
+          width: element.clientWidth,
+          height: element.clientHeight,
+        }),
+      );
+    },
+    [nodes],
+  );
+  useEffect(() => assessLost(getViewport()), [assessLost, getViewport]);
+
+  const comeBack = useCallback(() => {
+    void fitView({ padding: 0.24, maxZoom: 1, duration: 320 });
+    setLost(false);
+  }, [fitView]);
+
   const edges = useMemo<Edge[]>(
     () =>
       tidy.links.map((link) => ({
@@ -223,7 +252,7 @@ function GroveCanvas({
   const nudged = Object.keys(nudges).length;
 
   return (
-    <div className="grove">
+    <div className="grove" ref={canvas}>
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -234,6 +263,7 @@ function GroveCanvas({
         }}
         onNodeDragStop={onNodeDragStop}
         onMoveStart={() => setMenuPlotId(undefined)}
+        onMoveEnd={(_event, viewport) => assessLost(viewport)}
         fitView
         fitViewOptions={{ padding: 0.24, maxZoom: 1 }}
         minZoom={0.3}
@@ -260,6 +290,13 @@ function GroveCanvas({
         />
       </ReactFlow>
 
+      {lost && (
+        <button type="button" className="grove-rescue" onClick={comeBack}>
+          <Compass size={14} />
+          Back to the grove
+        </button>
+      )}
+
       <div className="grove-tools">
         <button type="button" aria-label="Zoom out" onClick={() => zoomOut()}>
           <Minus size={14} />
@@ -271,7 +308,8 @@ function GroveCanvas({
         <button
           type="button"
           aria-label="Fit grove to view"
-          onClick={() => fitView({ padding: 0.24, maxZoom: 1, duration: 320 })}
+          title="Fit every plot into view"
+          onClick={comeBack}
         >
           <Maximize2 size={13} />
         </button>

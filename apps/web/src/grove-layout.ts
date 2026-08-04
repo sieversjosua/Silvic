@@ -295,3 +295,42 @@ function byUrgency(left: WorkspaceSnapshot, right: WorkspaceSnapshot): number {
     (urgency[workspaceState(right).tone] ?? 9);
   return rank !== 0 ? rank : left.name.localeCompare(right.name);
 }
+
+export interface ViewportWindow {
+  /** React Flow's translation, in screen pixels. */
+  x: number;
+  y: number;
+  zoom: number;
+  /** The canvas element's size, in screen pixels. */
+  width: number;
+  height: number;
+}
+
+/**
+ * Whether any node still shows inside the viewport. When none does, the user
+ * has panned into empty paper and cannot know which way home is — the canvas
+ * offers a way back instead of waiting for them to find the fit control.
+ */
+export function anyNodeInView(
+  nodes: readonly {
+    position: { x: number; y: number };
+    measured?: { width?: number; height?: number };
+  }[],
+  view: ViewportWindow,
+): boolean {
+  if (view.zoom <= 0) return false;
+  const minX = -view.x / view.zoom;
+  const minY = -view.y / view.zoom;
+  const maxX = minX + view.width / view.zoom;
+  const maxY = minY + view.height / view.zoom;
+  return nodes.some((node) => {
+    const width = node.measured?.width ?? NODE_WIDTH;
+    const height = node.measured?.height ?? NODE_HEIGHT;
+    return (
+      node.position.x < maxX &&
+      node.position.x + width > minX &&
+      node.position.y < maxY &&
+      node.position.y + height > minY
+    );
+  });
+}

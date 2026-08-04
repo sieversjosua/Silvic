@@ -6,7 +6,7 @@ import type {
   WorkspaceSnapshot,
 } from "@silvic/contracts";
 
-import { NODE_HEIGHT, NODE_WIDTH, layout } from "./grove-layout";
+import { NODE_HEIGHT, NODE_WIDTH, anyNodeInView, layout } from "./grove-layout";
 
 function workspace(
   name: string,
@@ -200,5 +200,33 @@ describe("layout", () => {
     const { placements } = layout(project([trunk, a, b]), true);
 
     expect(placements).toHaveLength(3);
+  });
+});
+
+describe("anyNodeInView", () => {
+  const card = (x: number, y: number) => ({
+    position: { x, y },
+    measured: { width: 268, height: 184 },
+  });
+  // A 1000×800 canvas with no pan and no zoom sees flow coords 0..1000/0..800.
+  const view = { x: 0, y: 0, zoom: 1, width: 1000, height: 800 };
+
+  it("sees a card inside the viewport", () => {
+    expect(anyNodeInView([card(100, 100)], view)).toBe(true);
+  });
+
+  it("sees a card that only pokes into the viewport's edge", () => {
+    expect(anyNodeInView([card(-260, -180)], view)).toBe(true);
+  });
+
+  it("declares lost when every card sits outside", () => {
+    expect(anyNodeInView([card(2000, 2000), card(-900, 0)], view)).toBe(false);
+  });
+
+  it("accounts for pan and zoom", () => {
+    // Panned so that flow coordinate 2000 lands at screen 0, at half zoom.
+    const panned = { x: -1000, y: -1000, zoom: 0.5, width: 1000, height: 800 };
+    expect(anyNodeInView([card(2000, 2000)], panned)).toBe(true);
+    expect(anyNodeInView([card(0, 0)], panned)).toBe(false);
   });
 });
