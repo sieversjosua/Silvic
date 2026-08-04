@@ -1326,6 +1326,9 @@ function takenPlotPorts(): Set<number> {
 }
 
 function refreshSnapshot(forceFresh = false): Promise<SilvicSnapshot> {
+  // Forced means something happened: connectors must look again rather than
+  // answer from their shelf.
+  if (forceFresh) connectors.invalidate();
   if (activeRefresh) {
     if (!forceFresh) return activeRefresh;
     if (!queuedFreshRefresh) {

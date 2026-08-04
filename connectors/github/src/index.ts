@@ -2,6 +2,7 @@ import type {
   Connector,
   ConnectorObservation,
   IssueSummary,
+  WorkspaceTarget,
 } from "@silvic/contracts";
 import type { CommandRunner } from "@silvic/core";
 
@@ -107,7 +108,20 @@ function isIssueResponse(value: unknown): value is IssueResponse {
   );
 }
 
+/**
+ * How long an answered pull-request lookup keeps standing in for the next one.
+ * Every observation is a `gh` process and a GitHub round-trip per workspace;
+ * at the interface's polling cadence that is a steady battery drain for state
+ * that rarely changes within minutes. Anything that actually changes a pull
+ * request goes through a forced refresh, which invalidates this cache.
+ */
+const observationShelfLifeMs = 120_000;
+
 export function createGitHubConnector(runner: CommandRunner): Connector {
+  const cache = new Map<
+    string,
+    { createdAt: number; value: Promise<readonly ConnectorObservation[]> }
+  >();
   return {
     manifest: {
       id: "github",
@@ -115,51 +129,74 @@ export function createGitHubConnector(runner: CommandRunner): Connector {
       kind: "service",
       capabilities: ["observe"],
     },
-    observe: async (target, context) => {
-      const result = await runner.run({
-        executable: "gh",
-        arguments: [
-          "pr",
-          "view",
-          "--json",
-          "number,title,state,isDraft,url,statusCheckRollup",
-        ],
-        cwd: target.path,
-        ...(context?.signal ? { signal: context.signal } : {}),
-      });
-      if (result.exitCode !== 0) {
-        const message = result.stderr.trim() || result.stdout.trim();
-        const normalized = message.toLowerCase();
-        if (
-          normalized.includes("no pull request") ||
-          normalized.includes("could not resolve to a pullrequest")
-        ) {
-          return [];
-        }
-        throw new Error(message || "GitHub CLI is unavailable");
+    invalidate: () => {
+      cache.clear();
+    },
+    observe: (target, context) => {
+      const key = `${target.workspaceId}:${target.path}`;
+      const cached = cache.get(key);
+      const now = Date.now();
+      if (cached && now - cached.createdAt < observationShelfLifeMs) {
+        return cached.value;
       }
-      const response = parsePullRequest(result.stdout);
-      const checks = summarizeChecks(response.statusCheckRollup);
-      const observationState = stateForPullRequest(response, checks);
-      return [
-        {
-          connectorId: "github",
-          workspaceId: target.workspaceId,
-          kind: "review",
-          state: observationState,
-          label: labelForPullRequest(response, checks),
-          detail: response.title,
-          url: response.url,
-          metadata: {
-            number: response.number,
-            draft: response.isDraft,
-            state: response.state,
-            checks,
-          },
-        } satisfies ConnectorObservation,
-      ];
+      const value = observePullRequest(runner, target, context);
+      cache.set(key, { createdAt: now, value });
+      // A failure is worth retrying, not remembering.
+      value.catch(() => {
+        if (cache.get(key)?.value === value) cache.delete(key);
+      });
+      return value;
     },
   };
+}
+
+async function observePullRequest(
+  runner: CommandRunner,
+  target: WorkspaceTarget,
+  context: Parameters<Connector["observe"]>[1],
+): Promise<readonly ConnectorObservation[]> {
+  const result = await runner.run({
+    executable: "gh",
+    arguments: [
+      "pr",
+      "view",
+      "--json",
+      "number,title,state,isDraft,url,statusCheckRollup",
+    ],
+    cwd: target.path,
+    ...(context?.signal ? { signal: context.signal } : {}),
+  });
+  if (result.exitCode !== 0) {
+    const message = result.stderr.trim() || result.stdout.trim();
+    const normalized = message.toLowerCase();
+    if (
+      normalized.includes("no pull request") ||
+      normalized.includes("could not resolve to a pullrequest")
+    ) {
+      return [];
+    }
+    throw new Error(message || "GitHub CLI is unavailable");
+  }
+  const response = parsePullRequest(result.stdout);
+  const checks = summarizeChecks(response.statusCheckRollup);
+  const observationState = stateForPullRequest(response, checks);
+  return [
+    {
+      connectorId: "github",
+      workspaceId: target.workspaceId,
+      kind: "review",
+      state: observationState,
+      label: labelForPullRequest(response, checks),
+      detail: response.title,
+      url: response.url,
+      metadata: {
+        number: response.number,
+        draft: response.isDraft,
+        state: response.state,
+        checks,
+      },
+    } satisfies ConnectorObservation,
+  ];
 }
 
 function parsePullRequest(output: string): PullRequestResponse {
@@ -230,15 +267,16 @@ function stateForPullRequest(
   return "unknown";
 }
 
+/** Terse enough for a card chip; the pull request's title lives in `detail`. */
 function labelForPullRequest(
   response: PullRequestResponse,
   checks: ReturnType<typeof summarizeChecks>,
 ): string {
   if (response.state !== "OPEN")
-    return `PR #${response.number} is ${response.state.toLowerCase()}`;
-  if (response.isDraft) return `Draft PR #${response.number}`;
-  if (checks === "success") return `PR #${response.number} is green`;
-  if (checks === "failure") return `PR #${response.number} checks failed`;
-  if (checks === "pending") return `PR #${response.number} checks running`;
-  return `PR #${response.number}`;
+    return `#${response.number} ${response.state.toLowerCase()}`;
+  if (response.isDraft) return `#${response.number} draft`;
+  if (checks === "success") return `#${response.number} green`;
+  if (checks === "failure") return `#${response.number} checks failed`;
+  if (checks === "pending") return `#${response.number} checks running`;
+  return `#${response.number}`;
 }

@@ -94,7 +94,7 @@ describe("GitHub connector", () => {
         workspaceId: "workspace-1",
         kind: "review",
         state: "ready",
-        label: "PR #42 is green",
+        label: "#42 green",
         detail: "Fix authentication",
         url: "https://github.com/example/silvic/pull/42",
         metadata: {
@@ -118,6 +118,23 @@ describe("GitHub connector", () => {
         signal: undefined,
       },
     ]);
+  });
+
+  it("answers repeat observations from its shelf until invalidated", async () => {
+    const runner = new RecordingRunner({
+      exitCode: 1,
+      stdout: "",
+      stderr: "no pull request found",
+    });
+    const connector = createGitHubConnector(runner);
+
+    await connector.observe(target);
+    await connector.observe(target);
+    expect(runner.requests).toHaveLength(1);
+
+    connector.invalidate?.();
+    await connector.observe(target);
+    expect(runner.requests).toHaveLength(2);
   });
 });
 
