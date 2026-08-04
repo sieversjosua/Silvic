@@ -24,25 +24,39 @@ interface CodexTask {
   title: string;
 }
 
+interface Shelf<T> {
+  createdAt: number;
+  value: Promise<T>;
+}
+
+/**
+ * The listener scan walks every open TCP socket on the machine and follows up
+ * with lsof and ps per process — the most expensive look the polling loop
+ * takes. It keeps for a minute: Silvic's own starts and stops invalidate the
+ * shelf explicitly, so the only thing that can arrive late is a dev server
+ * started by hand in some terminal. The Codex read is one cheap sqlite query
+ * and stays near-live.
+ */
+const listenerShelfLifeMs = 60_000;
+const taskShelfLifeMs = 3_000;
+
 export function createLocalContextConnector(runner: CommandRunner): Connector {
-  let cache:
-    | {
-        createdAt: number;
-        value: Promise<{
-          listeners: readonly Listener[];
-          tasks: readonly CodexTask[];
-        }>;
-      }
-    | undefined;
+  let listeners: Shelf<readonly Listener[]> | undefined;
+  let tasks: Shelf<readonly CodexTask[]> | undefined;
   const readContext = () => {
     const now = Date.now();
-    if (cache && now - cache.createdAt < 3_000) return cache.value;
-    const value = Promise.all([
-      readListeners(runner),
-      readCodexTasks(runner),
-    ]).then(([listeners, tasks]) => ({ listeners, tasks }));
-    cache = { createdAt: now, value };
-    return value;
+    if (!listeners || now - listeners.createdAt >= listenerShelfLifeMs) {
+      listeners = { createdAt: now, value: readListeners(runner) };
+    }
+    if (!tasks || now - tasks.createdAt >= taskShelfLifeMs) {
+      tasks = { createdAt: now, value: readCodexTasks(runner) };
+    }
+    return Promise.all([listeners.value, tasks.value]).then(
+      ([listenerValues, taskValues]) => ({
+        listeners: listenerValues,
+        tasks: taskValues,
+      }),
+    );
   };
 
   return {
@@ -53,7 +67,8 @@ export function createLocalContextConnector(runner: CommandRunner): Connector {
       capabilities: ["observe"],
     },
     invalidate: () => {
-      cache = undefined;
+      listeners = undefined;
+      tasks = undefined;
     },
     observe: async (target) => {
       const context = await readContext();
