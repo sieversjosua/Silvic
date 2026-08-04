@@ -12,6 +12,8 @@ interface PullRequestResponse {
   state: string;
   isDraft: boolean;
   url: string;
+  /** The branch tip GitHub merged — the proof a squash left nothing behind. */
+  headRefOid: string;
   statusCheckRollup: readonly {
     status?: string;
     conclusion?: string;
@@ -161,7 +163,7 @@ async function observePullRequest(
       "pr",
       "view",
       "--json",
-      "number,title,state,isDraft,url,statusCheckRollup",
+      "number,title,state,isDraft,url,statusCheckRollup,headRefOid",
     ],
     cwd: target.path,
     ...(context?.signal ? { signal: context.signal } : {}),
@@ -194,6 +196,7 @@ async function observePullRequest(
         draft: response.isDraft,
         state: response.state,
         checks,
+        headRefOid: response.headRefOid,
       },
     } satisfies ConnectorObservation,
   ];
@@ -209,12 +212,14 @@ function parsePullRequest(output: string): PullRequestResponse {
     !("state" in value) ||
     !("isDraft" in value) ||
     !("url" in value) ||
+    !("headRefOid" in value) ||
     !("statusCheckRollup" in value) ||
     typeof value.number !== "number" ||
     typeof value.title !== "string" ||
     typeof value.state !== "string" ||
     typeof value.isDraft !== "boolean" ||
     typeof value.url !== "string" ||
+    typeof value.headRefOid !== "string" ||
     !Array.isArray(value.statusCheckRollup)
   ) {
     throw new Error("GitHub returned an unreadable pull-request response");

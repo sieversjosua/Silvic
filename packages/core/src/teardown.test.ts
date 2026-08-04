@@ -188,6 +188,63 @@ describe("planTeardown", () => {
   });
 });
 
+describe("deleting a squash-merged branch", () => {
+  const mergedAt = (headRefOid: string): ConnectorObservation => ({
+    connectorId: "github",
+    workspaceId: "plot-1",
+    kind: "review",
+    state: "quiet",
+    label: "#258 merged",
+    metadata: { number: 258, state: "MERGED", headRefOid },
+  });
+
+  it("forces the deletion when the pull request merged this exact tip", () => {
+    // A squash rewrote the two commits, so Git counts them as held only here.
+    // GitHub's record of merging this very tip is what proves nothing is lost.
+    const plan = planTeardown({
+      workspace: plot({
+        git: { ...plot().git, revision: "abc123" },
+        observations: [mergedAt("abc123")],
+      }),
+      scope: "remove",
+      deleteBranch: true,
+      heldOnlyHere: 2,
+    });
+
+    expect(plan.blockers).toEqual([]);
+    expect(plan.steps.some((step) => step.id === "branch:force")).toBe(true);
+    expect(plan.steps.some((step) => step.id === "branch")).toBe(false);
+  });
+
+  it("still blocks when the branch moved past what GitHub merged", () => {
+    // A commit made after the merge is exactly what a forced delete would
+    // destroy; the mismatched tip is how the plan notices.
+    const plan = planTeardown({
+      workspace: plot({
+        git: { ...plot().git, revision: "later9" },
+        observations: [mergedAt("abc123")],
+      }),
+      scope: "remove",
+      deleteBranch: true,
+      heldOnlyHere: 3,
+    });
+
+    expect(plan.blockers.join(" ")).toMatch(/exist only on/i);
+    expect(plan.steps.some((step) => step.id === "branch:force")).toBe(false);
+  });
+
+  it("does not force on merged evidence alone when the tip is unknown", () => {
+    const plan = planTeardown({
+      workspace: plot({ observations: [mergedAt("abc123")] }),
+      scope: "remove",
+      deleteBranch: true,
+      heldOnlyHere: 2,
+    });
+
+    expect(plan.blockers.join(" ")).toMatch(/exist only on/i);
+  });
+});
+
 describe("discarding uncommitted work", () => {
   const dirty = () => plot({ git: { ...plot().git, unstaged: 2 } });
 

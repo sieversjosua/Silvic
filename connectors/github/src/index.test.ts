@@ -76,6 +76,7 @@ describe("GitHub connector", () => {
         state: "OPEN",
         isDraft: false,
         url: "https://github.com/example/silvic/pull/42",
+        headRefOid: "abc123def456",
         statusCheckRollup: [
           {
             status: "COMPLETED",
@@ -102,6 +103,7 @@ describe("GitHub connector", () => {
           draft: false,
           state: "OPEN",
           checks: "success",
+          headRefOid: "abc123def456",
         },
       },
     ]);
@@ -112,7 +114,7 @@ describe("GitHub connector", () => {
           "pr",
           "view",
           "--json",
-          "number,title,state,isDraft,url,statusCheckRollup",
+          "number,title,state,isDraft,url,statusCheckRollup,headRefOid",
         ],
         cwd: "/projects/silvic",
         signal: undefined,

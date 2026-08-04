@@ -164,25 +164,61 @@ export function planTeardown({
     // work: a plot branched from main and never committed to is the common
     // case, and deleting it discards nothing. What matters is whether any
     // commit would become unreachable, which is a thing to count, not guess.
-    if (heldOnlyHere === undefined) {
-      blockers.push(
-        `Silvic could not tell whether ${workspace.branch} holds commits that exist nowhere else. Delete it yourself once you know.`,
-      );
-    } else if (heldOnlyHere > 0) {
-      blockers.push(
-        `${heldOnlyHere} commit${heldOnlyHere === 1 ? "" : "s"} exist only on ${workspace.branch}. Push or merge them first, or deleting the branch is the end of them.`,
-      );
+    //
+    // A squash or rebase merge defeats the count: the commits arrived, but as
+    // rewritten history Git cannot connect to the branch. The platform's own
+    // record is the evidence — the pull request merged, and it merged exactly
+    // the tip the branch still stands on, so nothing made after the merge can
+    // be lost either.
+    if (mergedPullRequestCoversTip(workspace)) {
+      steps.push({
+        id: "branch:force",
+        label: `Delete the branch ${workspace.branch}`,
+        detail:
+          "Its pull request merged this exact tip; a squash hides that from Git, so the deletion is forced",
+      });
+    } else {
+      if (heldOnlyHere === undefined) {
+        blockers.push(
+          `Silvic could not tell whether ${workspace.branch} holds commits that exist nowhere else. Delete it yourself once you know.`,
+        );
+      } else if (heldOnlyHere > 0) {
+        blockers.push(
+          `${heldOnlyHere} commit${heldOnlyHere === 1 ? "" : "s"} exist only on ${workspace.branch}. Push or merge them first, or deleting the branch is the end of them.`,
+        );
+      }
+      steps.push({
+        id: "branch",
+        label: `Delete the branch ${workspace.branch}`,
+        detail: "Refused by Git if it holds unmerged work",
+      });
     }
-    steps.push({
-      id: "branch",
-      label: `Delete the branch ${workspace.branch}`,
-      detail: "Refused by Git if it holds unmerged work",
-    });
   } else {
     keeps.push(`The branch ${workspace.branch}`);
   }
 
   return { scope, steps, blockers, keeps };
+}
+
+/**
+ * Whether GitHub recorded this branch's pull request as merged at the very
+ * commit the branch still points to. Both halves matter: "merged" alone says
+ * nothing about commits made after the merge, and a matching tip alone says
+ * nothing about whether the work arrived. Together they prove that deleting
+ * the branch, even forced, loses no commit that is not already represented
+ * on the target branch.
+ */
+function mergedPullRequestCoversTip(workspace: WorkspaceSnapshot): boolean {
+  const review = workspace.observations.find(
+    (observation) => observation.kind === "review",
+  );
+  if (review?.metadata?.["state"] !== "MERGED") return false;
+  const mergedTip = review.metadata["headRefOid"];
+  return (
+    typeof mergedTip === "string" &&
+    mergedTip.length > 0 &&
+    mergedTip === workspace.git.revision
+  );
 }
 
 export interface TeardownStepResult {
@@ -250,6 +286,14 @@ export class TeardownService {
           await requireSuccess(this.runner, {
             executable: "git",
             arguments: ["branch", "-d", context.branch],
+            cwd: context.projectRoot,
+          });
+        } else if (step.id === "branch:force") {
+          // Forced only when the plan proved the pull request merged this
+          // exact tip — Git cannot see a squash, but GitHub recorded it.
+          await requireSuccess(this.runner, {
+            executable: "git",
+            arguments: ["branch", "-D", context.branch],
             cwd: context.projectRoot,
           });
         } else {
