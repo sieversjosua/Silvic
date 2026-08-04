@@ -5,7 +5,10 @@ import { execFileSync } from "node:child_process";
 
 import { afterAll, expect, it } from "vitest";
 
-import { CommandSupervisor, type SupervisedCommand } from "./command-supervisor";
+import {
+  CommandSupervisor,
+  type SupervisedCommand,
+} from "./command-supervisor";
 
 const directories: string[] = [];
 
@@ -20,7 +23,9 @@ afterAll(async () => {
     // Nothing was listening, which is the state being asked for.
   }
   await Promise.all(
-    directories.splice(0).map((path) => rm(path, { recursive: true, force: true })),
+    directories
+      .splice(0)
+      .map((path) => rm(path, { recursive: true, force: true })),
   );
 });
 
@@ -69,7 +74,18 @@ it("starts a real command, stops its whole group, and is taken back", async () =
   expect(afterPublishing?.status).toBe("running");
   expect(afterPublishing?.advice).toBeUndefined();
   expect(afterPublishing?.url).toBe(`http://localhost:${port}`);
-  const served = execFileSync("curl", ["-sS", "-o", "/dev/null", "-w", "%{http_code}", `http://127.0.0.1:${port}/`], { encoding: "utf8" });
+  const served = execFileSync(
+    "curl",
+    [
+      "-sS",
+      "-o",
+      "/dev/null",
+      "-w",
+      "%{http_code}",
+      `http://127.0.0.1:${port}/`,
+    ],
+    { encoding: "utf8" },
+  );
   expect(served.trim()).toBe("200");
 
   // A second supervisor, as a new window would be: it should take the running
@@ -86,7 +102,10 @@ it("starts a real command, stops its whole group, and is taken back", async () =
   expect(adoptedAnnounce).toHaveLength(1);
 
   // And it must refuse an id that is not the process it was.
-  const stale = new CommandSupervisor({ logDirectory: logs, onChange: () => {} });
+  const stale = new CommandSupervisor({
+    logDirectory: logs,
+    onChange: () => {},
+  });
   stale.adopt([
     {
       ...(supervisor.list()[0] as SupervisedCommand),

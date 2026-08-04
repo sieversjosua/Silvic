@@ -21,7 +21,9 @@ function tellsApart(name: string | undefined, path: string): name is string {
 
   const parts = normalize(path).split(sep).filter(Boolean);
   const isT3RepositoryName =
-    parts.at(-4) === ".t3" && parts.at(-3) === "worktrees" && name === parts.at(-2);
+    parts.at(-4) === ".t3" &&
+    parts.at(-3) === "worktrees" &&
+    name === parts.at(-2);
   return !isT3RepositoryName;
 }
 

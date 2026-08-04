@@ -116,7 +116,10 @@ describe("layout", () => {
     const quiet = Array.from({ length: 5 }, (_, index) =>
       workspace(`quiet-${index}`),
     );
-    const { placements } = layout(project([trunk, changed("busy"), ...quiet]), false);
+    const { placements } = layout(
+      project([trunk, changed("busy"), ...quiet]),
+      false,
+    );
 
     const stack = placements.find((item) => item.key.startsWith("quiet:"));
     expect(stack?.quietCount).toBe(5);
@@ -127,9 +130,14 @@ describe("layout", () => {
     const quiet = Array.from({ length: 5 }, (_, index) =>
       workspace(`quiet-${index}`),
     );
-    const { placements } = layout(project([trunk, changed("busy"), ...quiet]), true);
+    const { placements } = layout(
+      project([trunk, changed("busy"), ...quiet]),
+      true,
+    );
 
-    expect(placements.find((item) => item.key.startsWith("quiet:"))).toBeUndefined();
+    expect(
+      placements.find((item) => item.key.startsWith("quiet:")),
+    ).toBeUndefined();
     expect(placements.filter((item) => item.workspace)).toHaveLength(7);
   });
 
@@ -152,7 +160,9 @@ describe("layout", () => {
     );
     const { placements } = layout(project([trunk, ...kids]), true);
 
-    const cells = placements.map((item) => `${item.position.x}:${item.position.y}`);
+    const cells = placements.map(
+      (item) => `${item.position.x}:${item.position.y}`,
+    );
     expect(new Set(cells).size).toBe(placements.length);
   });
 
@@ -165,10 +175,7 @@ describe("layout", () => {
       ...grandchild,
       lineage: { parentWorkspaceId: "kid-3", evidence: "recorded" },
     };
-    const { placements } = layout(
-      project([trunk, ...kids, withLineage]),
-      true,
-    );
+    const { placements } = layout(project([trunk, ...kids, withLineage]), true);
 
     const parent = placements.find((item) => item.key === "kid-3");
     const child = placements.find((item) => item.key === "grandchild");

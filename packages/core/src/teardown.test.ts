@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import type { ConnectorObservation, WorkspaceSnapshot } from "@silvic/contracts";
+import type {
+  ConnectorObservation,
+  WorkspaceSnapshot,
+} from "@silvic/contracts";
 
 import { planTeardown } from "./teardown";
 
@@ -68,7 +71,9 @@ describe("planTeardown", () => {
     expect(plan.steps).toHaveLength(1);
     expect(plan.steps[0]?.label).toBe("Stop web");
     // The deployment is not touched by stopping.
-    expect(plan.steps.some((step) => step.id.startsWith("release:"))).toBe(false);
+    expect(plan.steps.some((step) => step.id.startsWith("release:"))).toBe(
+      false,
+    );
   });
 
   it("says plainly that it cannot delete a Convex deployment", () => {
@@ -184,8 +189,7 @@ describe("planTeardown", () => {
 });
 
 describe("discarding uncommitted work", () => {
-  const dirty = () =>
-    plot({ git: { ...plot().git, unstaged: 2 } });
+  const dirty = () => plot({ git: { ...plot().git, unstaged: 2 } });
 
   it("refuses by default, and says the way through", () => {
     const plan = planTeardown({

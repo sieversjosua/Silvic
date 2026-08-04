@@ -65,9 +65,7 @@ export function resolvePlotAddress(request: PlotAddressRequest): PlotAddress {
     url: `https://${routeNameFor(
       {
         id: serving[0],
-        ...(serving[1].routeName
-          ? { routeName: serving[1].routeName }
-          : {}),
+        ...(serving[1].routeName ? { routeName: serving[1].routeName } : {}),
       },
       request.plot,
       request.project,

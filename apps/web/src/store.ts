@@ -26,7 +26,9 @@ interface SilvicState {
   addRoot(): Promise<void>;
   setProjectActive(projectId: string, active: boolean): Promise<void>;
   setDefaultHarness(id: HarnessId): Promise<void>;
-  createEnvironment(request: CreateEnvironmentRequest): Promise<PlotCreationResult>;
+  createEnvironment(
+    request: CreateEnvironmentRequest,
+  ): Promise<PlotCreationResult>;
   selectProject(id: string): void;
   selectWorkspace(id: string): void;
 }

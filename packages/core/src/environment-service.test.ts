@@ -169,7 +169,12 @@ describe("EnvironmentService", () => {
       executable: "git",
       arguments: ["init", "--initial-branch=main", repository],
     });
-    const commit = ["-c", "user.email=silvic@example.test", "-c", "user.name=Silvic Test"];
+    const commit = [
+      "-c",
+      "user.email=silvic@example.test",
+      "-c",
+      "user.name=Silvic Test",
+    ];
     await requireSuccess(runner, {
       executable: "git",
       arguments: [...commit, "commit", "--allow-empty", "-m", "Initial"],

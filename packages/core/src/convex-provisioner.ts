@@ -288,12 +288,10 @@ function mergeEnvironmentContents(primary: string, fallback: string): string {
       .map(environmentKey)
       .filter((key) => key !== undefined),
   );
-  const additions = fallback
-    .split(/\r?\n/)
-    .filter((line) => {
-      const key = environmentKey(line);
-      return key !== undefined && !primaryKeys.has(key);
-    });
+  const additions = fallback.split(/\r?\n/).filter((line) => {
+    const key = environmentKey(line);
+    return key !== undefined && !primaryKeys.has(key);
+  });
   return [primary.trimEnd(), ...additions].join("\n").replace(/\n*$/, "\n");
 }
 

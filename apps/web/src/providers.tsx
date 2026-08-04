@@ -19,7 +19,13 @@ export type ProviderId =
 
 export function ConvexMark({ size = 16 }: { size?: number }) {
   return (
-    <svg viewBox="28 28 128 132" width={size} height={size} fill="none" aria-hidden="true">
+    <svg
+      viewBox="28 28 128 132"
+      width={size}
+      height={size}
+      fill="none"
+      aria-hidden="true"
+    >
       <path
         fill="#F3B01C"
         d="M108.092 130.021c18.166-2.018 35.293-11.698 44.723-27.854-4.466 39.961-48.162 65.218-83.83 49.711-3.286-1.425-6.115-3.796-8.056-6.844-8.016-12.586-10.65-28.601-6.865-43.135 10.817 18.668 32.81 30.111 54.028 28.122Z"
@@ -107,7 +113,13 @@ export function WorkOsMark({ size = 16 }: { size?: number }) {
 
 export function ClerkMark({ size = 16 }: { size?: number }) {
   return (
-    <svg viewBox="0 0 128 128" width={size} height={size} fill="none" aria-hidden="true">
+    <svg
+      viewBox="0 0 128 128"
+      width={size}
+      height={size}
+      fill="none"
+      aria-hidden="true"
+    >
       <circle cx="64" cy="64" r="20" fill="#6C47FF" />
       <path
         fill="#BAB1FF"
@@ -124,7 +136,13 @@ export function ClerkMark({ size = 16 }: { size?: number }) {
 /** The white plate in the source mark is dropped so it works on both sheets. */
 export function OpenCodeMark({ size = 16 }: { size?: number }) {
   return (
-    <svg viewBox="0 0 512 512" width={size} height={size} fill="none" aria-hidden="true">
+    <svg
+      viewBox="0 0 512 512"
+      width={size}
+      height={size}
+      fill="none"
+      aria-hidden="true"
+    >
       <path d="M320 224V352H192V224H320Z" fill="currentColor" opacity="0.25" />
       <path
         fillRule="evenodd"
@@ -142,7 +160,13 @@ export function OpenCodeMark({ size = 16 }: { size?: number }) {
  */
 export function VsCodeMark({ size = 16 }: { size?: number }) {
   return (
-    <svg viewBox="0 0 100 100" width={size} height={size} fill="none" aria-hidden="true">
+    <svg
+      viewBox="0 0 100 100"
+      width={size}
+      height={size}
+      fill="none"
+      aria-hidden="true"
+    >
       <mask
         id="silvic-vscode-mask"
         width="100"
@@ -179,7 +203,13 @@ export function VsCodeMark({ size = 16 }: { size?: number }) {
 
 export function SupabaseMark({ size = 16 }: { size?: number }) {
   return (
-    <svg viewBox="0 0 109 113" width={size} height={size} fill="none" aria-hidden="true">
+    <svg
+      viewBox="0 0 109 113"
+      width={size}
+      height={size}
+      fill="none"
+      aria-hidden="true"
+    >
       <path
         d="M63.7076 110.284C60.8481 113.885 55.0502 111.912 54.9813 107.314L53.9738 40.0627L99.1935 40.0627C107.384 40.0627 111.952 49.5228 106.859 55.9374L63.7076 110.284Z"
         fill="url(#silvic-supabase-a)"
@@ -223,7 +253,13 @@ export function CloudflareMark({ size = 16 }: { size?: number }) {
 /** Monochrome so it sits with the interface rather than shouting. */
 export function GitHubMark({ size = 16 }: { size?: number }) {
   return (
-    <svg viewBox="0 0 1024 1024" width={size} height={size} fill="none" aria-hidden="true">
+    <svg
+      viewBox="0 0 1024 1024"
+      width={size}
+      height={size}
+      fill="none"
+      aria-hidden="true"
+    >
       <path
         fill="currentColor"
         fillRule="evenodd"
@@ -234,7 +270,10 @@ export function GitHubMark({ size = 16 }: { size?: number }) {
   );
 }
 
-const marks: Record<ProviderId, (props: { size?: number }) => React.ReactElement> = {
+const marks: Record<
+  ProviderId,
+  (props: { size?: number }) => React.ReactElement
+> = {
   convex: ConvexMark,
   codex: CodexMark,
   claude: ClaudeMark,
@@ -269,13 +308,7 @@ export function isProviderId(value: string): value is ProviderId {
  * padded, and mushy once scaled to menu size — so Silvic draws all of them.
  * Terminal and Finder have no brand mark and use the interface's own glyphs.
  */
-export function HarnessMark({
-  id,
-  size = 15,
-}: {
-  id: string;
-  size?: number;
-}) {
+export function HarnessMark({ id, size = 15 }: { id: string; size?: number }) {
   if (id === "terminal") return <TerminalGlyph size={size} />;
   if (id === "finder") return <FinderGlyph size={size} />;
   if (id === "vscode") return <VsCodeMark size={size} />;

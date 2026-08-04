@@ -90,9 +90,7 @@ it("creates a plot and provisions it from the repository's recipe", async () => 
   expect(await readFile(join(destinationPath, ".env.local"), "utf8")).toBe(
     `URL=${url}\nPLOT=${plot}\n`,
   );
-  expect(url).toBe(
-    "https://web-owner-onboarding-syntwin-mono.localhost",
-  );
+  expect(url).toBe("https://web-owner-onboarding-syntwin-mono.localhost");
   // The address must be reproducible from the same inputs alone.
   expect(plotPort(recipe.project, plot)).toBe(port);
 });

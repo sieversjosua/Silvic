@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  resolvePlotAddress,
-  routeNameFor,
-  routes,
-} from "./plot-address";
+import { resolvePlotAddress, routeNameFor, routes } from "./plot-address";
 
 describe("routes", () => {
   it("publishes serving commands by default and allows an explicit opt-out", () => {

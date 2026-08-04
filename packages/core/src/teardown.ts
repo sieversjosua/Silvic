@@ -79,7 +79,8 @@ export function planTeardown({
     });
   }
   const running = workspace.observations.filter(
-    (observation) => observation.kind === "runtime" && observation.state === "active",
+    (observation) =>
+      observation.kind === "runtime" && observation.state === "active",
   );
   for (const process of running) {
     steps.push({
