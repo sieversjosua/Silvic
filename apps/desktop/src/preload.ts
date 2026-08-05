@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from "electron";
 
 import {
   ipcChannels,
+  type AppUpdateState,
   type AppearancePreference,
   type CreateEnvironmentRequest,
   type DeliveryExecuteRequest,
@@ -66,6 +67,19 @@ const api: SilvicDesktopApi = {
   getAppearance: () => ipcRenderer.invoke(ipcChannels.appearanceGet),
   setAppearance: (preference: AppearancePreference) =>
     ipcRenderer.invoke(ipcChannels.appearanceSet, preference),
+  getUpdateState: () => ipcRenderer.invoke(ipcChannels.updateStateGet),
+  checkForUpdates: () => ipcRenderer.invoke(ipcChannels.updateCheck),
+  downloadUpdate: () => ipcRenderer.invoke(ipcChannels.updateDownload),
+  installUpdate: () => ipcRenderer.invoke(ipcChannels.updateInstall),
+  onUpdateState: (listener: (state: AppUpdateState) => void) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      state: AppUpdateState,
+    ) => listener(state);
+    ipcRenderer.on(ipcChannels.updateStateChanged, handler);
+    return () =>
+      ipcRenderer.removeListener(ipcChannels.updateStateChanged, handler);
+  },
   getActiveProjects: () => ipcRenderer.invoke(ipcChannels.projectsActiveGet),
   setProjectActive: (request: ProjectActivationRequest) =>
     ipcRenderer.invoke(ipcChannels.projectsActiveSet, request),

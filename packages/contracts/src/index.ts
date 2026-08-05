@@ -793,6 +793,31 @@ export interface DeliveryResult {
 export const appearancePreferenceSchema = z.enum(["system", "light", "dark"]);
 export type AppearancePreference = z.infer<typeof appearancePreferenceSchema>;
 
+/** The complete update story shown by the installed desktop app. */
+interface AppUpdateStateBase {
+  currentVersion: string;
+}
+
+export type AppUpdateState =
+  | (AppUpdateStateBase & {
+      phase: "unsupported" | "idle" | "checking" | "current";
+    })
+  | (AppUpdateStateBase & {
+      phase: "available" | "ready";
+      availableVersion: string;
+    })
+  | (AppUpdateStateBase & {
+      phase: "downloading";
+      availableVersion: string;
+      progressPercent: number;
+    })
+  | (AppUpdateStateBase & {
+      phase: "error";
+      message: string;
+    });
+
+export type AppUpdatePhase = AppUpdateState["phase"];
+
 export const projectActivationRequestSchema = z
   .object({
     projectId: z.string().min(1).max(400),
@@ -835,6 +860,11 @@ export interface SilvicDesktopApi {
   setAppearance(
     preference: AppearancePreference,
   ): Promise<AppearancePreference>;
+  getUpdateState(): Promise<AppUpdateState>;
+  checkForUpdates(): Promise<AppUpdateState>;
+  downloadUpdate(): Promise<AppUpdateState>;
+  installUpdate(): Promise<void>;
+  onUpdateState(listener: (state: AppUpdateState) => void): () => void;
   getActiveProjects(): Promise<readonly string[]>;
   setProjectActive(
     request: ProjectActivationRequest,
@@ -872,6 +902,11 @@ export const ipcChannels = {
   linkOpen: "silvic:link:open",
   appearanceGet: "silvic:appearance:get",
   appearanceSet: "silvic:appearance:set",
+  updateStateGet: "silvic:update:state:get",
+  updateCheck: "silvic:update:check",
+  updateDownload: "silvic:update:download",
+  updateInstall: "silvic:update:install",
+  updateStateChanged: "silvic:update:state:changed",
   projectsActiveGet: "silvic:projects:active:get",
   projectsActiveSet: "silvic:projects:active:set",
   clipboardWrite: "silvic:clipboard:write",

@@ -132,6 +132,12 @@ Local directory builds receive an ad-hoc signature when no valid Apple signing
 identity is available; release distribution still requires Developer ID signing
 and notarization.
 
+Production releases are universal, Developer ID-signed, notarized, and published
+through GitHub Actions. Installed builds expose an update control in the sidebar;
+downloads remain explicit and install only after **Restart to update**. See
+[the release guide](docs/RELEASING.md) for the one-time secret setup and tagged
+release flow.
+
 ## Repository layout
 
 ```text

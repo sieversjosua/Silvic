@@ -2,6 +2,7 @@
   "name": "@silvic/desktop",
   "version": "0.1.0",
   "description": "Local-first control plane for parallel development environments",
+  "repository": "https://github.com/sieversjosua/Silvic",
   "author": "Josua Sievers",
   "license": "MIT",
   "private": true,
@@ -19,7 +20,8 @@
     "@silvic/connector-local": "workspace:*",
     "@silvic/contracts": "workspace:*",
     "@silvic/core": "workspace:*",
-    "electron-store": "^11.0.2"
+    "electron-store": "^11.0.2",
+    "electron-updater": "^6.8.9"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^6.0.4",
@@ -31,6 +33,7 @@
   "build": {
     "appId": "dev.silvic.app",
     "productName": "Silvic",
+    "artifactName": "${productName}-${version}-${arch}.${ext}",
     "asar": true,
     "directories": {
       "output": "../../release"
@@ -41,9 +44,19 @@
     "mac": {
       "category": "public.app-category.developer-tools",
       "icon": "../../Resources/Silvic-Electron.icns",
+      "hardenedRuntime": true,
+      "notarize": true,
       "target": [
-        "dir"
+        "dmg",
+        "zip"
       ]
-    }
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "sieversjosua",
+        "repo": "Silvic"
+      }
+    ]
   }
 }

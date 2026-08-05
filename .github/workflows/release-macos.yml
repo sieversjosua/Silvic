@@ -1,0 +1,117 @@
+name: Release macOS
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.repository == 'sieversjosua/Silvic'
+    runs-on: macos-15
+    environment: release
+
+    steps:
+      - name: Check out the tagged source
+        uses: actions/checkout@v7
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Install Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+          package-manager-cache: false
+
+      - name: Verify release version
+        run: |
+          root_version="$(node -p "require('./package.json').version")"
+          desktop_version="$(node -p "require('./apps/desktop/package.json').version")"
+          if [[ "$root_version" != "$desktop_version" ]]; then
+            echo "::error::Root version $root_version does not match app version $desktop_version"
+            exit 1
+          fi
+          expected="v$desktop_version"
+          if [[ "$GITHUB_REF_NAME" != "$expected" ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match app version $expected"
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify source
+        run: pnpm check
+
+      - name: Prepare Apple notarization key
+        env:
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          MAC_CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          MAC_CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+        run: |
+          for name in APPLE_API_KEY_P8 APPLE_API_KEY_ID APPLE_API_ISSUER MAC_CSC_LINK MAC_CSC_KEY_PASSWORD; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::The release environment is missing secret $name"
+              exit 1
+            fi
+          done
+          printf '%s' "$APPLE_API_KEY_P8" | base64 --decode > "$RUNNER_TEMP/notary-key.p8"
+          chmod 600 "$RUNNER_TEMP/notary-key.p8"
+
+      - name: Build, sign and notarize universal macOS release
+        env:
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_API_KEY: ${{ runner.temp }}/notary-key.p8
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          pnpm --filter @silvic/desktop exec electron-builder \
+            --mac --universal --publish never \
+            -c.forceCodeSigning=true
+
+      - name: Verify distributable
+        run: |
+          app_path="$(find release -path '*/Silvic.app' -print -quit)"
+          dmg_path="$(find release -maxdepth 1 -name '*.dmg' -print -quit)"
+          test -n "$app_path"
+          test -n "$dmg_path"
+          codesign --verify --deep --strict --verbose=2 "$app_path"
+          spctl --assess --type execute --verbose=4 "$app_path"
+          xcrun stapler validate "$app_path"
+          spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg_path"
+          xcrun stapler validate "$dmg_path"
+          test -f release/latest-mac.yml
+          grep -q '\.zip' release/latest-mac.yml
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          shopt -s nullglob
+          artifacts=(release/*.dmg release/*.zip release/latest-mac.yml release/*.blockmap)
+          if (( ${#artifacts[@]} < 3 )); then
+            echo "::error::Release artifacts are incomplete"
+            exit 1
+          fi
+          gh release create "$GITHUB_REF_NAME" "${artifacts[@]}" \
+            --verify-tag \
+            --draft \
+            --title "Silvic ${GITHUB_REF_NAME#v}" \
+            --generate-notes
+          gh release edit "$GITHUB_REF_NAME" --draft=false --latest
+
+      - name: Remove temporary credentials
+        if: always()
+        run: rm -f "$RUNNER_TEMP/notary-key.p8"

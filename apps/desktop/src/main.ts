@@ -21,6 +21,7 @@ import {
   type IpcMainInvokeEvent,
 } from "electron";
 import Store from "electron-store";
+import { autoUpdater } from "electron-updater";
 
 import { convexConnector } from "@silvic/connector-convex";
 import {
@@ -101,6 +102,7 @@ import {
 } from "@silvic/core";
 
 import { PlotProgressReporter } from "./plot-progress";
+import { DesktopUpdater } from "./updater";
 
 interface Settings {
   roots: string[];
@@ -179,6 +181,7 @@ const settings = new Store<Settings>({
 });
 
 let mainWindow: BrowserWindow | undefined;
+let desktopUpdater: DesktopUpdater | undefined;
 let latestSnapshot: SilvicSnapshot = {
   projects: [],
   connectorFailures: [],
@@ -210,8 +213,16 @@ if (!app.requestSingleInstanceLock()) {
       mainWindow?.setBackgroundColor(currentWindowBackground());
     });
     supervisor.adopt(settings.get("runningCommands"));
+    desktopUpdater = new DesktopUpdater({
+      source: autoUpdater,
+      currentVersion: app.getVersion(),
+      enabled: app.isPackaged && process.env.SILVIC_DISABLE_UPDATES !== "1",
+      onState: (state) =>
+        mainWindow?.webContents.send(ipcChannels.updateStateChanged, state),
+    });
     registerIpc();
     createWindow();
+    scheduleAutomaticUpdateChecks();
     await paintFromGit(settings.get("roots"));
     await refreshSnapshot();
 
@@ -568,6 +579,38 @@ function registerIpc(): void {
     mainWindow?.setBackgroundColor(currentWindowBackground());
     return parsed;
   });
+  ipcMain.handle(ipcChannels.updateStateGet, (event) => {
+    assertTrustedSender(event);
+    return knownUpdater().getState();
+  });
+  ipcMain.handle(ipcChannels.updateCheck, async (event) => {
+    assertTrustedSender(event);
+    return knownUpdater().check();
+  });
+  ipcMain.handle(ipcChannels.updateDownload, async (event) => {
+    assertTrustedSender(event);
+    return knownUpdater().download();
+  });
+  ipcMain.handle(ipcChannels.updateInstall, (event) => {
+    assertTrustedSender(event);
+    knownUpdater().install();
+  });
+}
+
+function knownUpdater(): DesktopUpdater {
+  if (!desktopUpdater) throw new Error("Silvic's updater is not ready");
+  return desktopUpdater;
+}
+
+function scheduleAutomaticUpdateChecks(): void {
+  if (desktopUpdater?.getState().phase === "unsupported") return;
+  const initialCheck = setTimeout(() => void desktopUpdater?.check(), 10_000);
+  const recurringCheck = setInterval(
+    () => void desktopUpdater?.check(),
+    4 * 60 * 60 * 1_000,
+  );
+  initialCheck.unref();
+  recurringCheck.unref();
 }
 
 /**

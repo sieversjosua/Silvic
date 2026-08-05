@@ -11,10 +11,11 @@
     "dev": "pnpm --filter @silvic/desktop dev",
     "build": "pnpm --filter @silvic/desktop build",
     "package:mac": "pnpm --filter @silvic/desktop package:mac",
+    "release:version": "node Scripts/set-release-version.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "check": "pnpm typecheck && pnpm test && pnpm build",
+    "check": "pnpm typecheck && pnpm test && pnpm build && pnpm format:check",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },

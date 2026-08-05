@@ -59,6 +59,7 @@ import { IssuePicker } from "./IssuePicker";
 import { CodexMark, HarnessMark } from "./providers";
 import { RecipeDialog } from "./RecipeDialog";
 import { TeardownDialog } from "./TeardownDialog";
+import { AppUpdater } from "./Updater";
 import {
   localChangeCount,
   locationLabel,
@@ -252,6 +253,7 @@ export function App() {
         </div>
 
         <div className="rail-foot">
+          <AppUpdater />
           <AppearanceControl value={preference} onChange={setPreference} />
           <KeepRunningToggle />
           <button
