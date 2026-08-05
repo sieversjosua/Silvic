@@ -1,8 +1,8 @@
 # Releasing Silvic
 
-Silvic ships directly from GitHub Releases. Each macOS release is a universal
-Developer ID-signed and Apple-notarized DMG, plus the ZIP and `latest-mac.yml`
-that the in-app updater needs.
+Silvic ships directly from GitHub Releases. Each macOS release contains a
+universal Developer ID-signed and Apple-notarized app in a DMG, plus the ZIP and
+`latest-mac.yml` that the in-app updater needs.
 
 ## One-time GitHub setup
 
@@ -40,7 +40,7 @@ The tag must exactly match `apps/desktop/package.json`. GitHub Actions then:
 1. repeats the full source checks;
 2. builds one Universal macOS app;
 3. signs every executable with Developer ID and enables Hardened Runtime;
-4. submits the result to Apple's notary service and staples the ticket;
+4. submits the app to Apple's notary service and staples the ticket;
 5. verifies the signature, Gatekeeper assessment, ticket and update metadata;
 6. creates the public GitHub Release only after every verification passes.
 

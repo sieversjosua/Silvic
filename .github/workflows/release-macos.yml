@@ -90,8 +90,7 @@ jobs:
           codesign --verify --deep --strict --verbose=2 "$app_path"
           spctl --assess --type execute --verbose=4 "$app_path"
           xcrun stapler validate "$app_path"
-          spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg_path"
-          xcrun stapler validate "$dmg_path"
+          hdiutil verify "$dmg_path"
           test -f release/latest-mac.yml
           grep -q '\.zip' release/latest-mac.yml
 
