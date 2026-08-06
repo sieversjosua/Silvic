@@ -137,7 +137,29 @@ export class DesktopUpdater {
     this.publish({
       phase: "error",
       currentVersion: this.options.currentVersion,
-      message: error instanceof Error ? error.message : "Update failed",
+      message: failureMessage(error),
     });
   }
+}
+
+/**
+ * electron-updater surfaces raw Node and Chromium errors ("ENOENT: no such
+ * file…", "net::ERR_INTERNET_DISCONNECTED"). The rail shows this text to
+ * people, so known noise becomes a sentence; anything already readable passes
+ * through untouched.
+ */
+function failureMessage(error: unknown): string {
+  const raw = error instanceof Error ? error.message : "Update failed";
+  if (/ENOENT|ENOTDIR/.test(raw)) return "This build has no update channel";
+  if (
+    /net::|ENOTFOUND|ETIMEDOUT|ECONN|EAI_AGAIN|ERR_INTERNET|ERR_NAME|ERR_CONNECTION/.test(
+      raw,
+    )
+  ) {
+    return "Couldn't reach the update server";
+  }
+  if (/HttpError|status [45]\d\d/i.test(raw)) {
+    return "The update server returned an error";
+  }
+  return raw;
 }

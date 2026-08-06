@@ -306,6 +306,38 @@ export interface ViewportWindow {
   height: number;
 }
 
+export interface Point {
+  x: number;
+  y: number;
+}
+
+/** The slice of flow coordinates the canvas currently shows. */
+function windowOf(view: ViewportWindow) {
+  const minX = -view.x / view.zoom;
+  const minY = -view.y / view.zoom;
+  return {
+    minX,
+    minY,
+    maxX: minX + view.width / view.zoom,
+    maxY: minY + view.height / view.zoom,
+  };
+}
+
+function boxInView(
+  position: Point,
+  size: { width: number; height: number },
+  view: ViewportWindow,
+): boolean {
+  if (view.zoom <= 0) return false;
+  const { minX, minY, maxX, maxY } = windowOf(view);
+  return (
+    position.x < maxX &&
+    position.x + size.width > minX &&
+    position.y < maxY &&
+    position.y + size.height > minY
+  );
+}
+
 /**
  * Whether any node still shows inside the viewport. When none does, the user
  * has panned into empty paper and cannot know which way home is — the canvas
@@ -313,24 +345,76 @@ export interface ViewportWindow {
  */
 export function anyNodeInView(
   nodes: readonly {
-    position: { x: number; y: number };
+    position: Point;
     measured?: { width?: number; height?: number };
   }[],
   view: ViewportWindow,
 ): boolean {
-  if (view.zoom <= 0) return false;
-  const minX = -view.x / view.zoom;
-  const minY = -view.y / view.zoom;
-  const maxX = minX + view.width / view.zoom;
-  const maxY = minY + view.height / view.zoom;
-  return nodes.some((node) => {
-    const width = node.measured?.width ?? NODE_WIDTH;
-    const height = node.measured?.height ?? NODE_HEIGHT;
-    return (
-      node.position.x < maxX &&
-      node.position.x + width > minX &&
-      node.position.y < maxY &&
-      node.position.y + height > minY
-    );
-  });
+  return nodes.some((node) =>
+    boxInView(
+      node.position,
+      {
+        width: node.measured?.width ?? NODE_WIDTH,
+        height: node.measured?.height ?? NODE_HEIGHT,
+      },
+      view,
+    ),
+  );
+}
+
+export type ViewShift =
+  /** The paper did not move under the reader; leave the camera alone. */
+  | { kind: "hold" }
+  /** Move the camera by this much, in flow units, to keep the anchor still. */
+  | { kind: "follow"; dx: number; dy: number }
+  /** Nothing the reader was watching survived; show the whole grove again. */
+  | { kind: "fit" };
+
+/**
+ * How the camera should answer a layout that moved beneath it. Tearing one plot
+ * down rebalances the entire fan, so a card the reader was watching can slide a
+ * row, jump a column, or flip to the other side of the trunk while the camera
+ * stays put — which is how a canvas ends up parked on empty paper. Following the
+ * card nearest the centre keeps that reader's view looking untouched.
+ */
+export function viewShift(
+  before: ReadonlyMap<string, Point>,
+  after: ReadonlyMap<string, Point>,
+  view: ViewportWindow,
+): ViewShift {
+  if (before.size === 0 || after.size === 0 || view.zoom <= 0) {
+    return { kind: "hold" };
+  }
+  const size = { width: NODE_WIDTH, height: NODE_HEIGHT };
+  const watched = [...before].filter(([, position]) =>
+    boxInView(position, size, view),
+  );
+  // Already off in the weeds before the layout changed: the way back is the
+  // rescue the canvas offers, not a camera that moves on its own.
+  if (watched.length === 0) return { kind: "hold" };
+
+  const survivors = watched.filter(([key]) => after.has(key));
+  if (survivors.length === 0) return { kind: "fit" };
+
+  const centre = {
+    x: (view.width / 2 - view.x) / view.zoom,
+    y: (view.height / 2 - view.y) / view.zoom,
+  };
+  const anchor = survivors.reduce((closest, candidate) =>
+    distanceToCentre(candidate[1], centre) <
+    distanceToCentre(closest[1], centre)
+      ? candidate
+      : closest,
+  );
+  const moved = after.get(anchor[0]);
+  if (!moved) return { kind: "hold" };
+  const dx = moved.x - anchor[1].x;
+  const dy = moved.y - anchor[1].y;
+  return dx === 0 && dy === 0 ? { kind: "hold" } : { kind: "follow", dx, dy };
+}
+
+function distanceToCentre(position: Point, centre: Point): number {
+  const dx = position.x + NODE_WIDTH / 2 - centre.x;
+  const dy = position.y + NODE_HEIGHT / 2 - centre.y;
+  return dx * dx + dy * dy;
 }

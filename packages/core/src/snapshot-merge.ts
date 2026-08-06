@@ -34,6 +34,28 @@ export function mergeSnapshots(
   };
 }
 
+/**
+ * Drops a Workspace whose directory has just been deleted. A removal is
+ * authoritative — the files are gone, and no survey can find them again — so it
+ * belongs in the snapshot the moment it happens, rather than after the next
+ * full survey has finished asking every connector.
+ */
+export function withoutWorkspace(
+  snapshot: SilvicSnapshot,
+  path: string,
+): SilvicSnapshot {
+  const gone = normalize(path);
+  return {
+    ...snapshot,
+    projects: snapshot.projects.map((project) => ({
+      ...project,
+      workspaces: project.workspaces.filter(
+        (workspace) => normalize(workspace.path) !== gone,
+      ),
+    })),
+  };
+}
+
 function mergeProject(
   current: ProjectSnapshot,
   incoming: ProjectSnapshot,

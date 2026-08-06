@@ -31,6 +31,8 @@ interface SilvicState {
   ): Promise<PlotCreationResult>;
   selectProject(id: string): void;
   selectWorkspace(id: string): void;
+  /** Work that outlives the dialog that started it still has to be heard. */
+  reportFailure(message: string): void;
 }
 
 const emptySnapshot: SilvicSnapshot = {
@@ -147,6 +149,7 @@ export const useSilvic = create<SilvicState>((set, get) => ({
     });
   },
   selectWorkspace: (selectedWorkspaceId) => set({ selectedWorkspaceId }),
+  reportFailure: (error) => set({ error }),
 }));
 
 function setSelectionForSnapshot(

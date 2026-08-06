@@ -87,6 +87,31 @@ describe("DesktopUpdater", () => {
     });
   });
 
+  it("translates raw system errors into a sentence", () => {
+    const source = new FakeUpdater();
+    const updater = new DesktopUpdater({
+      source,
+      currentVersion: "0.1.0",
+      enabled: true,
+      onState: () => undefined,
+    });
+
+    source.emit(
+      "error",
+      new Error("ENOENT: no such file or directory, open 'app-update.yml'"),
+    );
+    expect(updater.getState()).toMatchObject({
+      phase: "error",
+      message: "This build has no update channel",
+    });
+
+    source.emit("error", new Error("net::ERR_INTERNET_DISCONNECTED"));
+    expect(updater.getState()).toMatchObject({
+      phase: "error",
+      message: "Couldn't reach the update server",
+    });
+  });
+
   it("keeps a rejected check inside the update UI", async () => {
     const source = new FakeUpdater();
     source.checkForUpdates.mockRejectedValueOnce(new Error("Release offline"));

@@ -275,13 +275,47 @@ export const convexStepSchema = z
   })
   .strict();
 
-export const provisionStepSchema = z.union([shellStepSchema, convexStepSchema]);
+/**
+ * A typed step that points a plot at a local WorkOS emulator instead of a real
+ * WorkOS environment. Silvic owns the wiring — the `WORKOS_*` overrides land in
+ * the plot's private `.env.local` — while the emulator itself runs as an
+ * ordinary recipe command, supervised and visible like any other.
+ */
+export const workosStepSchema = z
+  .object({
+    workos: z
+      .object({
+        /** Emulator port; derived from the plot's own port when left out. */
+        port: z.number().int().min(1024).max(65_535).optional(),
+        /** Appended to the plot address to form the app's redirect URI. */
+        callbackPath: z
+          .string()
+          .min(1)
+          .max(400)
+          .startsWith("/")
+          .default("/callback"),
+      })
+      .strict(),
+    label: z.string().min(1).max(120).optional(),
+  })
+  .strict();
+
+export const provisionStepSchema = z.union([
+  shellStepSchema,
+  convexStepSchema,
+  workosStepSchema,
+]);
 export type ShellStep = z.infer<typeof shellStepSchema>;
 export type ConvexStep = z.infer<typeof convexStepSchema>;
+export type WorkosStep = z.infer<typeof workosStepSchema>;
 export type ProvisionStep = z.infer<typeof provisionStepSchema>;
 
 export function isConvexStep(step: ProvisionStep): step is ConvexStep {
   return "convex" in step;
+}
+
+export function isWorkosStep(step: ProvisionStep): step is WorkosStep {
+  return "workos" in step;
 }
 
 export const packageManagerSchema = z.enum(["bun", "pnpm", "npm", "yarn"]);
@@ -293,6 +327,8 @@ export interface RepositoryFindings {
   convex: boolean;
   workConfig: boolean;
   envExample?: string;
+  /** A seed file for the WorkOS emulator, when the repository carries one. */
+  workosSeed?: string;
   /** The repository's own scripts, so suggestions can be its own words. */
   scripts?: Readonly<Record<string, string>>;
   /** Provider SDKs or scripts found without reading credential values. */
@@ -311,6 +347,12 @@ export interface RecipeSuggestion {
   detail: string;
   step?: ProvisionStep;
   command?: { id: string; command: PlotCommand };
+  /**
+   * Offered in the editor but never assumed into the inferred recipe: taking
+   * it changes how the plot behaves rather than describing what the
+   * repository already does.
+   */
+  optIn?: boolean;
 }
 
 /** What Silvic read in a repository, and what it makes of it. */

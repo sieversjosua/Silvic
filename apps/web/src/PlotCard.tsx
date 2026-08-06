@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import type { RefObject } from "react";
 import { createPortal } from "react-dom";
 import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
@@ -41,6 +41,7 @@ import {
   type CardSignal,
 } from "./state";
 import { failureMessage } from "./errors";
+import { useKeyLayer } from "./shortcuts";
 
 export interface WorkspaceNodeData extends Record<string, unknown> {
   workspace: WorkspaceSnapshot;
@@ -418,13 +419,7 @@ function PlotMenu({
   onEditRecipe(): void;
   onTeardown(workspace: WorkspaceSnapshot): void;
 }) {
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  useKeyLayer({ dismiss: onClose });
 
   const rect = anchor?.getBoundingClientRect();
   if (!rect) return null;

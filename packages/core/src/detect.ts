@@ -10,6 +10,8 @@ import {
   type Recipe,
   type RepositoryFindings,
 } from "@silvic/contracts";
+
+import { workosEmulateCommand } from "./workos-provisioner";
 const lockfiles: ReadonlyArray<readonly [string, PackageManager]> = [
   ["bun.lock", "bun"],
   ["bun.lockb", "bun"],
@@ -66,6 +68,12 @@ export async function inspectRepository(
       break;
     }
   }
+  for (const candidate of ["workos.emulate.yaml", "workos.emulate.yml"]) {
+    if (await exists(join(root, candidate))) {
+      findings.workosSeed = candidate;
+      break;
+    }
+  }
   return findings;
 }
 
@@ -74,11 +82,15 @@ export async function inspectRepository(
  * content the user can edit or delete before saving.
  */
 export function suggestRecipe(findings: RepositoryFindings): Recipe {
+  // An opt-in suggestion is an offer, not an inference: it redirects the plot
+  // away from real services, so only an explicit recipe may carry it.
   const provision = suggestedSteps(findings)
+    .filter((suggestion) => !suggestion.optIn)
     .map((suggestion) => suggestion.step)
     .filter((step) => step !== undefined);
   const commands = Object.fromEntries(
     suggestedCommands(findings)
+      .filter((suggestion) => !suggestion.optIn)
       .filter((suggestion) => suggestion.command !== undefined)
       .map((suggestion) => [
         suggestion.command!.id,
@@ -142,6 +154,15 @@ export function suggestedSteps(
       step: { convex: { name: "dev/{plot}" } },
     });
   }
+  if (findings.providers?.includes("workos")) {
+    suggestions.push({
+      id: "workos",
+      label: "WorkOS emulator",
+      detail: "Point WORKOS_* at a plot-local emulator; no real WorkOS account",
+      step: { workos: { callbackPath: "/callback" } },
+      optIn: true,
+    });
+  }
   for (const [name, script] of scriptsMatching(findings, [
     "codegen",
     "generate",
@@ -171,7 +192,16 @@ function suggestedResources(
       return [
         id,
         id in commands
-          ? { ...definition, command: id }
+          ? id === "workos"
+            ? // A workos command is always the emulator, and an emulator per
+              // plot is the one honest reading of `isolated` for WorkOS.
+              {
+                ...definition,
+                isolation: "isolated" as const,
+                command: id,
+                detail: "A local emulator; no real WorkOS environment",
+              }
+            : { ...definition, command: id }
           : {
               ...definition,
               isolation: "manual" as const,
@@ -215,6 +245,16 @@ function providerCommand(
       matches(name, run, ["wrangler dev", "cloudflare:dev"]),
     );
     return entry ? ["cloudflare", entry[0]] : undefined;
+  }
+  if (provider === "workos") {
+    const entry = scripts.find(([name, run]) =>
+      matches(name, run, [
+        "workos-emulate",
+        "@workos/emulate",
+        "workos:emulate",
+      ]),
+    );
+    return entry ? ["workos", entry[0]] : undefined;
   }
   return undefined;
 }
@@ -266,6 +306,22 @@ export function suggestedCommands(
         id,
         command: { run: runScript(manager, script), autoStart: true },
       },
+    });
+  }
+  // A repository with no emulator script of its own is still offered one, in
+  // Silvic's words — but only as an offer: taking it points the plot at a
+  // local emulator instead of the real WorkOS environment.
+  if (
+    findings.providers?.includes("workos") &&
+    !suggestions.some((suggestion) => suggestion.command?.id === "workos")
+  ) {
+    const run = workosEmulateCommand(findings.workosSeed);
+    suggestions.push({
+      id: "provider:workos",
+      label: "workos",
+      detail: run,
+      command: { id: "workos", command: { run, autoStart: true } },
+      optIn: true,
     });
   }
   for (const [name, script] of scriptsMatching(findings, [

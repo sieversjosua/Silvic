@@ -1,5 +1,6 @@
 import {
   isConvexStep,
+  isWorkosStep,
   type PackageManager,
   type ProvisionRemedy,
   type ProvisionRemedyId,
@@ -16,15 +17,18 @@ import {
   provisionEnvironment,
   type ProvisionContext,
 } from "./provision-environment";
+import { WorkosProvisioner } from "./workos-provisioner";
 
 /** How much of a command's output is worth keeping to show a person. */
 export const provisionOutputLimit = 20_000;
 
 export class Provisioner {
   private readonly convexProvisioner: ConvexProvisioner;
+  private readonly workosProvisioner: WorkosProvisioner;
 
   constructor(private readonly runner: CommandRunner) {
     this.convexProvisioner = new ConvexProvisioner(runner);
+    this.workosProvisioner = new WorkosProvisioner(runner);
   }
 
   /**
@@ -49,36 +53,35 @@ export class Provisioner {
       const startedAt = Date.now();
       const command = isConvexStep(step)
         ? "Silvic isolated Convex environment"
-        : step.run;
+        : isWorkosStep(step)
+          ? "Silvic emulated WorkOS environment"
+          : step.run;
       options.onStepStart?.({ index, command });
+      const stepOptions = {
+        ...(options.signal ? { signal: options.signal } : {}),
+        ...(options.onStepOutput
+          ? {
+              onOutput: (chunk: string) =>
+                options.onStepOutput?.({ index, chunk }),
+            }
+          : {}),
+      };
       const result: { exitCode: number; output: string } = isConvexStep(step)
-        ? await this.convexProvisioner.run(step, context, {
-            ...(options.signal ? { signal: options.signal } : {}),
-            ...(options.onStepOutput
-              ? {
-                  onOutput: (chunk: string) =>
-                    options.onStepOutput?.({ index, chunk }),
-                }
-              : {}),
-          })
-        : await this.runner
-            .run({
-              executable: "sh",
-              arguments: ["-c", command],
-              cwd: context.root,
-              environment: provisionEnvironment(context),
-              ...(options.signal ? { signal: options.signal } : {}),
-              ...(options.onStepOutput
-                ? {
-                    onOutput: (chunk: string) =>
-                      options.onStepOutput?.({ index, chunk }),
-                  }
-                : {}),
-            })
-            .then((shell) => ({
-              exitCode: shell.exitCode,
-              output: `${shell.stdout}${shell.stderr}`.trim(),
-            }));
+        ? await this.convexProvisioner.run(step, context, stepOptions)
+        : isWorkosStep(step)
+          ? await this.workosProvisioner.run(step, context, stepOptions)
+          : await this.runner
+              .run({
+                executable: "sh",
+                arguments: ["-c", command],
+                cwd: context.root,
+                environment: provisionEnvironment(context),
+                ...stepOptions,
+              })
+              .then((shell) => ({
+                exitCode: shell.exitCode,
+                output: `${shell.stdout}${shell.stderr}`.trim(),
+              }));
       const output = result.output.slice(0, provisionOutputLimit);
       const diagnosis =
         result.exitCode === 0 ? undefined : provisionDiagnosis(step, output);
@@ -122,6 +125,15 @@ export function provisionDiagnosis(
   if (conflict) {
     return {
       advice: `${conflict} holds Convex to a version this plot cannot use, so the package manager refused to install anything. Update that package to a release built for a newer Convex, or drop the Convex step from the recipe until you can.`,
+    };
+  }
+  if (isWorkosStep(step)) {
+    if (!/ENOTFOUND|ETIMEDOUT|EAI_AGAIN|ECONNREFUSED|network/i.test(output)) {
+      return undefined;
+    }
+    return {
+      advice:
+        "Fetching @workos/emulate needs the network once; npx caches it afterwards. Connect and provision again.",
     };
   }
   if (!isConvexStep(step)) return undefined;
@@ -191,5 +203,7 @@ function addPackage(packageManager: PackageManager | undefined): string {
  */
 export function provisionStepLabel(step: ProvisionStep, index: number): string {
   if (step.label) return step.label;
-  return isConvexStep(step) ? "Convex deployment" : `Step ${index + 1}`;
+  if (isConvexStep(step)) return "Convex deployment";
+  if (isWorkosStep(step)) return "WorkOS emulator";
+  return `Step ${index + 1}`;
 }

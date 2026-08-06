@@ -25,16 +25,6 @@ export function branchForPlotName(name: string): string {
     .replace(/[-/]+$/g, "");
 }
 
-export function canOpenCreatedPlot(
-  result: Pick<PlotCreationResult, "provision" | "runtime" | "readiness">,
-): boolean {
-  return (
-    result.provision.every((step) => step.exitCode === 0) &&
-    result.runtime.status !== "failed" &&
-    result.readiness.status !== "failed"
-  );
-}
-
 export function applyProvisionRun<
   T extends Pick<PlotCreationResult, "provision" | "runtime" | "readiness">,
 >(result: T, run: PlotProvisionRunResult): T {

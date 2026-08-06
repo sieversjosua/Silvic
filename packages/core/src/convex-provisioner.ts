@@ -1,10 +1,19 @@
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { ConvexStep } from "@silvic/contracts";
 
 import type { CommandRunner } from "./command-runner";
+import {
+  environmentKey,
+  environmentValue,
+  optionalFile,
+  sanitizeProvisionOutput,
+  setEnvironmentValues,
+  withoutEnvironmentKeys,
+  writePrivateEnvironment,
+} from "./environment-files";
 import {
   provisionEnvironment,
   type ProvisionContext,
@@ -295,53 +304,6 @@ function mergeEnvironmentContents(primary: string, fallback: string): string {
   return [primary.trimEnd(), ...additions].join("\n").replace(/\n*$/, "\n");
 }
 
-async function optionalFile(path: string): Promise<string> {
-  try {
-    return await readFile(path, "utf8");
-  } catch {
-    return "";
-  }
-}
-
-function environmentKey(line: string): string | undefined {
-  return line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/)?.[1];
-}
-
-function environmentValue(contents: string, key: string): string | undefined {
-  const line = contents
-    .split(/\r?\n/)
-    .find((candidate) => environmentKey(candidate) === key);
-  if (!line) return undefined;
-  const value = line.slice(line.indexOf("=") + 1).trim();
-  return value.replace(/^(['"])(.*)\1$/, "$2").split(/\s+#\s+/, 1)[0];
-}
-
-function withoutEnvironmentKeys(
-  contents: string,
-  keys: ReadonlySet<string>,
-): string {
-  return contents
-    .split(/\r?\n/)
-    .filter((line) => {
-      const key = environmentKey(line);
-      return !key || !keys.has(key);
-    })
-    .join("\n")
-    .replace(/\n*$/, "\n");
-}
-
-function setEnvironmentValues(
-  contents: string,
-  values: Readonly<Record<string, string>>,
-): string {
-  const keys = new Set(Object.keys(values));
-  const base = withoutEnvironmentKeys(contents, keys).trimEnd();
-  const additions = Object.entries(values).map(
-    ([key, value]) => `${key}=${value}`,
-  );
-  return [...(base ? [base] : []), ...additions].join("\n") + "\n";
-}
-
 function withApplicationUrls(
   contents: string,
   url: string | undefined,
@@ -354,14 +316,6 @@ function withApplicationUrls(
     : contents;
 }
 
-async function writePrivateEnvironment(
-  path: string,
-  contents: string,
-): Promise<void> {
-  await writeFile(path, contents, { mode: 0o600 });
-  await chmod(path, 0o600);
-}
-
 function convexSiteUrl(convexUrl: string): string {
   if (convexUrl.includes(".convex.cloud")) {
     return convexUrl.replace(".convex.cloud", ".convex.site");
@@ -370,32 +324,6 @@ function convexSiteUrl(convexUrl: string): string {
   const port = Number.parseInt(url.port, 10);
   if (!Number.isNaN(port)) url.port = String(port + 1);
   return url.toString().replace(/\/$/, "");
-}
-
-function sanitizeProvisionOutput(output: string): string {
-  const withoutPrivateKeys = output.replace(
-    /-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?-----END [^-]*PRIVATE KEY-----/g,
-    "[REDACTED PRIVATE KEY]",
-  );
-  return withoutPrivateKeys
-    .split(/\r?\n/)
-    .map((line) =>
-      /(?:api[_-]?key|secret|token|password|deploy[_-]?key|private[_-]?key|authorization)/i.test(
-        line,
-      )
-        ? "[REDACTED SECRET OUTPUT]"
-        : line,
-    )
-    .join("\n")
-    .replace(
-      /\b(?:dev|prod|preview):[A-Za-z0-9-]+\|[A-Za-z0-9._~+/-]+=*/g,
-      "[REDACTED CONVEX DEPLOY KEY]",
-    )
-    .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/gi, "Bearer [REDACTED]")
-    .replace(
-      /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g,
-      "[REDACTED JWT]",
-    );
 }
 
 function convexUpdateNotices(stderr: string): readonly string[] {

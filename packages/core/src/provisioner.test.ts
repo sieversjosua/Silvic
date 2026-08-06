@@ -70,6 +70,16 @@ describe("provisionEnvironment", () => {
 
     expect(environment["WORK_URL"]).toBeUndefined();
     expect(environment["WORK_BRANCH"]).toBeUndefined();
+    expect(environment["SILVIC_WORKOS_PORT"]).toBeUndefined();
+  });
+
+  it("publishes where a WorkOS emulator would listen once the port is known", () => {
+    const environment = provisionEnvironment({
+      ...context("/plots/onboarding"),
+      port: 3456,
+    });
+
+    expect(environment["SILVIC_WORKOS_PORT"]).toBe("23456");
   });
 });
 

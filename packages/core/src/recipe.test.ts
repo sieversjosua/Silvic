@@ -115,6 +115,31 @@ describe("readRecipe", () => {
     await expect(access(join(root, "work-config-ran"))).rejects.toThrow();
   });
 
+  it("keeps a WorkOS emulator step and applies its defaults", async () => {
+    const root = await repository({
+      commands: {
+        workos: { run: "npx --yes @workos/emulate@0.5.0", autoStart: true },
+      },
+      resources: {
+        auth: {
+          provider: "workos",
+          kind: "auth",
+          isolation: "isolated",
+          command: "workos",
+        },
+      },
+      provision: [{ workos: {} }],
+    });
+
+    const recipe = await readRecipe(root);
+
+    expect(recipe.configured).toBe(true);
+    expect(recipe.provision).toEqual([
+      { workos: { callbackPath: "/callback" } },
+    ]);
+    expect(recipe.resources["auth"]?.isolation).toBe("isolated");
+  });
+
   it("falls back to defaults rather than failing on a malformed recipe", async () => {
     const root = await repository({ commands: { Web: { run: 42 } } });
 

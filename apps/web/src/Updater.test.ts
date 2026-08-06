@@ -67,6 +67,34 @@ describe("UpdateButton", () => {
     expect(markup).toContain(label);
   });
 
+  it("confirms a completed check instead of silently resetting", () => {
+    const markup = renderToStaticMarkup(
+      createElement(UpdateButton, {
+        state: { phase: "current", currentVersion: "0.1.0" },
+        onAction: vi.fn(),
+      }),
+    );
+
+    expect(markup).toContain("Up to date");
+    expect(markup).toContain("Check for updates");
+  });
+
+  it("shows the failure reason in place, not only on hover", () => {
+    const markup = renderToStaticMarkup(
+      createElement(UpdateButton, {
+        state: {
+          phase: "error",
+          currentVersion: "0.1.0",
+          message: "Release offline",
+        },
+        onAction: vi.fn(),
+      }),
+    );
+
+    expect(markup).toContain("Release offline");
+    expect(markup).toContain('role="status"');
+  });
+
   it("identifies a development build without offering a broken action", () => {
     const markup = renderToStaticMarkup(
       createElement(UpdateButton, {

@@ -4,9 +4,14 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { isConvexStep } from "@silvic/contracts";
+import { isConvexStep, isWorkosStep } from "@silvic/contracts";
 
-import { inspectRepository, suggestRecipe } from "./detect";
+import {
+  inspectRepository,
+  suggestRecipe,
+  suggestedCommands,
+  suggestedSteps,
+} from "./detect";
 
 const temporaryDirectories: string[] = [];
 
@@ -132,6 +137,63 @@ describe("inspectRepository", () => {
     expect(findings.packageManager).toBeUndefined();
     expect(findings.devScript).toBeUndefined();
     expect(findings.convex).toBe(false);
+  });
+
+  it("offers the WorkOS emulator without ever assuming it", async () => {
+    const root = await repository({
+      "package.json": JSON.stringify({
+        scripts: { dev: "next dev" },
+        dependencies: { "@workos-inc/authkit-nextjs": "latest" },
+      }),
+      "workos.emulate.yaml": "users: []",
+    });
+
+    const findings = await inspectRepository(root);
+    expect(findings.workosSeed).toBe("workos.emulate.yaml");
+
+    const step = suggestedSteps(findings).find(
+      (suggestion) => suggestion.id === "workos",
+    );
+    expect(step?.optIn).toBe(true);
+    expect(step?.step).toEqual({ workos: { callbackPath: "/callback" } });
+
+    const command = suggestedCommands(findings).find(
+      (suggestion) => suggestion.command?.id === "workos",
+    );
+    expect(command?.optIn).toBe(true);
+    expect(command?.command?.command.run).toContain("@workos/emulate@");
+    expect(command?.command?.command.run).toContain(
+      '--port "$SILVIC_WORKOS_PORT"',
+    );
+    expect(command?.command?.command.run).toContain(
+      '--seed "workos.emulate.yaml"',
+    );
+
+    // The inference never redirects a plot away from real WorkOS by itself.
+    const recipe = suggestRecipe(findings);
+    expect(recipe.provision?.some(isWorkosStep) ?? false).toBe(false);
+    expect(recipe.commands?.["workos"]).toBeUndefined();
+    expect(recipe.resources?.["workos"]).toMatchObject({
+      isolation: "manual",
+    });
+  });
+
+  it("treats a repository's own emulator script as its choice", async () => {
+    const root = await repository({
+      "package.json": JSON.stringify({
+        scripts: { "workos:emulate": "workos-emulate --port 4100" },
+        dependencies: { "@workos-inc/node": "latest" },
+      }),
+    });
+
+    const recipe = suggestRecipe(await inspectRepository(root));
+
+    expect(recipe.commands?.["workos"]?.run).toBe("npm run workos:emulate");
+    expect(recipe.resources?.["workos"]).toMatchObject({
+      isolation: "isolated",
+      command: "workos",
+      detail: "A local emulator; no real WorkOS environment",
+    });
   });
 });
 

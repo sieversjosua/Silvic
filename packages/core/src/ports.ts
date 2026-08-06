@@ -31,3 +31,14 @@ export function plotPort(
 export function plotUrl(port: number): string {
   return `http://localhost:${port}`;
 }
+
+/**
+ * Where a plot's local WorkOS emulator listens: a fixed offset past the plot
+ * range, so the two can never collide and the result stays below the ephemeral
+ * range. Derived rather than allocated, for the same reason as `plotPort` —
+ * the number ends up in the plot's environment file and has to survive
+ * restarts and rediscovery.
+ */
+export function workosEmulatePort(plotPort: number): number {
+  return plotPort + 20_000;
+}

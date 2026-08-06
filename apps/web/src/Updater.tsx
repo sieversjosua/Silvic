@@ -65,12 +65,13 @@ export function UpdateButton({
     return (
       <div className="app-update" data-tone={state.phase}>
         <span className="micro">Silvic {state.currentVersion}</span>
-        <span>Development build</span>
+        <span className="app-update-detail">Development build</span>
       </div>
     );
   }
 
   const label = updateLabel(state);
+  const detail = updateDetail(state);
   const pending = ["checking", "downloading"].includes(state.phase);
   const icon =
     state.phase === "available" ? (
@@ -78,15 +79,17 @@ export function UpdateButton({
     ) : (
       <RefreshCw size={12} className={pending ? "spinning" : undefined} />
     );
+  // aria-disabled instead of disabled so focus survives the pending phases;
+  // performUpdateAction already ignores clicks while checking or downloading.
   return (
-    <div className="app-update" data-tone={state.phase}>
+    <div className="app-update" data-tone={state.phase} role="status">
       <span className="micro">Silvic {state.currentVersion}</span>
-      <button
-        type="button"
-        disabled={pending}
-        title={state.phase === "error" ? state.message : undefined}
-        onClick={onAction}
-      >
+      {detail && (
+        <span className="app-update-detail" title={detail}>
+          {detail}
+        </span>
+      )}
+      <button type="button" aria-disabled={pending} onClick={onAction}>
         {icon}
         {label}
       </button>
@@ -97,11 +100,10 @@ export function UpdateButton({
 function updateLabel(state: AppUpdateState): string {
   switch (state.phase) {
     case "idle":
+    case "current":
       return "Check for updates";
     case "checking":
       return "Checking…";
-    case "current":
-      return "Check again";
     case "available":
       return `Update to ${state.availableVersion}`;
     case "downloading":
@@ -112,5 +114,16 @@ function updateLabel(state: AppUpdateState): string {
       return "Retry update";
     case "unsupported":
       return "Development build";
+  }
+}
+
+function updateDetail(state: AppUpdateState): string | undefined {
+  switch (state.phase) {
+    case "current":
+      return "Up to date";
+    case "error":
+      return state.message;
+    default:
+      return undefined;
   }
 }

@@ -6,7 +6,14 @@ import type {
   WorkspaceSnapshot,
 } from "@silvic/contracts";
 
-import { NODE_HEIGHT, NODE_WIDTH, anyNodeInView, layout } from "./grove-layout";
+import {
+  NODE_HEIGHT,
+  NODE_WIDTH,
+  anyNodeInView,
+  layout,
+  viewShift,
+  type Point,
+} from "./grove-layout";
 
 function workspace(
   name: string,
@@ -228,5 +235,102 @@ describe("anyNodeInView", () => {
     const panned = { x: -1000, y: -1000, zoom: 0.5, width: 1000, height: 800 };
     expect(anyNodeInView([card(2000, 2000)], panned)).toBe(true);
     expect(anyNodeInView([card(0, 0)], panned)).toBe(false);
+  });
+});
+
+describe("viewShift", () => {
+  const view = { x: 0, y: 0, zoom: 1, width: 1000, height: 800 };
+  const cards = (entries: Record<string, [number, number]>) =>
+    new Map<string, Point>(
+      Object.entries(entries).map(([key, [x, y]]) => [key, { x, y }]),
+    );
+
+  it("holds still on the first layout, where there is nothing to follow", () => {
+    expect(viewShift(cards({}), cards({ a: [0, 0] }), view)).toEqual({
+      kind: "hold",
+    });
+  });
+
+  it("holds still when the layout did not move", () => {
+    const same = cards({ a: [0, 0], b: [376, 0] });
+    expect(viewShift(same, cards({ a: [0, 0], b: [376, 0] }), view)).toEqual({
+      kind: "hold",
+    });
+  });
+
+  it("follows the card the reader was watching", () => {
+    const before = cards({ a: [100, 100] });
+    const after = cards({ a: [-652, -930] });
+    expect(viewShift(before, after, view)).toEqual({
+      kind: "follow",
+      dx: -752,
+      dy: -1030,
+    });
+  });
+
+  it("follows the card nearest the centre of the view", () => {
+    // `far` sits at the top-left corner, `near` under the middle of the canvas.
+    const before = cards({ far: [0, 0], near: [366, 308] });
+    const after = cards({ far: [500, 500], near: [366, 514] });
+    expect(viewShift(before, after, view)).toEqual({
+      kind: "follow",
+      dx: 0,
+      dy: 206,
+    });
+  });
+
+  it("fits the grove when everything in sight was torn down", () => {
+    const before = cards({ a: [100, 100] });
+    const after = cards({ b: [4000, 4000] });
+    expect(viewShift(before, after, view)).toEqual({ kind: "fit" });
+  });
+
+  it("ignores cards that were already out of sight", () => {
+    // The reader parked on empty paper: the rescue offers the way back, and the
+    // camera must not wander off on its own while they are away.
+    const before = cards({ a: [5000, 5000] });
+    const after = cards({ a: [9000, 9000] });
+    expect(viewShift(before, after, view)).toEqual({ kind: "hold" });
+  });
+
+  it("keeps a plot still through the teardown that rebalances the grove", () => {
+    const kids = Array.from({ length: 11 }, (_, index) => `kid-${index}`);
+    const before = layout(
+      project([trunk, ...kids.map((name) => changed(name))]),
+      true,
+    );
+    const after = layout(
+      project([
+        trunk,
+        ...kids.filter((name) => name !== "kid-5").map((name) => changed(name)),
+      ]),
+      true,
+    );
+    const positions = (result: ReturnType<typeof layout>) =>
+      new Map<string, Point>(
+        result.placements.map((placement) => [
+          placement.key,
+          placement.position,
+        ]),
+      );
+    // Parked on kid-4, which the rebalance flings from the bottom of the right
+    // fan to the top of the left one.
+    const watched = positions(before).get("kid-4");
+    if (!watched) throw new Error("kid-4 should be placed");
+    const parked = {
+      x: -watched.x + 100,
+      y: -watched.y + 100,
+      zoom: 1,
+      width: 1000,
+      height: 800,
+    };
+    const shift = viewShift(positions(before), positions(after), parked);
+    if (shift.kind !== "follow") throw new Error("the camera should follow");
+
+    const moved = positions(after).get("kid-4");
+    if (!moved) throw new Error("kid-4 should survive");
+    // Following the shift leaves kid-4 on the same pixel it was watched from.
+    expect(moved.x + (parked.x - shift.dx)).toBe(watched.x + parked.x);
+    expect(moved.y + (parked.y - shift.dy)).toBe(watched.y + parked.y);
   });
 });

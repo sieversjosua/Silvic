@@ -112,13 +112,24 @@ tasks; named steps like `convex` are implemented by Silvic because they own an
 isolation contract and can report structured results — a deployment name Silvic
 can then display and link.
 
+The `workos` step is the second typed step, and the first whose isolation
+contract is entirely local: it points the app's `WORKOS_*` variables at a
+plot-local [`@workos/emulate`](https://github.com/workos/emulate) instance on
+a port derived from the plot's own, keeps the redirect URI on the plot's
+address, and pairs with a supervised `workos` command running the pinned
+emulator. Nothing in it reaches a real WorkOS environment — which is also why
+it is only ever offered: detection suggests the step and the command when a
+WorkOS SDK is present, but never writes them into an inferred recipe.
+Redirecting an app away from real services is an explicit choice, recorded in
+`silvic.json`.
+
 `resources` describe operational truth rather than pretending every provider
 has the same API. `isolated` means one resource per Plot, `namespaced` means a
 shared provider account with Plot-specific names or events, `shared` means the
 Plot uses an existing service, and `manual` means Silvic can display and link it
-but cannot configure it. Convex provisioning remains typed and Silvic-owned;
-the other provider entries are currently visibility, links and process
-supervision where a command is attached.
+but cannot configure it. Convex and emulated WorkOS provisioning remain typed
+and Silvic-owned; the other provider entries are currently visibility, links
+and process supervision where a command is attached.
 
 ## Stable named URLs
 
@@ -166,6 +177,10 @@ provider allows:
 
 Step 3 is not a failure to automate; it is the honest state of most providers.
 Silvic should never imply a redirect is registered when it is not.
+
+The emulated WorkOS step removes the question entirely: a plot-local emulator
+answers whatever redirect the plot asks for, so there is nothing to register
+anywhere.
 
 ## Lifecycle
 

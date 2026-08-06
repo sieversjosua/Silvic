@@ -11,6 +11,7 @@ import {
 
 import {
   isConvexStep,
+  isWorkosStep,
   plotResourceProviderCatalog,
   type PlotCommand,
   type PlotResourceDefinition,
@@ -26,8 +27,9 @@ import {
   type ShellStep,
 } from "@silvic/contracts";
 
-import { ConvexMark } from "./providers";
+import { ConvexMark, WorkOsMark } from "./providers";
 import { failureMessage } from "./errors";
+import { useKeyLayer } from "./shortcuts";
 
 type CommandEntry = { id: string } & PlotCommand;
 type ResourceEntry = { id: string } & PlotResourceDefinition;
@@ -185,6 +187,13 @@ export function RecipeDialog({
     resources.length === 0 &&
     provision.length === 0;
 
+  // An open add menu is the closest thing on screen, so Escape closes that
+  // first and only then abandons the edits behind it.
+  useKeyLayer({
+    dismiss: adding ? () => setAdding(undefined) : onClose,
+    confirm: !document || saving ? undefined : () => void save(),
+  });
+
   return (
     <div className="scrim" onMouseDown={onClose}>
       <section
@@ -197,9 +206,14 @@ export function RecipeDialog({
             <h2>{projectName}</h2>
           </div>
           {document && (
-            <p className="micro recipe-path">
-              {document.exists ? "silvic.json" : "not yet created"}
-            </p>
+            <div className="recipe-file">
+              <p className="micro">
+                {document.exists ? "silvic.json" : "creates silvic.json"}
+              </p>
+              <p className="mono recipe-path" title={document.path}>
+                {document.path}
+              </p>
+            </div>
           )}
         </header>
 
@@ -215,8 +229,10 @@ export function RecipeDialog({
           <div className="recipe-panel">
             <section className="recipe-part">
               <div className="recipe-part-title">
-                <h3>Where a plot lands</h3>
-                <p>A directory beside the repository, one folder per plot.</p>
+                <div>
+                  <h3>Where a plot lands</h3>
+                  <p>A directory beside the repository, one folder per plot.</p>
+                </div>
               </div>
               <label className="dialog-field">
                 <input
@@ -231,8 +247,10 @@ export function RecipeDialog({
 
             <section className="recipe-part">
               <div className="recipe-part-title">
-                <h3>Once, when it is made</h3>
-                <p>Ordered, and finished before the plot is handed over.</p>
+                <div>
+                  <h3>Once, when it is made</h3>
+                  <p>Ordered, and finished before the plot is handed over.</p>
+                </div>
                 <div className="recipe-actions">
                   <AddMenu
                     open={adding === "provision"}
@@ -270,6 +288,17 @@ export function RecipeDialog({
                             { convex: { name: "dev/{plot}" } },
                           ]),
                       },
+                      {
+                        id: "blank-workos",
+                        label: "WorkOS emulator",
+                        detail: "A local WorkOS stand-in; no real account",
+                        icon: <WorkOsMark size={12} />,
+                        add: () =>
+                          setProvision([
+                            ...provision,
+                            { workos: { callbackPath: "/callback" } },
+                          ]),
+                      },
                     ]}
                   />
                 </div>
@@ -284,12 +313,15 @@ export function RecipeDialog({
                   <span className="recipe-step-kind" aria-hidden="true">
                     {isConvexStep(step) ? (
                       <ConvexMark size={13} />
+                    ) : isWorkosStep(step) ? (
+                      <WorkOsMark size={13} />
                     ) : (
                       <Terminal size={12} />
                     )}
                   </span>
                   {isConvexStep(step) ? (
-                    <div className="recipe-grid">
+                    <div className="recipe-fields">
+                      <p className="recipe-step-name">Convex deployment</p>
                       <label>
                         <span className="micro">Team</span>
                         <input
@@ -355,48 +387,94 @@ export function RecipeDialog({
                           }
                         />
                       </label>
-                      <p className="micro">
+                      <p className="recipe-note">
                         Silvic copies the local environment, creates a scoped
                         deploy key, syncs server variables, and pushes Convex
                         once with its own compatible CLI. The repository
                         dependency is left unchanged.
                       </p>
                     </div>
-                  ) : (
-                    <>
-                      <div className="recipe-row">
+                  ) : isWorkosStep(step) ? (
+                    <div className="recipe-fields">
+                      <p className="recipe-step-name">WorkOS emulator</p>
+                      <label>
+                        <span className="micro">Emulator port</span>
                         <input
-                          className="recipe-id"
-                          value={step.label ?? ""}
-                          placeholder={`Step ${index + 1}`}
+                          className="mono"
+                          value={step.workos.port ?? ""}
+                          placeholder="from the plot's port"
+                          inputMode="numeric"
+                          onChange={(event) => {
+                            const port = Number.parseInt(
+                              event.target.value,
+                              10,
+                            );
+                            patch(index, {
+                              ...step,
+                              workos: {
+                                ...step.workos,
+                                port: Number.isNaN(port) ? undefined : port,
+                              },
+                            });
+                          }}
+                        />
+                      </label>
+                      <label>
+                        <span className="micro">Callback path</span>
+                        <input
+                          className="mono"
+                          value={step.workos.callbackPath}
                           onChange={(event) =>
                             patch(index, {
                               ...step,
-                              label: event.target.value || undefined,
+                              workos: {
+                                ...step.workos,
+                                callbackPath: event.target.value,
+                              },
                             })
                           }
                         />
-                        <input
-                          className="mono"
-                          value={step.run}
-                          placeholder="bun install"
-                          onChange={(event) =>
-                            patch(index, { ...step, run: event.target.value })
-                          }
-                        />
-                        <button
-                          type="button"
-                          aria-label="Test this step"
-                          title="Run once in the primary checkout"
-                          disabled={
-                            !step.run.trim() || tests[index] === "running"
-                          }
-                          onClick={() => void runTest(index, step)}
-                        >
-                          <Play size={12} />
-                        </button>
-                      </div>
-                    </>
+                      </label>
+                      <p className="recipe-note">
+                        Points the app's WORKOS_* variables at a plot-local
+                        emulator and keeps the redirect URI on the plot's own
+                        address. Nothing reaches a real WorkOS environment. Pair
+                        it with a workos command that runs the emulator.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="recipe-row">
+                      <input
+                        className="recipe-id"
+                        value={step.label ?? ""}
+                        placeholder={`Step ${index + 1}`}
+                        onChange={(event) =>
+                          patch(index, {
+                            ...step,
+                            label: event.target.value || undefined,
+                          })
+                        }
+                      />
+                      <input
+                        className="mono"
+                        value={step.run}
+                        placeholder="bun install"
+                        onChange={(event) =>
+                          patch(index, { ...step, run: event.target.value })
+                        }
+                      />
+                      <button
+                        type="button"
+                        aria-label="Test this step"
+                        title="Run once in the primary checkout"
+                        disabled={
+                          !step.run.trim() || tests[index] === "running"
+                        }
+                        onClick={() => void runTest(index, step)}
+                      >
+                        <Play size={12} />
+                      </button>
+                    </div>
                   )}
                   <div className="recipe-step-tools">
                     <button
@@ -428,22 +506,27 @@ export function RecipeDialog({
                   <StepTest result={tests[index]} />
                 </div>
               ))}
-              <p className="recipe-hint">
-                Custom commands receive the plot's <code>SILVIC_*</code>,
-                <code>HOST</code>, and <code>PORT</code> context. Typed provider
-                steps stay owned by Silvic.
-              </p>
+              {provision.length > 0 && (
+                <p className="recipe-hint">
+                  Custom commands receive the plot's <code>SILVIC_*</code>,{" "}
+                  <code>HOST</code>, and <code>PORT</code> context. Typed
+                  provider steps stay owned by Silvic.
+                </p>
+              )}
             </section>
 
             <section className="recipe-part">
               <div className="recipe-part-title">
-                <h3>While you work</h3>
-                <p>
-                  Started and stopped from the plot, for as long as you need
-                  them.
-                </p>
+                <div>
+                  <h3>While you work</h3>
+                  <p>
+                    Started and stopped from the plot, for as long as you need
+                    them.
+                  </p>
+                </div>
                 <div className="recipe-actions">
                   <AddMenu
+                    label="Add command"
                     open={adding === "commands"}
                     onOpen={() =>
                       setAdding(adding === "commands" ? undefined : "commands")
@@ -486,85 +569,98 @@ export function RecipeDialog({
                 <p className="section-empty">Nothing runs in a plot yet.</p>
               )}
               {commands.map((command, index) => (
-                <div className="recipe-row command" key={index}>
-                  <input
-                    className="recipe-id mono"
-                    value={command.id}
-                    placeholder="web"
-                    onChange={(event) =>
-                      setCommands(
-                        commands.map((entry, at) =>
-                          at === index
-                            ? { ...entry, id: event.target.value }
-                            : entry,
-                        ),
-                      )
-                    }
-                  />
-                  <input
-                    value={command.run}
-                    placeholder="bun run dev"
-                    onChange={(event) =>
-                      setCommands(
-                        commands.map((entry, at) =>
-                          at === index
-                            ? { ...entry, run: event.target.value }
-                            : entry,
-                        ),
-                      )
-                    }
-                  />
-                  <label
-                    className="recipe-command-routing"
-                    title="Publish the stable wildcard-compatible HTTPS address through portless"
-                  >
+                <div className="recipe-step" key={index}>
+                  <span className="recipe-step-kind" aria-hidden="true">
+                    <Terminal size={12} />
+                  </span>
+                  <div className="recipe-row command">
                     <input
-                      type="checkbox"
-                      checked={
-                        command.url === true && command.portless !== false
-                      }
+                      className="recipe-id mono"
+                      value={command.id}
+                      placeholder="web"
+                      aria-label="Command name"
                       onChange={(event) =>
                         setCommands(
                           commands.map((entry, at) =>
                             at === index
-                              ? {
-                                  ...entry,
-                                  ...(event.target.checked
-                                    ? { url: true }
-                                    : {}),
-                                  portless: event.target.checked,
-                                }
+                              ? { ...entry, id: event.target.value }
                               : entry,
                           ),
                         )
                       }
                     />
-                    Named HTTPS URL
-                  </label>
-                  <button
-                    type="button"
-                    aria-label="Remove command"
-                    onClick={() =>
-                      setCommands(commands.filter((_, at) => at !== index))
-                    }
-                  >
-                    <X size={12} />
-                  </button>
+                    <input
+                      value={command.run}
+                      placeholder="bun run dev"
+                      aria-label="Command"
+                      onChange={(event) =>
+                        setCommands(
+                          commands.map((entry, at) =>
+                            at === index
+                              ? { ...entry, run: event.target.value }
+                              : entry,
+                          ),
+                        )
+                      }
+                    />
+                    <label
+                      className="recipe-command-routing"
+                      title="Publish the stable wildcard-compatible HTTPS address through portless"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={
+                          command.url === true && command.portless !== false
+                        }
+                        onChange={(event) =>
+                          setCommands(
+                            commands.map((entry, at) =>
+                              at === index
+                                ? {
+                                    ...entry,
+                                    ...(event.target.checked
+                                      ? { url: true }
+                                      : {}),
+                                    portless: event.target.checked,
+                                  }
+                                : entry,
+                            ),
+                          )
+                        }
+                      />
+                      Named HTTPS URL
+                    </label>
+                  </div>
+                  <div className="recipe-step-tools">
+                    <button
+                      type="button"
+                      aria-label="Remove command"
+                      onClick={() =>
+                        setCommands(commands.filter((_, at) => at !== index))
+                      }
+                    >
+                      <X size={12} />
+                    </button>
+                  </div>
                 </div>
               ))}
-              <p className="recipe-hint">
-                Serving commands get a named HTTPS URL by default. Disable it to
-                keep only the stable localhost port. Named routing needs
-                portless and its one-time HTTPS proxy setup.
-              </p>
+              {commands.length > 0 && (
+                <p className="recipe-hint">
+                  Serving commands get a named HTTPS URL by default. Disable it
+                  to keep only the stable localhost port. Named routing needs
+                  portless and its one-time HTTPS proxy setup.
+                </p>
+              )}
             </section>
 
             <section className="recipe-part">
               <div className="recipe-part-title">
-                <h3>Attached services</h3>
-                <p>
-                  Provider resources shown together in every Plot's sidebar.
-                </p>
+                <div>
+                  <h3>Attached services</h3>
+                  <p>
+                    Provider resources shown together in every Plot's sidebar.
+                  </p>
+                </div>
                 <div className="recipe-actions">
                   <AddMenu
                     label="Add service"
@@ -608,69 +704,75 @@ export function RecipeDialog({
               {resources.map((resource, index) => (
                 <div className="recipe-resource" key={index}>
                   <div className="recipe-resource-head">
-                    <input
-                      className="recipe-id mono"
-                      value={resource.id}
-                      aria-label="Resource id"
-                      onChange={(event) =>
-                        setResources(
-                          resources.map((entry, at) =>
-                            at === index
-                              ? { ...entry, id: event.target.value }
-                              : entry,
-                          ),
-                        )
-                      }
-                    />
-                    <select
-                      value={resource.provider}
-                      aria-label="Provider"
-                      onChange={(event) => {
-                        const provider = event.target
-                          .value as PlotResourceProvider;
-                        setResources(
-                          resources.map((entry, at) =>
-                            at === index
-                              ? {
-                                  ...entry,
-                                  ...resourceDefaults(provider),
-                                }
-                              : entry,
-                          ),
-                        );
-                      }}
-                    >
-                      {resourceProviders.map((provider) => (
-                        <option key={provider} value={provider}>
-                          {providerName(provider)}
-                        </option>
-                      ))}
-                    </select>
-                    <select
-                      value={resource.isolation}
-                      aria-label="Isolation"
-                      onChange={(event) =>
-                        setResources(
-                          resources.map((entry, at) =>
-                            at === index
-                              ? {
-                                  ...entry,
-                                  isolation: event.target.value as
-                                    | "isolated"
-                                    | "namespaced"
-                                    | "shared"
-                                    | "manual",
-                                }
-                              : entry,
-                          ),
-                        )
-                      }
-                    >
-                      <option value="isolated">Isolated</option>
-                      <option value="namespaced">Namespaced</option>
-                      <option value="shared">Shared</option>
-                      <option value="manual">Manual</option>
-                    </select>
+                    <label>
+                      <span className="micro">Name</span>
+                      <input
+                        className="recipe-id mono"
+                        value={resource.id}
+                        onChange={(event) =>
+                          setResources(
+                            resources.map((entry, at) =>
+                              at === index
+                                ? { ...entry, id: event.target.value }
+                                : entry,
+                            ),
+                          )
+                        }
+                      />
+                    </label>
+                    <label>
+                      <span className="micro">Provider</span>
+                      <select
+                        value={resource.provider}
+                        onChange={(event) => {
+                          const provider = event.target
+                            .value as PlotResourceProvider;
+                          setResources(
+                            resources.map((entry, at) =>
+                              at === index
+                                ? {
+                                    ...entry,
+                                    ...resourceDefaults(provider),
+                                  }
+                                : entry,
+                            ),
+                          );
+                        }}
+                      >
+                        {resourceProviders.map((provider) => (
+                          <option key={provider} value={provider}>
+                            {providerName(provider)}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      <span className="micro">Isolation</span>
+                      <select
+                        value={resource.isolation}
+                        onChange={(event) =>
+                          setResources(
+                            resources.map((entry, at) =>
+                              at === index
+                                ? {
+                                    ...entry,
+                                    isolation: event.target.value as
+                                      | "isolated"
+                                      | "namespaced"
+                                      | "shared"
+                                      | "manual",
+                                  }
+                                : entry,
+                            ),
+                          )
+                        }
+                      >
+                        <option value="isolated">Isolated</option>
+                        <option value="namespaced">Namespaced</option>
+                        <option value="shared">Shared</option>
+                        <option value="manual">Manual</option>
+                      </select>
+                    </label>
                     <button
                       type="button"
                       aria-label="Remove resource"
@@ -733,11 +835,13 @@ export function RecipeDialog({
                   </div>
                 </div>
               ))}
-              <p className="recipe-hint">
-                Isolated resources belong to one Plot. Namespaced and shared
-                resources stay honest about provider limits; manual means Silvic
-                can display and link them but cannot configure them.
-              </p>
+              {resources.length > 0 && (
+                <p className="recipe-hint">
+                  Isolated resources belong to one Plot. Namespaced and shared
+                  resources stay honest about provider limits; manual means
+                  Silvic can display and link them but cannot configure them.
+                </p>
+              )}
             </section>
           </div>
           <aside className="recipe-preview">
@@ -750,23 +854,20 @@ export function RecipeDialog({
                 onChange={(event) => setSampleBranch(event.target.value)}
               />
             </label>
+            {/* A column this narrow cannot hold a leader line: label above,
+                value below, each value free to wrap on its own. */}
             {preview ? (
-              <>
-                <div className="field">
-                  <span className="field-label">Name</span>
-                  <i className="field-leader" />
-                  <span className="field-value mono">{preview.name}</span>
-                </div>
-                <div className="field">
-                  <span className="field-label">Address</span>
-                  <i className="field-leader" />
-                  <span className="field-value mono">{preview.url}</span>
-                </div>
-                <p className="preview-path mono">{preview.path}</p>
+              <dl className="preview-facts">
+                <dt className="micro">Name</dt>
+                <dd className="mono">{preview.name}</dd>
+                <dt className="micro">Address</dt>
+                <dd className="mono">{preview.url}</dd>
+                <dt className="micro">Folder</dt>
+                <dd className="mono preview-path">{preview.path}</dd>
                 {preview.advice && (
-                  <p className="field-error">{preview.advice}</p>
+                  <dd className="field-error">{preview.advice}</dd>
                 )}
-              </>
+              </dl>
             ) : (
               <p className="section-empty">…</p>
             )}
@@ -786,6 +887,11 @@ export function RecipeDialog({
                           preview?.name ?? "…",
                         )}
                       </>
+                    ) : isWorkosStep(step) ? (
+                      <>
+                        <WorkOsMark size={11} />
+                        {step.label ?? "WorkOS emulator"}
+                      </>
                     ) : (
                       <>
                         <Terminal size={11} />
@@ -799,39 +905,36 @@ export function RecipeDialog({
           </aside>
         </div>
 
-        {showJson && (
-          <pre className="patch mono">
-            {JSON.stringify(draft, undefined, 2)}
-          </pre>
-        )}
-        {document && (
-          <p className="destination mono">
-            {document.exists ? "Writes to" : "Creates"} {document.path}
-          </p>
-        )}
-        {failure && <p className="dialog-error">{failure}</p>}
+        <footer className="recipe-foot">
+          {showJson && (
+            <pre className="patch mono">
+              {JSON.stringify(draft, undefined, 2)}
+            </pre>
+          )}
+          {failure && <p className="dialog-error">{failure}</p>}
 
-        <div className="dialog-actions">
-          <button
-            type="button"
-            className="link-button"
-            onClick={() => setShowJson(!showJson)}
-          >
-            {showJson ? "Hide" : "Review"} changes
-          </button>
-          <span className="dialog-spacer" />
-          <button type="button" className="ghost-button" onClick={onClose}>
-            Cancel
-          </button>
-          <button
-            type="button"
-            className="primary-button"
-            disabled={!document || saving}
-            onClick={() => void save()}
-          >
-            {saving ? "Saving…" : "Save recipe"}
-          </button>
-        </div>
+          <div className="dialog-actions">
+            <button
+              type="button"
+              className="link-button"
+              onClick={() => setShowJson(!showJson)}
+            >
+              {showJson ? "Hide" : "Review"} changes
+            </button>
+            <span className="dialog-spacer" />
+            <button type="button" className="ghost-button" onClick={onClose}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="primary-button"
+              disabled={!document || saving}
+              onClick={() => void save()}
+            >
+              {saving ? "Saving…" : "Save recipe"}
+            </button>
+          </div>
+        </footer>
       </section>
     </div>
   );
@@ -971,6 +1074,7 @@ function AddMenu({
 function sameStep(step: ProvisionStep, suggestion: RecipeSuggestion): boolean {
   if (!suggestion.step) return false;
   if ("convex" in suggestion.step) return "convex" in step;
+  if ("workos" in suggestion.step) return "workos" in step;
   return "run" in step && step.run === suggestion.step.run;
 }
 

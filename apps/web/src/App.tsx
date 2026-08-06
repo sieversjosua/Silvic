@@ -9,6 +9,7 @@ import {
   FolderOpen,
   GitBranch,
   GitPullRequest,
+  LogIn,
   Monitor,
   Moon,
   MoreHorizontal,
@@ -17,6 +18,7 @@ import {
   Plus,
   RefreshCw,
   Search,
+  Settings,
   SlidersHorizontal,
   Square,
   Sun,
@@ -70,13 +72,13 @@ import {
 import { concernsBranch, failureMessage } from "./errors";
 import { namedRoutingReady, pollNamedRouting } from "./named-routing";
 import { plotResources } from "./plot-resources";
+import { useAccelerator, useKeyLayer } from "./shortcuts";
 import { useSilvic } from "./store";
 import {
   applyProvisionRun,
   branchForIssue,
   branchForPlotName,
   branchIsTaken,
-  canOpenCreatedPlot,
 } from "./task";
 
 /**
@@ -102,6 +104,7 @@ export function App() {
     selectProject,
     selectWorkspace,
     processes,
+    reportFailure,
   } = useSilvic();
   const { appearance, preference, setPreference } = useAppearance();
   const [query, setQuery] = useState("");
@@ -167,6 +170,21 @@ export function App() {
       await window.silvic.openWorkspace({ path, target });
     },
     [],
+  );
+
+  // Starting a plot is the one thing worth reaching for without the mouse. It
+  // goes quiet behind a dialog so ⌘N never stacks a second one, and it needs a
+  // project to start from. In the browser harness Chrome takes ⌘N first; the
+  // packaged app sees it, because nothing in Electron's menu claims it.
+  const dialogOpen =
+    showEnvironment ||
+    recipeProject !== undefined ||
+    teardownPlot !== undefined ||
+    provisioningPlot !== undefined ||
+    deliveryWorkspace !== undefined;
+  useAccelerator(
+    "n",
+    project && !dialogOpen ? () => setShowEnvironment(true) : undefined,
   );
   // A project's recipe says what can be run in its plots. It is read here so
   // every plot of the project answers from the same reading.
@@ -254,22 +272,29 @@ export function App() {
 
         <div className="rail-foot">
           <AppUpdater />
-          <AppearanceControl value={preference} onChange={setPreference} />
-          <KeepRunningToggle />
-          <button
-            type="button"
-            className="rail-action"
-            onClick={() => void addRoot()}
-          >
-            <Plus size={13} />
-            Add location
-          </button>
-          <p className="micro rail-count">
-            {roots.length} watched location{roots.length === 1 ? "" : "s"}
-          </p>
-          {snapshot.connectorFailures.length > 0 && (
-            <ConnectorHealth failures={snapshot.connectorFailures} />
+          {snapshot.connectorFailures.some(
+            (failure) => failure.connectorId === "github",
+          ) && (
+            <button
+              type="button"
+              className="rail-action"
+              onClick={() => void window.silvic.connectGitHub()}
+            >
+              <LogIn size={13} />
+              Sign in to GitHub
+            </button>
           )}
+          <div className="rail-status">
+            <div className="rail-status-lines">
+              <p className="micro rail-count">
+                {roots.length} watched location{roots.length === 1 ? "" : "s"}
+              </p>
+              {snapshot.connectorFailures.length > 0 && (
+                <ConnectorHealth failures={snapshot.connectorFailures} />
+              )}
+            </div>
+            <SettingsMenu preference={preference} onChange={setPreference} />
+          </div>
         </div>
       </aside>
 
@@ -297,6 +322,13 @@ export function App() {
                   <input
                     value={query}
                     onChange={(event) => setQuery(event.target.value)}
+                    onKeyDown={(event) => {
+                      // Scoped to the field rather than the window: Escape
+                      // elsewhere belongs to whatever dialog is in front.
+                      if (event.key !== "Escape" || !query) return;
+                      event.preventDefault();
+                      setQuery("");
+                    }}
                     placeholder="Find in project"
                   />
                   {query && (
@@ -382,7 +414,7 @@ export function App() {
         <TeardownDialog
           workspace={teardownPlot}
           onClose={() => setTeardownPlot(undefined)}
-          onDone={() => void refresh()}
+          onFailed={reportFailure}
         />
       )}
       {recipeProject && (
@@ -604,9 +636,11 @@ function SuggestionList({
           >
             <Plus size={12} />
             <span className="project-name">{candidate.name}</span>
-            <span className="project-count mono">
-              {candidate.workspaces.length}
-            </span>
+            {candidate.workspaces.length > 1 && (
+              <span className="project-count mono">
+                {candidate.workspaces.length}
+              </span>
+            )}
           </button>
         ))}
         {(hidden > 0 || expanded) && (
@@ -626,7 +660,9 @@ function SuggestionList({
 /**
  * Connector health is app-level and rarely actionable, so it sits quietly in the
  * rail instead of covering the canvas. Naming each connector and its error keeps
- * the summary honest — "4 unavailable" on its own explains nothing.
+ * the summary honest — "4 unavailable" on its own explains nothing. The one
+ * fixable failure, GitHub sign-in, gets its own rail action instead of hiding
+ * in here.
  */
 function ConnectorHealth({
   failures,
@@ -634,9 +670,6 @@ function ConnectorHealth({
   failures: readonly ConnectorFailure[];
 }) {
   const [open, setOpen] = useState(false);
-  const gitHubUnavailable = failures.some(
-    (failure) => failure.connectorId === "github",
-  );
 
   return (
     <div className="connector-health">
@@ -648,14 +681,6 @@ function ConnectorHealth({
               <span>{failure.message}</span>
             </p>
           ))}
-          {gitHubUnavailable && (
-            <button
-              type="button"
-              onClick={() => void window.silvic.connectGitHub()}
-            >
-              Sign in to GitHub
-            </button>
-          )}
         </div>
       )}
       <button
@@ -664,7 +689,8 @@ function ConnectorHealth({
         aria-expanded={open}
         onClick={() => setOpen(!open)}
       >
-        {failures.length} connector{failures.length === 1 ? "" : "s"} idle
+        {failures.length} connector{failures.length === 1 ? "" : "s"}{" "}
+        unavailable
       </button>
     </div>
   );
@@ -733,6 +759,50 @@ function AppearanceControl({
           {icon}
         </button>
       ))}
+    </div>
+  );
+}
+
+/**
+ * Appearance and quit behaviour are set once and rarely touched, so they live
+ * behind a gear instead of holding permanent space in the rail.
+ */
+function SettingsMenu({
+  preference,
+  onChange,
+}: {
+  preference: AppearancePreference;
+  onChange(next: AppearancePreference): void;
+}) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div
+      className="rail-settings"
+      onKeyDown={(event) => {
+        if (event.key === "Escape") setOpen(false);
+      }}
+    >
+      <button
+        type="button"
+        className="settings-toggle"
+        aria-label="Settings"
+        aria-haspopup="true"
+        aria-expanded={open}
+        onClick={() => setOpen(!open)}
+      >
+        <Settings size={14} />
+      </button>
+      {open && (
+        <>
+          <div className="menu-scrim" onClick={() => setOpen(false)} />
+          <div className="settings-menu" aria-label="Settings">
+            <span className="micro">Appearance</span>
+            <AppearanceControl value={preference} onChange={onChange} />
+            <KeepRunningToggle />
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -1281,11 +1351,11 @@ function CopyRow({
 
 /**
  * Exactly as tall as the list can be, so searching it cannot resize it. Rows
- * are a fixed 30px with a pixel between them; five is as many as the dialog
+ * are a fixed 30px with a pixel between them; eight is as many as the column
  * gives up before the rest scroll.
  */
 function candidateListHeight(count: number): number {
-  const rows = Math.min(count, 5);
+  const rows = Math.min(count, 8);
   return rows * 30 + (rows - 1);
 }
 
@@ -1353,6 +1423,7 @@ function NewPlotDialog({
   const source =
     sources.find((candidate) => candidate.workspaceId === sourceId) ?? trunk;
   const [branch, setBranch] = useState("");
+  const [branchQuery, setBranchQuery] = useState("");
   const [issue, setIssue] = useState<IssueSummary>();
   const [mode, setMode] = useState<"worktree" | "clone">("worktree");
   const [creating, setCreating] = useState(false);
@@ -1381,10 +1452,13 @@ function NewPlotDialog({
   // The branch being created, so progress from an abandoned attempt cannot
   // paint over the one the dialog is waiting on.
   const creatingBranch = useRef<string | undefined>(undefined);
-  // The branches came with the snapshot, so the answer to the question asked
-  // on every keystroke is already here. Waiting on a round trip to say what is
-  // known locally is a delay with nothing on the other end of it.
-  const query = branch.trim();
+  // ⌘↵ goes through the form rather than around it, so the keyboard and the
+  // Start button run the same submit.
+  const form = useRef<HTMLFormElement>(null);
+  // The branches came with the snapshot, so the search answers on every
+  // keystroke. Waiting on a round trip to say what is known locally is a
+  // delay with nothing on the other end of it.
+  const query = branchQuery.trim();
   const wanted = adopt?.name ?? branchForPlotName(branch);
   const taken = branchIsTaken({
     branch: wanted,
@@ -1394,7 +1468,8 @@ function NewPlotDialog({
   });
   // Branches somebody could open as a plot: local ones no worktree holds, and
   // remote ones with no local counterpart yet. Nobody recalls these by heart,
-  // so the field filters the list rather than asking to be matched exactly.
+  // so a search field filters the list rather than asking to be matched
+  // exactly.
   const held = new Set(sources.map((candidate) => candidate.git.branch));
   const openable = [
     ...branches
@@ -1524,17 +1599,42 @@ function NewPlotDialog({
     });
   };
 
-  const acceptCreationResult = async (next: PlotCreationResult) => {
-    setResult(next);
-    if (!canOpenCreatedPlot(next)) return;
-    try {
-      await onOpen(next.plot.path, defaultHarness);
-    } catch (error) {
+  const openPlot = (target: HarnessId) => {
+    if (!result) return;
+    setFailure(undefined);
+    void onOpen(result.plot.path, target).catch((error: unknown) =>
       setFailure(
-        `The Plot is ready, but ${harnessLabel(defaultHarness)} could not be opened: ${failureMessage(error)}`,
-      );
-    }
+        `${harnessLabel(target)} could not be opened: ${failureMessage(error)}`,
+      ),
+    );
   };
+
+  // Everything the Start button needs before it is worth pressing, named once
+  // so the button, the form and ⌘↵ cannot drift apart.
+  const canStart =
+    !creating &&
+    Boolean(plotName) &&
+    branchFailure === undefined &&
+    namedRoutingReady(preview);
+
+  // The dialog turns into a report once the plot exists, and the keys follow
+  // it: ⌘↵ opens what was just made rather than making another one. An open
+  // harness menu is closer than the dialog, so Escape closes that first.
+  useKeyLayer(
+    result
+      ? {
+          dismiss: repairing
+            ? undefined
+            : openMenu
+              ? () => setOpenMenu(false)
+              : onCancel,
+          confirm: repairing ? undefined : () => openPlot(defaultHarness),
+        }
+      : {
+          dismiss: creating ? undefined : onCancel,
+          confirm: canStart ? () => form.current?.requestSubmit() : undefined,
+        },
+  );
 
   if (!source) return null;
 
@@ -1559,6 +1659,7 @@ function NewPlotDialog({
       setSteps([]);
       setFailure(undefined);
       setBranch("");
+      setBranchQuery("");
     };
     // The repair runs in the plot that already exists, so the dialog reports it
     // exactly as it reported creation: the same steps, live.
@@ -1569,7 +1670,7 @@ function NewPlotDialog({
       creatingBranch.current = createdFrom?.branch ?? branch.trim();
       void window.silvic
         .provisionPlot({ path: result.plot.path, remedy })
-        .then((run) => acceptCreationResult(applyProvisionRun(result, run)))
+        .then((run) => setResult(applyProvisionRun(result, run)))
         .catch((error: unknown) => setFailure(failureMessage(error)))
         .finally(() => {
           creatingBranch.current = undefined;
@@ -1579,7 +1680,7 @@ function NewPlotDialog({
     return (
       <div className="scrim" onMouseDown={repairing ? undefined : onCancel}>
         <section
-          className="dialog"
+          className="dialog plot"
           onMouseDown={(event) => event.stopPropagation()}
         >
           {repairing ? (
@@ -1617,86 +1718,95 @@ function NewPlotDialog({
               </span>
             </p>
           )}
-          <div className="plot-facts-block">
-            <CopyRow label="Address" value={result.plot.url} />
-            <CopyRow
-              label="Location"
-              value={result.plot.path}
-              display={pathTail(result.plot.path)}
-            />
-          </div>
-          <PlotOnlineStatus result={result} />
-          {attached.length > 0 && (
-            <div className="ready-section">
-              <p className="micro">Attached</p>
-              {attached.map((observation) => (
-                <Observation
-                  key={`${observation.connectorId}:${observation.kind}:${observation.label}`}
-                  observation={observation}
-                />
-              ))}
-            </div>
-          )}
-          {commands.length > 0 && (
-            <div className="ready-section">
-              <p className="micro">Run here</p>
-              {commands.map(([name, command]) => (
+          <div className="plot-columns">
+            <div className="plot-column">
+              <div className="plot-facts-block">
+                <CopyRow label="Address" value={result.plot.url} />
                 <CopyRow
-                  key={name}
-                  label={name}
-                  value={command.run}
-                  display={
-                    command.url
-                      ? `${command.run}  → serves the address`
-                      : command.run
-                  }
+                  label="Location"
+                  value={result.plot.path}
+                  display={pathTail(result.plot.path)}
                 />
-              ))}
+              </div>
+              {attached.length > 0 && (
+                <div className="ready-section">
+                  <p className="micro">Attached</p>
+                  {attached.map((observation) => (
+                    <Observation
+                      key={`${observation.connectorId}:${observation.kind}:${observation.label}`}
+                      observation={observation}
+                    />
+                  ))}
+                </div>
+              )}
+              {commands.length > 0 && (
+                <div className="ready-section">
+                  <p className="micro">Run here</p>
+                  {commands.map(([name, command]) => (
+                    <CopyRow
+                      key={name}
+                      label={name}
+                      value={command.run}
+                      display={
+                        command.url
+                          ? `${command.run}  → serves the address`
+                          : command.run
+                      }
+                    />
+                  ))}
+                </div>
+              )}
             </div>
-          )}
-          {repairing ? (
-            <ProgressSteps steps={steps} settled={!repairing} />
-          ) : result.provision.length === 0 ? (
-            <p className="dialog-copy">
-              This repository declares no provisioning steps. Add a
-              <code> silvic.json </code> to install dependencies, create a
-              deployment or write environment files when a plot is made.
-            </p>
-          ) : failed ? (
-            <ProvisionResults results={result.provision} onRemedy={repair} />
-          ) : (
-            <div className="ready-section">
-              <p className="micro">
-                Provisioned in
-                <span className="micro-value">
-                  {secondsLabel(
-                    result.provision.reduce(
-                      (total, step) => total + step.durationMs,
-                      0,
-                    ),
-                  )}
-                </span>
-              </p>
-              <ul className="ready-ran">
-                {result.provision.map((step) => (
-                  <li key={step.label}>
-                    <i className="dot" data-tone="ready" />
-                    <strong>{step.label}</strong>
-                    <i className="field-leader" />
-                    <span className="mono">
-                      {secondsLabel(step.durationMs)}
+            <div className="plot-column">
+              <PlotOnlineStatus result={result} />
+              {repairing ? (
+                <ProgressSteps steps={steps} settled={!repairing} />
+              ) : result.provision.length === 0 ? (
+                <p className="dialog-copy">
+                  This repository declares no provisioning steps. Add a
+                  <code> silvic.json </code> to install dependencies, create a
+                  deployment or write environment files when a plot is made.
+                </p>
+              ) : failed ? (
+                <ProvisionResults
+                  results={result.provision}
+                  onRemedy={repair}
+                />
+              ) : (
+                <div className="ready-section">
+                  <p className="micro">
+                    Provisioned in
+                    <span className="micro-value">
+                      {secondsLabel(
+                        result.provision.reduce(
+                          (total, step) => total + step.durationMs,
+                          0,
+                        ),
+                      )}
                     </span>
-                  </li>
-                ))}
-              </ul>
-              {/* Nothing went wrong, so the commands are trivia — until they
+                  </p>
+                  <ul className="ready-ran">
+                    {result.provision.map((step) => (
+                      <li key={step.label}>
+                        <i className="dot" data-tone="ready" />
+                        <strong>{step.label}</strong>
+                        <i className="field-leader" />
+                        <span className="mono">
+                          {secondsLabel(step.durationMs)}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                  {/* Nothing went wrong, so the commands are trivia — until they
                   are not, and then they are the first thing anybody wants. */}
-              <details className="step-output">
-                <summary>What each command was</summary>
-                <ProvisionResults results={result.provision} />
-              </details>
+                  <details className="step-output">
+                    <summary>What each command was</summary>
+                    <ProvisionResults results={result.provision} />
+                  </details>
+                </div>
+              )}
             </div>
-          )}
+          </div>
           {failure && <p className="dialog-error">{failure}</p>}
           <div className="dialog-actions ready-actions">
             <button
@@ -1720,7 +1830,7 @@ function NewPlotDialog({
             <div className="split-button ready-open">
               <button
                 type="button"
-                onClick={() => void onOpen(result.plot.path, defaultHarness)}
+                onClick={() => openPlot(defaultHarness)}
                 disabled={repairing}
               >
                 <HarnessMark id={defaultHarness} size={14} />
@@ -1747,7 +1857,7 @@ function NewPlotDialog({
                       defaultHarness={defaultHarness}
                       onOpen={(id) => {
                         setOpenMenu(false);
-                        void onOpen(result.plot.path, id);
+                        openPlot(id);
                       }}
                       onSetDefault={onSetDefaultHarness}
                     />
@@ -1764,17 +1874,12 @@ function NewPlotDialog({
   return (
     <div className="scrim" onMouseDown={creating ? undefined : onCancel}>
       <form
-        className="dialog"
+        ref={form}
+        className="dialog plot"
         onMouseDown={(event) => event.stopPropagation()}
         onSubmit={(event) => {
           event.preventDefault();
-          if (
-            !plotName ||
-            creating ||
-            branchFailure ||
-            !namedRoutingReady(preview)
-          )
-            return;
+          if (!canStart) return;
           const requested = wanted;
           setFailure(undefined);
           setSteps([]);
@@ -1804,7 +1909,7 @@ function NewPlotDialog({
                 }
               : {}),
           })
-            .then(acceptCreationResult)
+            .then(setResult)
             .catch((error: unknown) => setFailure(failureMessage(error)))
             .finally(() => {
               creatingBranch.current = undefined;
@@ -1814,238 +1919,254 @@ function NewPlotDialog({
       >
         <p className="micro">New plot</p>
         <h2>Branch from {source.name}</h2>
-        <p className="dialog-copy">
-          Silvic creates the worktree and stable address, then runs the visible
-          recipe. A Convex step creates a dev deployment and scoped deploy key,
-          copies local variables, syncs server variables, and pushes the
-          repository's schema and functions. Starting the Plot confirms those
-          provider changes; once its URL responds, Silvic opens it in your
-          default harness.
-        </p>
-        <div className="task-source">
-          <p className="micro">Start from</p>
-          <IssuePicker
-            projectId={projectId ?? ""}
-            selected={issue}
-            disabled={creating || !projectId}
-            onSelect={(next) => {
-              setIssue(next);
-              if (next) {
-                setBranch(branchForIssue(next));
-                setAdopt(undefined);
-                setFailure(undefined);
-                setSteps([]);
-              }
-            }}
-          />
-        </div>
-        <label className="dialog-field">
-          <span className="micro">Plot name</span>
-          <input
-            autoFocus
-            value={branch}
-            onChange={(event) => {
-              setBranch(event.target.value);
-              // The name is what was refused, so editing it clears the refusal
-              // and the dead plan left behind by the attempt that failed.
-              if (branchFailure) setFailure(undefined);
-              if (steps.length > 0) setSteps([]);
-              if (adopt) setAdopt(undefined);
-            }}
-            placeholder="Auth callback, pricing experiment…"
-            disabled={creating}
-            aria-invalid={branchFailure !== undefined}
-            aria-errormessage={branchFailure ? "branch-failure" : undefined}
-          />
-        </label>
-        {/* What pressing Create will do, in one slot of fixed height: a
+        <div className="plot-columns">
+          <div className="plot-column">
+            <p className="dialog-copy">
+              Silvic creates the worktree and stable address, then runs the
+              visible recipe. A Convex step creates a dev deployment and scoped
+              deploy key, copies local variables, syncs server variables, and
+              pushes the repository's schema and functions. Starting the Plot
+              confirms those provider changes; once its URL responds, you pick
+              the harness to open it in.
+            </p>
+            <div className="task-source">
+              <p className="micro">Start from</p>
+              <IssuePicker
+                projectId={projectId ?? ""}
+                selected={issue}
+                disabled={creating || !projectId}
+                onSelect={(next) => {
+                  setIssue(next);
+                  if (next) {
+                    setBranch(branchForIssue(next));
+                    setAdopt(undefined);
+                    setFailure(undefined);
+                    setSteps([]);
+                  }
+                }}
+              />
+            </div>
+            <label className="dialog-field">
+              <span className="micro">Plot name</span>
+              <input
+                autoFocus
+                value={branch}
+                onChange={(event) => {
+                  setBranch(event.target.value);
+                  // The name is what was refused, so editing it clears the refusal
+                  // and the dead plan left behind by the attempt that failed.
+                  if (branchFailure) setFailure(undefined);
+                  if (steps.length > 0) setSteps([]);
+                  if (adopt) setAdopt(undefined);
+                }}
+                placeholder="Auth callback, pricing experiment…"
+                disabled={creating}
+                aria-invalid={branchFailure !== undefined}
+                aria-errormessage={branchFailure ? "branch-failure" : undefined}
+              />
+            </label>
+            {/* What pressing Create will do, in one slot of fixed height: a
             branch cut, a branch taken up, or the reason for neither. Three
             things to say and one place to say them, so none of them arrives
             by pushing the others down. */}
-        <p
-          className="adopted"
-          id="branch-failure"
-          data-taken={(adopt !== undefined && !branchFailure) || undefined}
-          data-refused={branchFailure !== undefined || undefined}
-        >
-          {branchFailure ? (
-            <AlertTriangle size={11} />
-          ) : (
-            <GitBranch size={11} />
-          )}
-          {branchFailure ? (
-            <span>{branchFailure}</span>
-          ) : adopt ? (
-            <span>
-              Takes up <span className="mono">{adopt.ref}</span>
-              {adopt.ref === adopt.name ? "" : ", following it from here on"}
-            </span>
-          ) : (
-            <span>
-              Git branch <span className="mono">{wanted || "—"}</span>, cut from{" "}
-              {source.name}
-            </span>
-          )}
-          {adopt && !branchFailure && (
-            <button
-              type="button"
-              className="link-button"
-              onClick={() => {
-                setAdopt(undefined);
-                setBranch("");
-              }}
-              disabled={creating}
+            <p
+              className="adopted"
+              id="branch-failure"
+              data-taken={(adopt !== undefined && !branchFailure) || undefined}
+              data-refused={branchFailure !== undefined || undefined}
             >
-              Cut a new branch instead
-            </button>
-          )}
-        </p>
-        <details className="plot-options">
-          <summary>
-            Advanced options
-            <span>source, existing branch, location</span>
-          </summary>
-          {sources.length > 1 && (
-            <label className="dialog-field">
-              <span className="micro">Branch from</span>
-              <select
-                className="dialog-select"
-                value={source.workspaceId}
-                onChange={(event) => setSourceId(event.target.value)}
-                // A branch that exists already knows where it starts.
-                disabled={creating || adopt !== undefined}
-              >
-                {[...sources]
-                  .sort((left, right) =>
-                    left.isPrimary === right.isPrimary
-                      ? left.name.localeCompare(right.name)
-                      : left.isPrimary
-                        ? -1
-                        : 1,
-                  )
-                  .map((candidate) => (
-                    <option
-                      key={candidate.workspaceId}
-                      value={candidate.workspaceId}
-                    >
-                      {candidate.name}
-                      {candidate.isPrimary ? " · the project itself" : ""}
-                    </option>
-                  ))}
-              </select>
-            </label>
-          )}
-          {openable.length > 0 && (
-            <div className="branch-candidates">
-              <p className="micro">
-                Take up a branch that exists
-                <span className="micro-value">
-                  {query === ""
-                    ? openable.length
-                    : `${candidates.length} of ${openable.length}`}
+              {branchFailure ? (
+                <AlertTriangle size={11} />
+              ) : (
+                <GitBranch size={11} />
+              )}
+              {branchFailure ? (
+                <span>{branchFailure}</span>
+              ) : adopt ? (
+                <span>
+                  Takes up <span className="mono">{adopt.ref}</span>
+                  {adopt.ref === adopt.name
+                    ? ""
+                    : ", following it from here on"}
                 </span>
-              </p>
-              {/* Sized by what could be listed, not by what the typing has
+              ) : (
+                <span>
+                  Git branch <span className="mono">{wanted || "—"}</span>, cut
+                  from {source.name}
+                </span>
+              )}
+              {adopt && !branchFailure && (
+                <button
+                  type="button"
+                  className="link-button"
+                  onClick={() => {
+                    setAdopt(undefined);
+                    setBranch("");
+                  }}
+                  disabled={creating}
+                >
+                  Cut a new branch instead
+                </button>
+              )}
+            </p>
+            {/* Present from the start, holding its place: a preview that appears
+            on the first keystroke moves everything under it. */}
+            <div
+              className="destination"
+              data-empty={!preview?.url || undefined}
+            >
+              <span className="micro">Plot URL</span>
+              <strong className="mono">{preview?.url ?? "—"}</strong>
+            </div>
+            {preview?.advice && (
+              <div className="routing-setup">
+                <p className="dialog-error">{preview.advice}</p>
+                <button
+                  type="button"
+                  className="ghost-button"
+                  onClick={setupNamedRouting}
+                  disabled={creating || settingUpRouting}
+                >
+                  <Terminal size={12} />
+                  {settingUpRouting ? "Waiting for setup…" : "Set up HTTPS"}
+                </button>
+              </div>
+            )}
+            {steps.length > 0 && (
+              <ProgressSteps steps={steps} settled={!creating} />
+            )}
+            {previewFailure && (
+              <div className="routing-setup">
+                <p className="dialog-error">{previewFailure}</p>
+                <button
+                  type="button"
+                  className="ghost-button"
+                  onClick={() => setPreviewAttempt((attempt) => attempt + 1)}
+                  disabled={creating}
+                >
+                  <RefreshCw size={12} />
+                  Retry URL check
+                </button>
+              </div>
+            )}
+            {failure && !branchFailure && (
+              <p className="dialog-error">{failure}</p>
+            )}
+          </div>
+          <div className="plot-column">
+            {sources.length > 1 && (
+              <label className="dialog-field">
+                <span className="micro">Branch from</span>
+                <select
+                  className="dialog-select"
+                  value={source.workspaceId}
+                  onChange={(event) => setSourceId(event.target.value)}
+                  // A branch that exists already knows where it starts.
+                  disabled={creating || adopt !== undefined}
+                >
+                  {[...sources]
+                    .sort((left, right) =>
+                      left.isPrimary === right.isPrimary
+                        ? left.name.localeCompare(right.name)
+                        : left.isPrimary
+                          ? -1
+                          : 1,
+                    )
+                    .map((candidate) => (
+                      <option
+                        key={candidate.workspaceId}
+                        value={candidate.workspaceId}
+                      >
+                        {candidate.name}
+                        {candidate.isPrimary ? " · the project itself" : ""}
+                      </option>
+                    ))}
+                </select>
+              </label>
+            )}
+            {openable.length > 0 && (
+              <div className="branch-candidates">
+                <p className="micro">
+                  Take up a branch that exists
+                  <span className="micro-value">
+                    {query === ""
+                      ? openable.length
+                      : `${candidates.length} of ${openable.length}`}
+                  </span>
+                </p>
+                <label className="branch-search">
+                  <Search size={12} />
+                  <input
+                    value={branchQuery}
+                    onChange={(event) => setBranchQuery(event.target.value)}
+                    placeholder="Search branches"
+                    aria-label="Search branches"
+                    disabled={creating}
+                  />
+                </label>
+                {/* Sized by what could be listed, not by what the search has
                     left, so filtering empties the box instead of resizing the
                     dialog under the field being typed in. */}
-              <div
-                className="branch-candidate-list"
-                style={{ height: candidateListHeight(openable.length) }}
-              >
-                {candidates.length === 0 && (
-                  <p className="candidates-empty">
-                    Nothing here matches. <span className="mono">{wanted}</span>{" "}
-                    will be cut as a new branch.
-                  </p>
-                )}
-                {candidates.map((candidate) => (
-                  <button
-                    key={candidate.ref}
-                    type="button"
-                    className="branch-candidate"
-                    data-selected={adopt?.ref === candidate.ref || undefined}
-                    disabled={creating}
-                    onClick={() => {
-                      setAdopt({ ref: candidate.ref, name: candidate.name });
-                      setBranch(candidate.name);
-                      setFailure(undefined);
-                      setSteps([]);
-                    }}
-                  >
-                    <GitBranch size={11} />
-                    <span className="truncate">{candidate.name}</span>
-                    {candidate.remote && (
-                      <span className="branch-origin mono">
-                        {candidate.ref}
-                      </span>
-                    )}
-                  </button>
-                ))}
+                <div
+                  className="branch-candidate-list"
+                  style={{ height: candidateListHeight(openable.length) }}
+                >
+                  {candidates.length === 0 && (
+                    <p className="candidates-empty">
+                      No branch matches <span className="mono">{query}</span>.
+                    </p>
+                  )}
+                  {candidates.map((candidate) => (
+                    <button
+                      key={candidate.ref}
+                      type="button"
+                      className="branch-candidate"
+                      data-selected={adopt?.ref === candidate.ref || undefined}
+                      disabled={creating}
+                      onClick={() => {
+                        setAdopt({ ref: candidate.ref, name: candidate.name });
+                        setBranch(candidate.name);
+                        setFailure(undefined);
+                        setSteps([]);
+                      }}
+                    >
+                      <GitBranch size={11} />
+                      <span className="truncate">{candidate.name}</span>
+                      {candidate.remote && (
+                        <span className="branch-origin mono">
+                          {candidate.ref}
+                        </span>
+                      )}
+                    </button>
+                  ))}
+                </div>
               </div>
-            </div>
-          )}
-          <fieldset className="choices" disabled={creating}>
-            <legend className="micro">Location</legend>
-            <label data-selected={mode === "worktree" || undefined}>
-              <input
-                type="radio"
-                name="mode"
-                checked={mode === "worktree"}
-                onChange={() => setMode("worktree")}
-              />
-              <strong>Linked worktree</strong>
-              <span>Fast and space-efficient</span>
-            </label>
-            <label data-selected={mode === "clone" || undefined}>
-              <input
-                type="radio"
-                name="mode"
-                checked={mode === "clone"}
-                onChange={() => setMode("clone")}
-              />
-              <strong>Independent clone</strong>
-              <span>Fully isolated Git directory</span>
-            </label>
-          </fieldset>
-        </details>
-        {/* Present from the start, holding its place: a preview that appears
-            on the first keystroke moves everything under it. */}
-        <div className="destination" data-empty={!preview?.url || undefined}>
-          <span className="micro">Plot URL</span>
-          <strong className="mono">{preview?.url ?? "—"}</strong>
+            )}
+            <fieldset className="choices" disabled={creating}>
+              <legend className="micro">Location</legend>
+              <label data-selected={mode === "worktree" || undefined}>
+                <input
+                  type="radio"
+                  name="mode"
+                  checked={mode === "worktree"}
+                  onChange={() => setMode("worktree")}
+                />
+                <strong>Linked worktree</strong>
+                <span>Fast and space-efficient</span>
+              </label>
+              <label data-selected={mode === "clone" || undefined}>
+                <input
+                  type="radio"
+                  name="mode"
+                  checked={mode === "clone"}
+                  onChange={() => setMode("clone")}
+                />
+                <strong>Independent clone</strong>
+                <span>Fully isolated Git directory</span>
+              </label>
+            </fieldset>
+          </div>
         </div>
-        {preview?.advice && (
-          <div className="routing-setup">
-            <p className="dialog-error">{preview.advice}</p>
-            <button
-              type="button"
-              className="ghost-button"
-              onClick={setupNamedRouting}
-              disabled={creating || settingUpRouting}
-            >
-              <Terminal size={12} />
-              {settingUpRouting ? "Waiting for setup…" : "Set up HTTPS"}
-            </button>
-          </div>
-        )}
-        {steps.length > 0 && (
-          <ProgressSteps steps={steps} settled={!creating} />
-        )}
-        {previewFailure && (
-          <div className="routing-setup">
-            <p className="dialog-error">{previewFailure}</p>
-            <button
-              type="button"
-              className="ghost-button"
-              onClick={() => setPreviewAttempt((attempt) => attempt + 1)}
-              disabled={creating}
-            >
-              <RefreshCw size={12} />
-              Retry URL check
-            </button>
-          </div>
-        )}
-        {failure && !branchFailure && <p className="dialog-error">{failure}</p>}
         <div className="dialog-actions">
           <button
             type="button"
@@ -2055,19 +2176,8 @@ function NewPlotDialog({
           >
             Cancel
           </button>
-          <button
-            type="submit"
-            className="primary-button"
-            disabled={
-              creating ||
-              !plotName ||
-              branchFailure !== undefined ||
-              !namedRoutingReady(preview)
-            }
-          >
-            {creating
-              ? "Starting…"
-              : `Start & open in ${harnessLabel(defaultHarness)}`}
+          <button type="submit" className="primary-button" disabled={!canStart}>
+            {creating ? "Starting…" : "Start plot"}
           </button>
         </div>
       </form>
@@ -2232,6 +2342,12 @@ function ProvisionDialog({
   };
 
   const failed = results.find((step) => step.exitCode !== 0);
+
+  useKeyLayer({
+    dismiss: running ? undefined : onClose,
+    confirm: running ? undefined : () => run(),
+  });
+
   return (
     <div className="scrim" onMouseDown={running ? undefined : onClose}>
       <section
@@ -2396,6 +2512,13 @@ function DeliveryDialog({
     }
   };
 
+  const ready =
+    !working && changes !== undefined && draft.commitMessage.trim().length > 0;
+  useKeyLayer({
+    dismiss: onClose,
+    confirm: ready ? () => void execute() : undefined,
+  });
+
   return (
     <div className="scrim" onMouseDown={onClose}>
       <section
@@ -2485,7 +2608,7 @@ function DeliveryDialog({
           <button
             type="button"
             className="primary-button"
-            disabled={working || !changes || !draft.commitMessage.trim()}
+            disabled={!ready}
             onClick={() => void execute()}
           >
             {working

@@ -1,5 +1,7 @@
 import type { PackageManager } from "@silvic/contracts";
 
+import { workosEmulatePort } from "./ports";
+
 export interface ProvisionContext {
   /** The new plot's working directory. */
   root: string;
@@ -11,6 +13,8 @@ export interface ProvisionContext {
   plot: string;
   branch?: string;
   url?: string;
+  /** The plot's stable port, when one has been allocated. */
+  port?: number;
   packageManager?: PackageManager;
 }
 
@@ -29,6 +33,12 @@ export function provisionEnvironment(
   const environment: Record<string, string> = {
     SILVIC_PLOT: context.plot,
     ...(context.url ? { HOST: new URL(context.url).hostname } : {}),
+    // Where a plot-local WorkOS emulator would listen, published to every
+    // plot process so a recipe can say `--port "$SILVIC_WORKOS_PORT"`
+    // without ever learning the number.
+    ...(context.port === undefined
+      ? {}
+      : { SILVIC_WORKOS_PORT: String(workosEmulatePort(context.port)) }),
   };
   for (const [key, value] of Object.entries(shared)) {
     environment[`SILVIC_${key}`] = value;

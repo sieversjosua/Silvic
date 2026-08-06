@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, ExternalLink, Hand } from "lucide-react";
 
 import type {
@@ -8,6 +8,7 @@ import type {
 } from "@silvic/contracts";
 
 import { failureMessage } from "./errors";
+import { useKeyLayer } from "./shortcuts";
 import { plotConclusion } from "./state";
 
 type Scope = TeardownPlanPayload["scope"];
@@ -29,11 +30,12 @@ const scopes: ReadonlyArray<[Scope, string, string]> = [
 export function TeardownDialog({
   workspace,
   onClose,
-  onDone,
+  onFailed,
 }: {
   workspace: WorkspaceSnapshot;
   onClose(): void;
-  onDone(): void;
+  /** Says out loud what went wrong to whoever has already walked away. */
+  onFailed(message: string): void;
 }) {
   // A merged plot arrives here to disappear completely: worktree and branch.
   // The defaults say so, the plan still spells out every step, and `-d`'s
@@ -59,21 +61,36 @@ export function TeardownDialog({
       .catch((error: unknown) => setFailure(failureMessage(error)));
   }, [workspace.path, scope, deleteBranch, discardChanges]);
 
+  // The plan is confirmed and the work belongs to Silvic now. Closing the
+  // dialog does not call any of it back, so the run reports where it can be
+  // read: here while this is open, and to the window once it is not.
+  const open = useRef(true);
+  useEffect(() => {
+    open.current = true;
+    return () => {
+      open.current = false;
+    };
+  }, []);
+  const report = (message: string) => {
+    setFailure(message);
+    if (!open.current) onFailed(message);
+  };
+
   const run = async () => {
     setWorking(true);
     setFailure(undefined);
     try {
-      setResult(
-        await window.silvic.runTeardown({
-          path: workspace.path,
-          scope,
-          deleteBranch,
-          discardChanges,
-        }),
-      );
-      onDone();
+      const outcome = await window.silvic.runTeardown({
+        path: workspace.path,
+        scope,
+        deleteBranch,
+        discardChanges,
+      });
+      setResult(outcome);
+      const broke = outcome.results.find((step) => step.status === "failed");
+      if (broke) report(`${broke.label}: ${broke.output}`);
     } catch (error) {
-      setFailure(failureMessage(error));
+      report(failureMessage(error));
     } finally {
       setWorking(false);
     }
@@ -87,8 +104,20 @@ export function TeardownDialog({
   const blocked = (plan?.blockers.length ?? 0) > 0;
   const actionable = plan?.steps.filter((step) => !step.manual) ?? [];
 
+  // Dismissing mid-run is closing a report, not calling off the work, so the
+  // key stays live throughout. ⌘↵ still runs a destructive plan, but only one
+  // this dialog has already spelled out in full, and never twice.
+  useKeyLayer({
+    dismiss: onClose,
+    confirm: result
+      ? onClose
+      : blocked || working || actionable.length === 0
+        ? undefined
+        : () => void run(),
+  });
+
   return (
-    <div className="scrim" onMouseDown={working ? undefined : onClose}>
+    <div className="scrim" onMouseDown={onClose}>
       <section
         className="dialog teardown"
         onMouseDown={(event) => event.stopPropagation()}
@@ -223,13 +252,8 @@ export function TeardownDialog({
             {failure && <p className="dialog-error">{failure}</p>}
 
             <div className="dialog-actions">
-              <button
-                type="button"
-                className="ghost-button"
-                onClick={onClose}
-                disabled={working}
-              >
-                Cancel
+              <button type="button" className="ghost-button" onClick={onClose}>
+                {working ? "Close" : "Cancel"}
               </button>
               <button
                 type="button"

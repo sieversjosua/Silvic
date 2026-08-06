@@ -4,6 +4,7 @@ import { CircleDot, Search, X } from "lucide-react";
 import type { IssueSummary } from "@silvic/contracts";
 
 import { failureMessage } from "./errors";
+import { useKeyLayer } from "./shortcuts";
 
 export function IssuePicker({
   projectId,
@@ -21,6 +22,9 @@ export function IssuePicker({
   const [issues, setIssues] = useState<readonly IssueSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [failure, setFailure] = useState<string>();
+
+  // Escape backs out of the search, not out of the dialog holding it.
+  useKeyLayer({ dismiss: open ? () => setOpen(false) : undefined });
 
   useEffect(() => {
     if (!open) return;

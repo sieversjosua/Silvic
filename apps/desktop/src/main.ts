@@ -90,6 +90,7 @@ import {
   waitForReadiness,
   readRecipe,
   mergeSnapshots,
+  withoutWorkspace,
   routeNameFor,
   runtimeStartResult,
   readRecipeSource,
@@ -216,7 +217,12 @@ if (!app.requestSingleInstanceLock()) {
     desktopUpdater = new DesktopUpdater({
       source: autoUpdater,
       currentVersion: app.getVersion(),
-      enabled: app.isPackaged && process.env.SILVIC_DISABLE_UPDATES !== "1",
+      // A locally packaged build ships without app-update.yml; checking would
+      // only ever produce an ENOENT, so it has no update channel at all.
+      enabled:
+        app.isPackaged &&
+        process.env.SILVIC_DISABLE_UPDATES !== "1" &&
+        existsSync(join(process.resourcesPath, "app-update.yml")),
       onState: (state) =>
         mainWindow?.webContents.send(ipcChannels.updateStateChanged, state),
     });
@@ -535,9 +541,19 @@ function registerIpc(): void {
       projectRoot: project.rootPath,
       stopCommand: (id) => supervisor.stop(workspace.path, id),
     });
-    // Deletion is authoritative, and the returned snapshot must keep connector
-    // state for every surviving workspace.
-    await refreshSnapshot(true);
+    // Deletion is authoritative, so the plot leaves the canvas as soon as its
+    // worktree is gone. Asking every connector again is worth doing and worth
+    // nobody's wait: it happens behind the answer and publishes itself.
+    const removed = results.some(
+      (step) => step.id === "worktree" && step.status === "done",
+    );
+    if (removed) {
+      publishSnapshot(
+        withoutWorkspace(latestSnapshot, workspace.path),
+        "replace",
+      );
+    }
+    void refreshSnapshot(true);
     return { results, snapshot: latestSnapshot };
   });
   ipcMain.handle(ipcChannels.recipeGet, async (event, projectId: unknown) => {
@@ -803,6 +819,7 @@ async function createEnvironment(
         plot,
         branch: request.branch,
         url,
+        port,
         ...(recipe.packageManager
           ? { packageManager: recipe.packageManager }
           : {}),
@@ -955,6 +972,7 @@ async function provisionPlot(
         plot,
         branch: workspace.git.branch,
         url: address.url,
+        port,
         ...(packageManager ? { packageManager } : {}),
       },
       {
@@ -1273,6 +1291,7 @@ async function startPlotCommand(path: string, id: string): Promise<void> {
         plot,
         branch: workspace.git.branch,
         url: address.url,
+        port,
         ...(recipe.packageManager
           ? { packageManager: recipe.packageManager }
           : {}),

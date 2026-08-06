@@ -6,7 +6,7 @@ import type {
   WorkspaceSnapshot,
 } from "@silvic/contracts";
 
-import { mergeSnapshots } from "./snapshot-merge";
+import { mergeSnapshots, withoutWorkspace } from "./snapshot-merge";
 
 const workspace = (
   path: string,
@@ -110,5 +110,44 @@ describe("mergeSnapshots", () => {
     expect(
       merged.projects[0]?.workspaces.filter((entry) => entry.isPrimary),
     ).toEqual([primary]);
+  });
+});
+
+describe("withoutWorkspace", () => {
+  const primary = workspace("/repos/like.photo", "main", true);
+  const torn = workspace(
+    "/plots/49_sievate_images",
+    "49_sievate_images",
+    false,
+  );
+  const kept = workspace("/plots/other", "other", false);
+  const snapshot: SilvicSnapshot = {
+    projects: [project("like.photo", primary.path, [primary, torn, kept])],
+    connectorFailures: [],
+    refreshedAt: "now",
+  };
+
+  it("drops the torn-down plot and leaves the rest of the project alone", () => {
+    const after = withoutWorkspace(snapshot, torn.path);
+
+    expect(after.projects[0]?.workspaces.map((entry) => entry.path)).toEqual([
+      primary.path,
+      kept.path,
+    ]);
+    expect(after.projects[0]?.name).toBe("like.photo");
+    expect(after.projects[0]?.branches).toEqual(snapshot.projects[0]?.branches);
+  });
+
+  it("recognises the same directory written another way", () => {
+    const after = withoutWorkspace(snapshot, "/plots/./49_sievate_images");
+
+    expect(after.projects[0]?.workspaces.map((entry) => entry.path)).toEqual([
+      primary.path,
+      kept.path,
+    ]);
+  });
+
+  it("changes nothing when the path belongs to no plot", () => {
+    expect(withoutWorkspace(snapshot, "/plots/elsewhere")).toEqual(snapshot);
   });
 });

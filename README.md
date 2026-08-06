@@ -37,6 +37,9 @@ See [docs/PLOTS.md](docs/PLOTS.md) for the model and the decisions behind it.
 
 - A deterministic grove canvas: recorded lineage solid, inferred lineage dashed,
   quiet plots folded into one stack, plots draggable with a retidy
+- A camera that stays where you left it: tearing a plot down rebalances the
+  grove, and the view follows the plot you were watching rather than sliding off
+  it, with a way back offered whenever every plot leaves the screen
 - Light and dark, following the system and switchable
 - GitHub pull requests and checks through your existing `gh` login
 - Convex deployments, localhost runtimes and Codex sessions surfaced per plot,
@@ -64,6 +67,10 @@ See [docs/PLOTS.md](docs/PLOTS.md) for the model and the decisions behind it.
 - A native Convex step that creates the isolated deployment and scoped deploy
   key, copies local variables, syncs server variables, rewrites plot URLs and
   pushes schema/functions without changing the repository's Convex dependency
+- An optional emulated WorkOS step: one recipe entry points the app's
+  `WORKOS_*` variables at a plot-local [`@workos/emulate`](https://github.com/workos/emulate)
+  instance, supervised like any other command — isolated auth per plot, no
+  real WorkOS account touched. Offered as a suggestion, never assumed
 - Stable per-plot addresses, so a URL registered with an identity provider keeps
   working across restarts
 - Named HTTPS addresses such as
@@ -81,8 +88,9 @@ See [docs/PLOTS.md](docs/PLOTS.md) for the model and the decisions behind it.
 ## What does not work yet
 
 - **Provider attachment is broader than provider provisioning.** Silvic can
-  detect, display, link and supervise common services, but Convex is currently
-  the only provider with a fully Silvic-owned isolated provisioning contract.
+  detect, display, link and supervise common services, but only Convex (a real
+  isolated deployment) and WorkOS (a local emulator) carry fully Silvic-owned
+  isolation contracts so far.
 - **Provider teardown is limited.** Silvic safely stops its own processes and
   can remove a worktree and branch, but Convex deployments still have to be
   removed in the provider dashboard because the CLI exposes no delete command.

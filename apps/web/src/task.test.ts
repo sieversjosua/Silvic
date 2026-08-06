@@ -5,7 +5,6 @@ import {
   branchForIssue,
   branchForPlotName,
   branchIsTaken,
-  canOpenCreatedPlot,
 } from "./task";
 
 describe("branchForPlotName", () => {
@@ -41,57 +40,6 @@ describe("branchForIssue", () => {
         assignees: [],
       }),
     ).toBe("issue/184-fix-heic-uploads-conversion");
-  });
-});
-
-describe("canOpenCreatedPlot", () => {
-  const successfulProvision = {
-    label: "Install dependencies",
-    command: "pnpm install",
-    exitCode: 0,
-    output: "",
-    durationMs: 12,
-  };
-
-  it("opens the harness after provisioning and preview readiness succeed", () => {
-    expect(
-      canOpenCreatedPlot({
-        provision: [successfulProvision],
-        runtime: { status: "started", durationMs: 50 },
-        readiness: { status: "ready", durationMs: 450 },
-      }),
-    ).toBe(true);
-  });
-
-  it("does not open when provisioning or preview readiness failed", () => {
-    expect(
-      canOpenCreatedPlot({
-        provision: [{ ...successfulProvision, exitCode: 1 }],
-        runtime: { status: "not-required", durationMs: 0 },
-        readiness: { status: "not-required", durationMs: 0 },
-      }),
-    ).toBe(false);
-    expect(
-      canOpenCreatedPlot({
-        provision: [successfulProvision],
-        runtime: { status: "started", durationMs: 50 },
-        readiness: { status: "failed", durationMs: 60_000 },
-      }),
-    ).toBe(false);
-  });
-
-  it("does not open when an auto-starting runtime failed", () => {
-    expect(
-      canOpenCreatedPlot({
-        provision: [successfulProvision],
-        runtime: {
-          status: "failed",
-          durationMs: 1_000,
-          detail: "convex exited during startup",
-        },
-        readiness: { status: "ready", durationMs: 450 },
-      }),
-    ).toBe(false);
   });
 });
 

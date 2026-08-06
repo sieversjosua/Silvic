@@ -8,10 +8,12 @@ import {
   ReactFlowProvider,
   useNodesState,
   useReactFlow,
+  useStore,
+  useStoreApi,
   type Edge,
   type Node,
   type NodeProps,
-  type Viewport,
+  type ReactFlowState,
 } from "@xyflow/react";
 import { Compass, Maximize2, Minus, Plus } from "lucide-react";
 
@@ -25,7 +27,14 @@ import type {
 } from "@silvic/contracts";
 
 import { substrate, type Appearance } from "./appearance";
-import { QUIET_FOLD_MIN, anyNodeInView, isQuiet, layout } from "./grove-layout";
+import {
+  QUIET_FOLD_MIN,
+  anyNodeInView,
+  isQuiet,
+  layout,
+  viewShift,
+  type Point,
+} from "./grove-layout";
 import { WorkspaceNode, type WorkspaceFlowNode } from "./PlotCard";
 import { cardRuntimeState } from "./state";
 
@@ -89,10 +98,20 @@ function GroveCanvas({
   const [showLegend, setShowLegend] = useState(true);
   const [showQuiet, setShowQuiet] = useState(false);
   const [menuPlotId, setMenuPlotId] = useState<string>();
-  const [lost, setLost] = useState(false);
-  const dragging = useRef(false);
-  const canvas = useRef<HTMLDivElement>(null);
-  const { zoomIn, zoomOut, fitView, getViewport } = useReactFlow();
+  const draggingId = useRef<string>(undefined);
+  const shown = useRef(new Map<string, Point>());
+  const { zoomIn, zoomOut, fitView, setViewport } = useReactFlow();
+  const store = useStoreApi();
+
+  // Being lost is a fact about the canvas, not an event to catch: derived from
+  // the viewport itself, every pan, zoom, resize and layout change answers the
+  // question again, however it was caused.
+  const lost = useStore(
+    useCallback(
+      (state: ReactFlowState) => nothingInSight(shown.current, state),
+      [],
+    ),
+  );
 
   useEffect(() => setNudges(readNudges(project.id)), [project.id]);
   useEffect(() => setShowQuiet(false), [project.id]);
@@ -172,35 +191,42 @@ function GroveCanvas({
   const foldable = quietTotal >= QUIET_FOLD_MIN;
 
   const [nodes, setNodes, onNodesChange] = useNodesState<GroveNode>([]);
-  useEffect(() => {
-    if (!dragging.current) setNodes(computed);
-  }, [computed, setNodes]);
-
-  // Panned into empty paper, every card out of sight: the way back appears in
-  // the middle of the canvas rather than hiding behind the fit icon.
-  const assessLost = useCallback(
-    (viewport: Viewport) => {
-      const element = canvas.current;
-      if (!element || nodes.length === 0) {
-        setLost(false);
-        return;
-      }
-      setLost(
-        !anyNodeInView(nodes, {
-          ...viewport,
-          width: element.clientWidth,
-          height: element.clientHeight,
-        }),
-      );
-    },
-    [nodes],
-  );
-  useEffect(() => assessLost(getViewport()), [assessLost, getViewport]);
 
   const comeBack = useCallback(() => {
     void fitView({ padding: 0.24, maxZoom: 1, duration: 320 });
-    setLost(false);
   }, [fitView]);
+
+  // A plot torn down rebalances the fan, so the cards that remain move. The
+  // camera moves with them: what the reader was watching stays where they left
+  // it, and the grove only refits when that subject is gone for good.
+  useEffect(() => {
+    if (draggingId.current !== undefined) {
+      // A card torn down mid-drag never reports its own drag end.
+      if (computed.some((node) => node.id === draggingId.current)) return;
+      draggingId.current = undefined;
+    }
+    const next = new Map(computed.map((node) => [node.id, node.position]));
+    const { transform, width, height } = store.getState();
+    const [x, y, zoom] = transform;
+    const shift = viewShift(shown.current, next, {
+      x,
+      y,
+      zoom,
+      width,
+      height,
+    });
+    shown.current = next;
+    setNodes(computed);
+    if (shift.kind === "follow") {
+      void setViewport({
+        x: x - shift.dx * zoom,
+        y: y - shift.dy * zoom,
+        zoom,
+      });
+    } else if (shift.kind === "fit") {
+      comeBack();
+    }
+  }, [computed, setNodes, store, setViewport, comeBack]);
 
   const edges = useMemo<Edge[]>(
     () =>
@@ -232,7 +258,7 @@ function GroveCanvas({
 
   const onNodeDragStop = useCallback(
     (_event: unknown, node: Node) => {
-      dragging.current = false;
+      draggingId.current = undefined;
       const anchor = tidy.placements.find(
         (placement) => placement.key === node.id,
       );
@@ -252,18 +278,17 @@ function GroveCanvas({
   const nudged = Object.keys(nudges).length;
 
   return (
-    <div className="grove" ref={canvas}>
+    <div className="grove">
       <ReactFlow
         nodes={nodes}
         edges={edges}
         nodeTypes={nodeTypes}
         onNodesChange={onNodesChange}
-        onNodeDragStart={() => {
-          dragging.current = true;
+        onNodeDragStart={(_event, node) => {
+          draggingId.current = node.id;
         }}
         onNodeDragStop={onNodeDragStop}
         onMoveStart={() => setMenuPlotId(undefined)}
-        onMoveEnd={(_event, viewport) => assessLost(viewport)}
         fitView
         fitViewOptions={{ padding: 0.24, maxZoom: 1 }}
         minZoom={0.3}
@@ -363,6 +388,30 @@ function GroveCanvas({
         )}
       </button>
     </div>
+  );
+}
+
+/**
+ * Panned into empty paper, every card out of sight: the way back appears in the
+ * middle of the canvas rather than hiding behind the fit icon. The cards come
+ * from what the canvas was last given rather than from React Flow's own store,
+ * which trails a frame behind a layout change and would flash the rescue during
+ * one.
+ */
+function nothingInSight(
+  cards: ReadonlyMap<string, Point>,
+  state: ReactFlowState,
+): boolean {
+  if (cards.size === 0 || state.width === 0 || state.height === 0) return false;
+  return !anyNodeInView(
+    [...cards.values()].map((position) => ({ position })),
+    {
+      x: state.transform[0],
+      y: state.transform[1],
+      zoom: state.transform[2],
+      width: state.width,
+      height: state.height,
+    },
   );
 }
 
