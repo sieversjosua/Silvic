@@ -35,6 +35,13 @@ git tag v0.1.1
 git push origin main v0.1.1
 ```
 
+If GitHub does not deliver the tag push event, retry the exact immutable tag
+without moving it:
+
+```bash
+gh workflow run release-macos.yml --ref v0.1.1
+```
+
 The tag must exactly match `apps/desktop/package.json`. GitHub Actions then:
 
 1. repeats the full source checks;
