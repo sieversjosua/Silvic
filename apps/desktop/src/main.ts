@@ -110,7 +110,7 @@ import {
 
 import { PlotProgressReporter } from "./plot-progress";
 import {
-  updateMenuPresentation,
+  updateMenuPresentations,
   type UpdateMenuAction,
 } from "./application-menu";
 import { DesktopUpdater } from "./updater";
@@ -679,21 +679,20 @@ function publishUpdateState(state: AppUpdateState): void {
 
 function installApplicationMenu(): void {
   if (process.platform !== "darwin" || !desktopUpdater) return;
-  const update = updateMenuPresentation(desktopUpdater.getState());
+  const updates = updateMenuPresentations(desktopUpdater.getState());
   const template: MenuItemConstructorOptions[] = [
     {
       label: app.name,
       submenu: [
         { role: "about" },
         { type: "separator" },
-        {
+        ...updates.map((update) => ({
           label: update.label,
           enabled: update.enabled,
           click: () => {
-            const current = updateMenuPresentation(knownUpdater().getState());
-            if (current.action) void performUpdateMenuAction(current.action);
+            if (update.action) void performUpdateMenuAction(update.action);
           },
-        },
+        })),
         { type: "separator" },
         { role: "services" },
         { type: "separator" },

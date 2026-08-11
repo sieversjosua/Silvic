@@ -1,6 +1,28 @@
 import { describe, expect, it } from "vitest";
 
-import { updateMenuPresentation } from "./application-menu";
+import {
+  updateMenuPresentation,
+  updateMenuPresentations,
+} from "./application-menu";
+
+describe("updateMenuPresentations", () => {
+  it("keeps Check for Updates visible when an update is available", () => {
+    expect(
+      updateMenuPresentations({
+        phase: "available",
+        currentVersion: "0.1.5",
+        availableVersion: "0.1.6",
+      }),
+    ).toEqual([
+      { label: "Check for Updates…", enabled: false },
+      {
+        label: "Download Update 0.1.6…",
+        enabled: true,
+        action: "download",
+      },
+    ]);
+  });
+});
 
 describe("updateMenuPresentation", () => {
   it.each([

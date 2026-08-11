@@ -56,3 +56,17 @@ export function updateMenuPresentation(
       return { label: "Check for Updates…", enabled: false };
   }
 }
+
+export function updateMenuPresentations(
+  state: AppUpdateState,
+): UpdateMenuPresentation[] {
+  const checkEnabled = ["idle", "current", "error"].includes(state.phase);
+  const check: UpdateMenuPresentation = {
+    label: "Check for Updates…",
+    enabled: checkEnabled,
+    ...(checkEnabled ? { action: "check" as const } : {}),
+  };
+
+  if (checkEnabled || state.phase === "unsupported") return [check];
+  return [check, updateMenuPresentation(state)];
+}
