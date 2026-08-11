@@ -13,7 +13,6 @@ import {
   type Edge,
   type Node,
   type NodeProps,
-  type ReactFlowState,
 } from "@xyflow/react";
 import { Compass, Maximize2, Minus, Plus } from "lucide-react";
 
@@ -102,16 +101,9 @@ function GroveCanvas({
   const shown = useRef(new Map<string, Point>());
   const { zoomIn, zoomOut, fitView, setViewport } = useReactFlow();
   const store = useStoreApi();
-
-  // Being lost is a fact about the canvas, not an event to catch: derived from
-  // the viewport itself, every pan, zoom, resize and layout change answers the
-  // question again, however it was caused.
-  const lost = useStore(
-    useCallback(
-      (state: ReactFlowState) => nothingInSight(shown.current, state),
-      [],
-    ),
-  );
+  const transform = useStore((state) => state.transform);
+  const flowWidth = useStore((state) => state.width);
+  const flowHeight = useStore((state) => state.height);
 
   useEffect(() => setNudges(readNudges(project.id)), [project.id]);
   useEffect(() => setShowQuiet(false), [project.id]);
@@ -186,6 +178,23 @@ function GroveCanvas({
     onSetDefaultHarness,
     onTeardown,
   ]);
+
+  // Subscribe to the viewport itself, then derive visibility during render.
+  // A selector that returned only this boolean could get stuck on its initial
+  // answer because the card positions lived in a ref outside React Flow's
+  // store. Every pan, zoom, resize and layout change now supplies an explicit
+  // input and therefore re-evaluates the way back.
+  const visibleCards = useMemo(
+    () => new Map(computed.map((node) => [node.id, node.position])),
+    [computed],
+  );
+  const lost = nothingInSight(visibleCards, {
+    x: transform[0],
+    y: transform[1],
+    zoom: transform[2],
+    width: flowWidth,
+    height: flowHeight,
+  });
 
   const quietTotal = project.workspaces.filter(isQuiet).length;
   const foldable = quietTotal >= QUIET_FOLD_MIN;
@@ -400,18 +409,18 @@ function GroveCanvas({
  */
 function nothingInSight(
   cards: ReadonlyMap<string, Point>,
-  state: ReactFlowState,
+  view: {
+    x: number;
+    y: number;
+    zoom: number;
+    width: number;
+    height: number;
+  },
 ): boolean {
-  if (cards.size === 0 || state.width === 0 || state.height === 0) return false;
+  if (cards.size === 0 || view.width === 0 || view.height === 0) return false;
   return !anyNodeInView(
     [...cards.values()].map((position) => ({ position })),
-    {
-      x: state.transform[0],
-      y: state.transform[1],
-      zoom: state.transform[2],
-      width: state.width,
-      height: state.height,
-    },
+    view,
   );
 }
 
