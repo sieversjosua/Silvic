@@ -80,6 +80,7 @@ export class ConvexProvisioner {
           ...provisionEnvironment(context),
           CONVEX_AGENT_MODE: "anonymous",
         },
+        outputLimit: 100_000,
         ...(options.signal ? { signal: options.signal } : {}),
       });
       for (const notice of convexUpdateNotices(result.stderr)) {

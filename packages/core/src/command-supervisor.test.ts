@@ -1,17 +1,11 @@
-import {
-  chmod,
-  mkdir,
-  mkdtemp,
-  realpath,
-  rm,
-  writeFile,
-} from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CommandSupervisor, needsProxy } from "./command-supervisor";
+import type { NamedRoutePublisher } from "./named-route";
 
 const temporaryDirectories: string[] = [];
 
@@ -38,6 +32,111 @@ describe("needsProxy", () => {
 });
 
 describe("CommandSupervisor", () => {
+  it("publishes a routed command's real listener before calling it running", async () => {
+    const logDirectory = await mkdtemp(join(tmpdir(), "silvic-supervisor-"));
+    temporaryDirectories.push(logDirectory);
+    let finishPublishing: ((value: { port: number }) => void) | undefined;
+    const routePublisher: NamedRoutePublisher = {
+      publish: vi.fn(
+        () =>
+          new Promise<{ port: number }>((resolve) => {
+            finishPublishing = resolve;
+          }),
+      ),
+      healthy: vi.fn().mockResolvedValue(true),
+      remove: vi.fn().mockResolvedValue(undefined),
+    };
+    const supervisor = new CommandSupervisor({
+      logDirectory,
+      onChange: () => {},
+      routePublisher,
+    });
+
+    await supervisor.start({
+      plotPath: logDirectory,
+      id: "web",
+      command: { run: "sleep 10", url: true },
+      routeName: "web-monorepo-plot",
+      environment: { PORT: "8691" },
+      canRoute: true,
+      detached: false,
+    });
+
+    expect(supervisor.list()[0]).toMatchObject({
+      status: "starting",
+      url: "https://web-monorepo-plot.localhost",
+    });
+    expect(routePublisher.publish).toHaveBeenCalledWith(
+      expect.objectContaining({
+        routeName: "web-monorepo-plot",
+        expectedPort: 8691,
+      }),
+    );
+
+    finishPublishing?.({ port: 4321 });
+    await vi.waitFor(() =>
+      expect(supervisor.list()[0]).toMatchObject({
+        status: "running",
+        targetPort: 4321,
+      }),
+    );
+    supervisor.stopAll();
+  });
+
+  it("announces an empty list when persisted commands are all stale", async () => {
+    const logDirectory = await mkdtemp(join(tmpdir(), "silvic-supervisor-"));
+    temporaryDirectories.push(logDirectory);
+    const onChange = vi.fn();
+    const supervisor = new CommandSupervisor({ logDirectory, onChange });
+
+    await supervisor.adopt([
+      {
+        plotPath: logDirectory,
+        id: "web",
+        status: "running",
+        processId: 999_999,
+        startedAt: new Date().toISOString(),
+      },
+    ]);
+
+    expect(onChange).toHaveBeenLastCalledWith([]);
+  });
+
+  it("republishes a named route when its healthy listener changes", async () => {
+    const logDirectory = await mkdtemp(join(tmpdir(), "silvic-supervisor-"));
+    temporaryDirectories.push(logDirectory);
+    const publish = vi
+      .fn<NamedRoutePublisher["publish"]>()
+      .mockResolvedValueOnce({ port: 4321 })
+      .mockResolvedValueOnce({ port: 4322 });
+    const routePublisher: NamedRoutePublisher = {
+      publish,
+      healthy: vi.fn().mockResolvedValueOnce(false).mockResolvedValue(true),
+      remove: vi.fn().mockResolvedValue(undefined),
+    };
+    const supervisor = new CommandSupervisor({
+      logDirectory,
+      onChange: () => {},
+      routePublisher,
+      routeHealthIntervalMs: 5,
+    });
+
+    await supervisor.start({
+      plotPath: logDirectory,
+      id: "web",
+      command: { run: "sleep 10", url: true },
+      routeName: "web-moving-listener",
+      environment: { PORT: "8691" },
+      canRoute: true,
+      detached: false,
+    });
+
+    await vi.waitFor(() => expect(supervisor.list()[0]?.targetPort).toBe(4322));
+    expect(publish).toHaveBeenCalledTimes(2);
+    expect(supervisor.list()[0]?.status).toBe("running");
+    supervisor.stopAll();
+  });
+
   it("exposes the stable port URL when named routing is disabled", async () => {
     const logDirectory = await mkdtemp(join(tmpdir(), "silvic-supervisor-"));
     temporaryDirectories.push(logDirectory);
@@ -182,20 +281,14 @@ describe("CommandSupervisor", () => {
     expect(supervisor.list()).toEqual([]);
   });
 
-  it("forgets a routed command stopped while its publisher is failing", async () => {
+  it("forgets a routed command stopped while its route is still publishing", async () => {
     const logDirectory = await mkdtemp(join(tmpdir(), "silvic-supervisor-"));
     temporaryDirectories.push(logDirectory);
-    const portless = join(logDirectory, "portless");
-    await writeFile(
-      portless,
-      [
-        "#!/bin/sh",
-        "trap 'exit 9' TERM",
-        "echo 'proxy is not running' >&2",
-        "sleep 10",
-      ].join("\n"),
-    );
-    await chmod(portless, 0o755);
+    const routePublisher: NamedRoutePublisher = {
+      publish: vi.fn(() => new Promise<{ port: number }>(() => undefined)),
+      healthy: vi.fn().mockResolvedValue(false),
+      remove: vi.fn().mockResolvedValue(undefined),
+    };
     let resolveStopped: (() => void) | undefined;
     const stopped = new Promise<void>((resolve) => {
       resolveStopped = resolve;
@@ -205,6 +298,7 @@ describe("CommandSupervisor", () => {
       onChange: (commands) => {
         if (commands.length === 0) resolveStopped?.();
       },
+      routePublisher,
     });
 
     await supervisor.start({
@@ -212,23 +306,15 @@ describe("CommandSupervisor", () => {
       id: "web",
       command: { run: "sleep 10", url: true, portless: true },
       routeName: "web-test",
-      environment: { PATH: `${logDirectory}:/bin:/usr/bin` },
+      environment: { PORT: "4321" },
       canRoute: true,
       detached: false,
     });
-    for (let attempt = 0; attempt < 50; attempt += 1) {
-      if ((await supervisor.output(logDirectory, "web")).includes("proxy")) {
-        break;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    }
-    expect(await supervisor.output(logDirectory, "web")).toContain(
-      "proxy is not running",
-    );
     supervisor.stopAll();
     await stopped;
 
     expect(supervisor.list()).toEqual([]);
+    expect(routePublisher.remove).toHaveBeenCalledWith("web-test");
   });
 
   it("escalates to SIGKILL when a stopped command ignores SIGTERM", async () => {
@@ -291,7 +377,7 @@ describe("CommandSupervisor", () => {
         if (commands.length === 0) resolveStopped?.();
       },
     });
-    reopened.adopt(original.list());
+    await reopened.adopt(original.list());
 
     reopened.stopAll();
     await stopped;

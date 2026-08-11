@@ -1109,58 +1109,6 @@ button {
   opacity: 0.28;
 }
 
-/*
- * A running plot traces its own outline. The animation is a slow rotation
- * rather than a pulse — a canvas of pulsing cards would be unusable — and it
- * rotates an element carrying a static gradient rather than animating the
- * gradient's angle: a transform runs on the compositor, while a changing
- * gradient would be re-rasterized on every frame and quietly drain the
- * battery for as long as anything runs.
- */
-.plot-sweep {
-  position: absolute;
-  inset: -1px;
-  z-index: -1;
-  overflow: hidden;
-  border-radius: var(--r-xl);
-  opacity: 0.85;
-  pointer-events: none;
-}
-
-/* A centered square wide enough to cover the card's diagonal at any angle. */
-.plot-sweep::before {
-  content: "";
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 420px;
-  height: 420px;
-  margin: -210px 0 0 -210px;
-  background: conic-gradient(
-    transparent 0deg,
-    var(--tone-active) 40deg,
-    transparent 110deg
-  );
-  animation: sweep 4s linear infinite;
-}
-
-@keyframes sweep {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .plot-sweep {
-    opacity: 0.35;
-  }
-
-  .plot-sweep::before {
-    animation: none;
-    background: var(--tone-active);
-  }
-}
-
 /* Registration marks, the way a plan drawing marks its trim corners. */
 .plot-ticks {
   --t: var(--accent);

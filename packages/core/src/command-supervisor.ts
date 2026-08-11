@@ -1,22 +1,35 @@
-import { execFileSync, spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { createWriteStream, type WriteStream } from "node:fs";
 import { mkdir, readFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
+import { promisify } from "node:util";
 
 import type { PlotCommand } from "@silvic/contracts";
 
 import { resolvedCommandPath } from "./command-runner";
+import {
+  PortlessRoutePublisher,
+  type NamedRoutePublisher,
+} from "./named-route";
 import { routes } from "./plot-address";
+
+const executeFile = promisify(execFile);
 
 export interface SupervisedCommand {
   /** The plot this runs in. */
   plotPath: string;
   /** The command's id in the recipe, `web` or `convex`. */
   id: string;
-  status: "running" | "stopping" | "stopped" | "failed";
+  status: "starting" | "running" | "stopping" | "stopped" | "failed";
   processId?: number;
   /** Where a serving command can be reached. */
   url?: string;
+  /** The Portless name Silvic owns independently from the runtime process. */
+  routeName?: string;
+  /** The responding listener currently published under the named URL. */
+  targetPort?: number;
+  /** The stable plot port offered to commands that honour PORT. */
+  expectedPort?: number;
   startedAt?: string;
   exitCode?: number;
   /** Why this is not what was asked for, when Silvic had to settle. */
@@ -49,6 +62,9 @@ export class CommandSupervisor {
   private readonly running = new Map<string, SupervisedCommand>();
   private readonly logs = new Map<string, WriteStream>();
   private readonly stopping = new Set<string>();
+  private readonly forcedFailures = new Map<string, string>();
+  private readonly routeHealthTimers = new Map<string, NodeJS.Timeout>();
+  private readonly routePublisher: NamedRoutePublisher;
 
   constructor(
     private readonly options: {
@@ -56,8 +72,13 @@ export class CommandSupervisor {
       onChange: (commands: readonly SupervisedCommand[]) => void;
       /** How many 100ms glances Stop allows before reaching for SIGKILL. */
       stopPatience?: number;
+      routePublisher?: NamedRoutePublisher;
+      routeHealthIntervalMs?: number;
     },
-  ) {}
+  ) {
+    this.routePublisher =
+      options.routePublisher ?? new PortlessRoutePublisher();
+  }
 
   list(): readonly SupervisedCommand[] {
     return [...this.running.values()];
@@ -69,14 +90,38 @@ export class CommandSupervisor {
    * start them again — the worst of both, since it neither owns them nor says
    * they exist.
    */
-  adopt(entries: readonly SupervisedCommand[]): void {
-    for (const entry of entries) {
-      if (entry.status !== "running" || entry.processId === undefined) continue;
-      if (!stillRunning(entry.processId, entry.startedAt)) continue;
+  async adopt(entries: readonly SupervisedCommand[]): Promise<void> {
+    const live = await Promise.all(
+      entries.map(async (entry) => ({
+        entry,
+        running:
+          (entry.status === "running" || entry.status === "starting") &&
+          entry.processId !== undefined &&
+          (await stillRunning(entry.processId, entry.startedAt)),
+      })),
+    );
+    for (const { entry, running } of live) {
+      if (
+        (entry.status !== "running" && entry.status !== "starting") ||
+        entry.processId === undefined
+      ) {
+        continue;
+      }
+      if (!running) continue;
       const key = keyFor(entry.plotPath, entry.id);
       this.running.set(key, entry);
+      if (entry.routeName && entry.targetPort) {
+        void this.reconcileAdoptedRoute(key, {
+          ...entry,
+          processId: entry.processId,
+          routeName: entry.routeName,
+          targetPort: entry.targetPort,
+        });
+      }
     }
-    if (this.running.size > 0) this.announce();
+    // This also clears stale persisted entries when none of their processes
+    // survived. Silence here would leave the same ghosts to be adopted again.
+    this.announce();
   }
 
   async start(request: StartRequest): Promise<void> {
@@ -84,7 +129,13 @@ export class CommandSupervisor {
     const status = this.running.get(key)?.status;
     // A stopping command's group is still dying and still holds its port;
     // starting into that would race the corpse for the address.
-    if (status === "running" || status === "stopping") return;
+    if (
+      status === "starting" ||
+      status === "running" ||
+      status === "stopping"
+    ) {
+      return;
+    }
     const named = routes(request.command);
     if (named && !request.canRoute) {
       this.refuse(request, proxyAdvice);
@@ -100,35 +151,39 @@ export class CommandSupervisor {
   ): Promise<void> {
     const key = keyFor(request.plotPath, request.id);
     const log = await this.openLog(key, advice !== undefined);
-    const startedAt = Date.now();
     let recent = "";
-    const child = spawn(
-      routed ? "portless" : "sh",
-      routed
-        ? [request.routeName, "sh", "-lc", request.command.run]
-        : ["-lc", request.command.run],
-      {
-        cwd: commandWorkingDirectory(request.plotPath, request.command.cwd),
-        env: {
-          ...process.env,
-          PATH: resolvedCommandPath(),
-          ...request.environment,
-          ...request.command.env,
-        },
-        // Its own group, so stopping reaches everything it started.
-        detached: true,
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    );
+    const namedUrl = `https://${request.routeName}.localhost`;
+    const environment: NodeJS.ProcessEnv = {
+      ...process.env,
+      PATH: resolvedCommandPath(),
+      ...request.environment,
+      ...(routed ? { HOST: "127.0.0.1", PORTLESS_URL: namedUrl } : {}),
+      ...request.command.env,
+    };
+    const child = spawn("sh", ["-lc", request.command.run], {
+      cwd: commandWorkingDirectory(request.plotPath, request.command.cwd),
+      env: environment,
+      // Its own group, so stopping reaches everything it started.
+      detached: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    const expectedPort = Number(environment["PORT"]);
 
     const entry: SupervisedCommand = {
       plotPath: request.plotPath,
       id: request.id,
-      status: "running",
+      status: routed ? "starting" : "running",
       startedAt: new Date().toISOString(),
       ...(child.pid === undefined ? {} : { processId: child.pid }),
       ...(routed
-        ? { url: `https://${request.routeName}.localhost` }
+        ? {
+            url: namedUrl,
+            routeName: request.routeName,
+            ...(Number.isSafeInteger(expectedPort) && expectedPort > 0
+              ? { expectedPort }
+              : {}),
+          }
         : request.command.url === true && request.environment["SILVIC_URL"]
           ? { url: request.environment["SILVIC_URL"] }
           : {}),
@@ -148,22 +203,198 @@ export class CommandSupervisor {
       this.settle(key, 1);
     });
     child.once("close", (exitCode) => {
-      // A publisher that cannot reach its proxy quits at once and says so.
-      // Running the command anyway, on the port the plot was given, is better
-      // than a plot with nothing in it — as long as it says what it settled
-      // for and what would fix it.
-      if (routed && Date.now() - startedAt < 8_000 && needsProxy(recent)) {
-        const entry = this.running.get(key);
-        if (entry) {
-          this.running.set(key, { ...entry, advice: proxyAdvice });
-          this.announce();
-        }
-        this.settle(key, exitCode || 1);
-        return;
-      }
       this.settle(key, exitCode ?? 0);
     });
+    if (routed && child.pid !== undefined) {
+      if (!Number.isSafeInteger(expectedPort) || expectedPort <= 0) {
+        this.failRoutedCommand(
+          key,
+          child.pid,
+          "A named preview needs a valid PORT to begin listener discovery.",
+        );
+      } else {
+        void this.bindRoute({
+          key,
+          processId: child.pid,
+          routeName: request.routeName,
+          expectedPort,
+          output: () => recent,
+        });
+      }
+    }
     if (request.detached) child.unref();
+  }
+
+  private async bindRoute({
+    key,
+    processId,
+    routeName,
+    expectedPort,
+    output,
+    timeoutMs,
+  }: {
+    key: string;
+    processId: number;
+    routeName: string;
+    expectedPort: number;
+    output(): string;
+    timeoutMs?: number;
+  }): Promise<void> {
+    try {
+      const published = await this.routePublisher.publish({
+        routeName,
+        processId,
+        expectedPort,
+        output,
+        ...(timeoutMs === undefined ? {} : { timeoutMs }),
+      });
+      const entry = this.running.get(key);
+      if (
+        !entry ||
+        entry.processId !== processId ||
+        entry.status === "stopping" ||
+        entry.status === "failed"
+      ) {
+        return;
+      }
+      const { advice: _recovered, ...healthy } = entry;
+      this.running.set(key, {
+        ...healthy,
+        status: "running",
+        targetPort: published.port,
+      });
+      this.announce();
+      this.scheduleRouteHealth(key, processId);
+    } catch (error) {
+      const entry = this.running.get(key);
+      if (!entry || entry.processId !== processId) return;
+      this.failRoutedCommand(
+        key,
+        processId,
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  }
+
+  private async reconcileAdoptedRoute(
+    key: string,
+    entry: SupervisedCommand & {
+      processId: number;
+      routeName: string;
+      targetPort: number;
+    },
+  ): Promise<void> {
+    if (
+      await this.routePublisher.healthy({
+        routeName: entry.routeName,
+        port: entry.targetPort,
+      })
+    ) {
+      const current = this.running.get(key);
+      if (!current || current.processId !== entry.processId) return;
+      this.running.set(key, { ...current, status: "running" });
+      this.announce();
+      this.scheduleRouteHealth(key, entry.processId);
+      return;
+    }
+
+    const current = this.running.get(key);
+    if (!current || current.processId !== entry.processId) return;
+    this.running.set(key, {
+      ...current,
+      status: "starting",
+      advice: "The preview route was lost; Silvic is reconnecting it.",
+    });
+    this.announce();
+    const output = await this.output(entry.plotPath, entry.id);
+    await this.bindRoute({
+      key,
+      processId: entry.processId,
+      routeName: entry.routeName,
+      expectedPort: entry.expectedPort ?? entry.targetPort,
+      output: () => output,
+      timeoutMs: 15_000,
+    });
+  }
+
+  private scheduleRouteHealth(key: string, processId: number): void {
+    this.clearRouteHealth(key);
+    const timer = setTimeout(() => {
+      void this.inspectRouteHealth(key, processId);
+    }, this.options.routeHealthIntervalMs ?? 10_000);
+    timer.unref();
+    this.routeHealthTimers.set(key, timer);
+  }
+
+  private async inspectRouteHealth(
+    key: string,
+    processId: number,
+  ): Promise<void> {
+    const entry = this.running.get(key);
+    if (
+      !entry ||
+      entry.processId !== processId ||
+      entry.status !== "running" ||
+      !entry.routeName ||
+      !entry.targetPort
+    ) {
+      return;
+    }
+    if (
+      await this.routePublisher.healthy({
+        routeName: entry.routeName,
+        port: entry.targetPort,
+      })
+    ) {
+      this.scheduleRouteHealth(key, processId);
+      return;
+    }
+
+    this.running.set(key, {
+      ...entry,
+      status: "starting",
+      advice: "The preview stopped responding; Silvic is repairing its route.",
+    });
+    this.announce();
+    const output = await this.output(entry.plotPath, entry.id);
+    await this.bindRoute({
+      key,
+      processId,
+      routeName: entry.routeName,
+      expectedPort: entry.expectedPort ?? entry.targetPort,
+      output: () => output,
+      timeoutMs: 15_000,
+    });
+  }
+
+  private failRoutedCommand(
+    key: string,
+    processId: number,
+    advice: string,
+  ): void {
+    const entry = this.running.get(key);
+    if (!entry || entry.processId !== processId) return;
+    this.forcedFailures.set(key, advice);
+    this.clearRouteHealth(key);
+    this.running.set(key, { ...entry, status: "stopping", advice });
+    this.announce();
+    try {
+      process.kill(-processId, "SIGTERM");
+      this.ensureStopped(key, processId);
+    } catch {
+      this.settle(key, 1);
+    }
+  }
+
+  private clearRouteHealth(key: string): void {
+    const timer = this.routeHealthTimers.get(key);
+    if (timer) clearTimeout(timer);
+    this.routeHealthTimers.delete(key);
+  }
+
+  private removeRoute(key: string, entry: SupervisedCommand): void {
+    this.clearRouteHealth(key);
+    if (entry.routeName) void this.routePublisher.remove(entry.routeName);
   }
 
   private refuse(request: StartRequest, advice: string): void {
@@ -188,6 +419,7 @@ export class CommandSupervisor {
     const entry = this.running.get(key);
     if (!entry?.processId || entry.status === "stopping") return;
     this.stopping.add(key);
+    this.removeRoute(key, entry);
     try {
       process.kill(-entry.processId, "SIGTERM");
       // Dying can take seconds. Saying "stopping" out loud is what separates
@@ -206,7 +438,9 @@ export class CommandSupervisor {
 
   stopAll(): void {
     for (const entry of this.running.values()) {
-      if (entry.status === "running") this.stop(entry.plotPath, entry.id);
+      if (entry.status === "starting" || entry.status === "running") {
+        this.stop(entry.plotPath, entry.id);
+      }
     }
   }
 
@@ -226,6 +460,23 @@ export class CommandSupervisor {
   private settle(key: string, exitCode: number): void {
     const entry = this.running.get(key);
     if (!entry) return;
+    this.removeRoute(key, entry);
+    const forcedFailure = this.forcedFailures.get(key);
+    if (forcedFailure) {
+      this.forcedFailures.delete(key);
+      this.stopping.delete(key);
+      const { processId: _ended, ...rest } = entry;
+      this.running.set(key, {
+        ...rest,
+        status: "failed",
+        exitCode: exitCode || 1,
+        advice: forcedFailure,
+      });
+      this.logs.get(key)?.end();
+      this.logs.delete(key);
+      this.announce();
+      return;
+    }
     const wasStopped = this.stopping.delete(key);
     if (exitCode === 0 || wasStopped) {
       this.running.delete(key);
@@ -254,24 +505,33 @@ export class CommandSupervisor {
    * holding the pipes — the group is swept for that survivor too.
    */
   private ensureStopped(key: string, processId: number, attempt = 0): void {
+    const delay = Math.min(250 * 2 ** attempt, 1_000);
     setTimeout(() => {
-      const entry = this.running.get(key);
-      if (!entry || entry.processId !== processId) return;
-      const patience = this.options.stopPatience ?? 50;
-      if (
-        !stillRunning(processId, entry.startedAt) ||
-        attempt >= patience - 1
-      ) {
-        try {
-          process.kill(-processId, "SIGKILL");
-        } catch {
-          // The group is empty, which is the state being asked for.
-        }
-        this.settle(key, 0);
-        return;
+      void this.inspectStopped(key, processId, attempt);
+    }, delay);
+  }
+
+  private async inspectStopped(
+    key: string,
+    processId: number,
+    attempt: number,
+  ): Promise<void> {
+    const entry = this.running.get(key);
+    if (!entry || entry.processId !== processId) return;
+    const patience = this.options.stopPatience ?? 4;
+    if (
+      !(await stillRunning(processId, entry.startedAt)) ||
+      attempt >= patience - 1
+    ) {
+      try {
+        process.kill(-processId, "SIGKILL");
+      } catch {
+        // The group is empty, which is the state being asked for.
       }
-      this.ensureStopped(key, processId, attempt + 1);
-    }, 100);
+      this.settle(key, 0);
+      return;
+    }
+    this.ensureStopped(key, processId, attempt + 1);
   }
 
   private announce(): void {
@@ -329,16 +589,17 @@ function commandWorkingDirectory(
  * dev"` replaces itself with what it was told to run, so what stands under the
  * id afterwards bears no resemblance to what was started.
  */
-function stillRunning(
+async function stillRunning(
   processId: number,
   startedAt: string | undefined,
-): boolean {
+): Promise<boolean> {
   try {
-    const elapsed = execFileSync(
+    const { stdout } = await executeFile(
       "ps",
       ["-p", String(processId), "-o", "etime="],
       { encoding: "utf8", timeout: 2_000 },
-    ).trim();
+    );
+    const elapsed = stdout.trim();
     if (!elapsed) return false;
     if (!startedAt) return true;
     const began = Date.now() - elapsedSeconds(elapsed) * 1_000;

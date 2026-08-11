@@ -1,6 +1,9 @@
-import { spawn, spawnSync } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { delimiter, join } from "node:path";
 import { homedir } from "node:os";
+import { promisify } from "node:util";
+
+const executeFile = promisify(execFile);
 
 export interface CommandRequest {
   executable: string;
@@ -15,6 +18,8 @@ export interface CommandRequest {
    * a long-running command moving rather than a frozen interface.
    */
   onOutput?: (chunk: string) => void;
+  /** Maximum buffered bytes per stdout/stderr stream. */
+  outputLimit?: number;
 }
 
 export interface CommandResult {
@@ -44,15 +49,15 @@ export class LocalCommandRunner implements CommandRunner {
           "pipe",
         ],
       });
-      const stdout: Buffer[] = [];
-      const stderr: Buffer[] = [];
+      const stdout = new BoundedBuffer(request.outputLimit ?? 5_000_000);
+      const stderr = new BoundedBuffer(request.outputLimit ?? 5_000_000);
 
       child.stdout?.on("data", (chunk: Buffer) => {
-        stdout.push(chunk);
+        stdout.append(chunk);
         request.onOutput?.(chunk.toString("utf8"));
       });
       child.stderr?.on("data", (chunk: Buffer) => {
-        stderr.push(chunk);
+        stderr.append(chunk);
         request.onOutput?.(chunk.toString("utf8"));
       });
       if (request.input !== undefined) child.stdin?.end(request.input);
@@ -60,8 +65,8 @@ export class LocalCommandRunner implements CommandRunner {
       child.once("close", (exitCode) => {
         resolve({
           exitCode: exitCode ?? -1,
-          stdout: Buffer.concat(stdout).toString("utf8"),
-          stderr: Buffer.concat(stderr).toString("utf8"),
+          stdout: stdout.toString(),
+          stderr: stderr.toString(),
         });
       });
     });
@@ -69,25 +74,77 @@ export class LocalCommandRunner implements CommandRunner {
 }
 
 let cachedCommandPath: string | undefined;
+let commandPathPrime: Promise<void> | undefined;
 
-export function resolvedCommandPath(): string {
-  if (cachedCommandPath) return cachedCommandPath;
+export function primeResolvedCommandPath(): Promise<void> {
+  if (commandPathPrime) return commandPathPrime;
   const marker = "__SILVIC_PATH__";
-  const shell = spawnSync(
+  commandPathPrime = executeFile(
     "/bin/zsh",
     ["-ilc", `printf '\\n${marker}%s\\n' \"$PATH\"`],
-    {
-      encoding: "utf8",
-      timeout: 5_000,
-    },
-  );
-  const markerIndex = shell.stdout?.lastIndexOf(marker) ?? -1;
-  const loginPath =
-    markerIndex >= 0
-      ? shell.stdout.slice(markerIndex + marker.length).split(/\r?\n/, 1)[0]
-      : undefined;
-  cachedCommandPath = commandPath(loginPath ?? process.env.PATH);
-  return cachedCommandPath;
+    { encoding: "utf8", timeout: 5_000 },
+  )
+    .then(({ stdout }) => {
+      const markerIndex = stdout.lastIndexOf(marker);
+      const loginPath =
+        markerIndex >= 0
+          ? stdout.slice(markerIndex + marker.length).split(/\r?\n/, 1)[0]
+          : undefined;
+      cachedCommandPath = commandPath(loginPath ?? process.env.PATH);
+    })
+    .catch(() => {
+      cachedCommandPath = commandPath(process.env.PATH);
+    });
+  return commandPathPrime;
+}
+
+export function resolvedCommandPath(): string {
+  return cachedCommandPath ?? commandPath(process.env.PATH);
+}
+
+class BoundedBuffer {
+  private readonly head: Buffer[] = [];
+  private readonly tail: Buffer[] = [];
+  private headBytes = 0;
+  private tailBytes = 0;
+  private totalBytes = 0;
+
+  constructor(private readonly limit: number) {}
+
+  append(chunk: Buffer): void {
+    this.totalBytes += chunk.length;
+    const headLimit = Math.floor(this.limit / 2);
+    const remainingHead = Math.max(0, headLimit - this.headBytes);
+    if (remainingHead > 0) {
+      const first = chunk.subarray(0, remainingHead);
+      this.head.push(first);
+      this.headBytes += first.length;
+      chunk = chunk.subarray(first.length);
+    }
+    if (chunk.length === 0) return;
+    this.tail.push(chunk);
+    this.tailBytes += chunk.length;
+    const tailLimit = this.limit - headLimit;
+    while (this.tailBytes > tailLimit && this.tail.length > 0) {
+      const first = this.tail[0]!;
+      const overflow = this.tailBytes - tailLimit;
+      if (first.length <= overflow) {
+        this.tail.shift();
+        this.tailBytes -= first.length;
+      } else {
+        this.tail[0] = first.subarray(overflow);
+        this.tailBytes -= overflow;
+      }
+    }
+  }
+
+  toString(): string {
+    const marker =
+      this.totalBytes > this.limit
+        ? Buffer.from("\n… output truncated …\n", "utf8")
+        : Buffer.alloc(0);
+    return Buffer.concat([...this.head, marker, ...this.tail]).toString("utf8");
+  }
 }
 
 function commandPath(existing: string | undefined): string {

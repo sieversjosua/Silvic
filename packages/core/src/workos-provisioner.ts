@@ -83,6 +83,7 @@ export class WorkosProvisioner {
       ],
       cwd: context.root,
       environment: provisionEnvironment(context),
+      outputLimit: 100_000,
       ...(options.signal ? { signal: options.signal } : {}),
     });
     if (prepared.exitCode !== 0) {

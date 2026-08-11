@@ -139,6 +139,25 @@ describe("plotResources", () => {
     );
   });
 
+  it("withholds the preview URL until its named route is healthy", () => {
+    const [web] = plotResources({
+      workspace,
+      commands: { web: { run: "bun run dev", url: true } },
+      processes: [
+        {
+          plotPath: workspace.path,
+          id: "web",
+          status: "starting",
+          url: "https://web-heic-app.localhost",
+        },
+      ],
+      declared: {},
+    });
+
+    expect(web).toMatchObject({ state: "waiting" });
+    expect(web).not.toHaveProperty("url");
+  });
+
   it("keeps coding sessions out of the provider resource list", () => {
     const resources = plotResources({
       workspace: {

@@ -11,16 +11,31 @@ import {
 } from "./command-supervisor";
 
 const directories: string[] = [];
+const namedRoutes: string[] = [];
+const extraPorts: number[] = [];
 
 afterAll(async () => {
   // Whatever this test started is detached, so it outlives the runner unless
   // it is ended here.
   try {
-    execFileSync("sh", ["-lc", `lsof -ti :${port} | xargs -r kill -9`], {
-      stdio: "ignore",
-    });
+    for (const cleanupPort of [port, ...extraPorts]) {
+      execFileSync(
+        "sh",
+        ["-lc", `lsof -ti :${cleanupPort} | xargs -r kill -9`],
+        { stdio: "ignore" },
+      );
+    }
   } catch {
     // Nothing was listening, which is the state being asked for.
+  }
+  for (const routeName of namedRoutes) {
+    try {
+      execFileSync("portless", ["alias", "--remove", routeName], {
+        stdio: "ignore",
+      });
+    } catch {
+      // A successfully stopped supervisor has already removed it.
+    }
   }
   await Promise.all(
     directories
@@ -97,7 +112,7 @@ it("starts a real command, stops its whole group, and is taken back", async () =
       adoptedAnnounce = processes;
     },
   });
-  reopened.adopt(supervisor.list());
+  await reopened.adopt(supervisor.list());
   expect(reopened.list()[0]?.status).toBe("running");
   expect(adoptedAnnounce).toHaveLength(1);
 
@@ -106,7 +121,7 @@ it("starts a real command, stops its whole group, and is taken back", async () =
     logDirectory: logs,
     onChange: () => {},
   });
-  stale.adopt([
+  await stale.adopt([
     {
       ...(supervisor.list()[0] as SupervisedCommand),
       // The same id, but claiming to have begun last week.
@@ -128,4 +143,78 @@ it("starts a real command, stops its whole group, and is taken back", async () =
     encoding: "utf8",
   });
   expect(listeners.trim()).toBe("0");
+}, 60_000);
+
+it("publishes the real monorepo listener when the command ignores PORT", async () => {
+  const plot = await mkdtemp(join(tmpdir(), "silvic-routed-live-"));
+  const logs = await mkdtemp(join(tmpdir(), "silvic-routed-logs-"));
+  directories.push(plot, logs);
+  const actualPort = 5_200 + Math.floor(Math.random() * 200);
+  const offeredPort = actualPort + 1_000;
+  extraPorts.push(actualPort, offeredPort);
+  const routeName = `silvic-solid-${process.pid}-${actualPort}`;
+  namedRoutes.push(routeName);
+  const supervisor = new CommandSupervisor({
+    logDirectory: logs,
+    onChange: () => undefined,
+    routeHealthIntervalMs: 500,
+  });
+
+  await supervisor.start({
+    plotPath: plot,
+    id: "web",
+    command: {
+      run: [
+        "node -e",
+        '\'require("http").createServer((request, response) => {',
+        'response.writeHead(200, {"content-type": "text/html"});',
+        'response.end("<h1>Silvic route is live</h1>");',
+        '}).listen(Number(process.env.ACTUAL_PORT), "127.0.0.1")\'',
+      ].join(" "),
+      url: true,
+    },
+    routeName,
+    environment: {
+      PORT: String(offeredPort),
+      ACTUAL_PORT: String(actualPort),
+    },
+    canRoute: true,
+    detached: true,
+  });
+
+  expect(supervisor.list()[0]?.status).toBe("starting");
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    if (supervisor.list()[0]?.status === "running") break;
+    await settle(100);
+  }
+  expect(supervisor.list()[0]).toMatchObject({
+    status: "running",
+    expectedPort: offeredPort,
+    targetPort: actualPort,
+    url: `https://${routeName}.localhost`,
+  });
+
+  const served = execFileSync(
+    "curl",
+    [
+      "-ksS",
+      "-o",
+      "/dev/null",
+      "-w",
+      "%{http_code}",
+      `https://${routeName}.localhost/`,
+    ],
+    { encoding: "utf8" },
+  );
+  expect(served.trim()).toBe("200");
+
+  supervisor.stop(plot, "web");
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    if (supervisor.list().length === 0) break;
+    await settle(100);
+  }
+  expect(supervisor.list()).toEqual([]);
+  expect(
+    execFileSync("portless", ["list"], { encoding: "utf8" }),
+  ).not.toContain(routeName);
 }, 60_000);

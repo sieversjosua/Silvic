@@ -7,6 +7,7 @@ export * from "./detect";
 export * from "./environment-files";
 export * from "./environment-service";
 export * from "./git";
+export * from "./named-route";
 export * from "./plot-address";
 export * from "./ports";
 export * from "./project-service";

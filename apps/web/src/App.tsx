@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import {
   AlertTriangle,
   Bot,
@@ -63,6 +64,7 @@ import { RecipeDialog } from "./RecipeDialog";
 import { TeardownDialog } from "./TeardownDialog";
 import { AppUpdater } from "./Updater";
 import {
+  cardRuntimeState,
   localChangeCount,
   locationLabel,
   projectTone,
@@ -105,7 +107,28 @@ export function App() {
     selectWorkspace,
     processes,
     reportFailure,
-  } = useSilvic();
+  } = useSilvic(
+    useShallow((state) => ({
+      snapshot: state.snapshot,
+      roots: state.roots,
+      activeProjectIds: state.activeProjectIds,
+      selectedProjectId: state.selectedProjectId,
+      selectedWorkspaceId: state.selectedWorkspaceId,
+      loading: state.loading,
+      error: state.error,
+      initialize: state.initialize,
+      refresh: state.refresh,
+      addRoot: state.addRoot,
+      setProjectActive: state.setProjectActive,
+      defaultHarness: state.defaultHarness,
+      setDefaultHarness: state.setDefaultHarness,
+      createEnvironment: state.createEnvironment,
+      selectProject: state.selectProject,
+      selectWorkspace: state.selectWorkspace,
+      processes: state.processes,
+      reportFailure: state.reportFailure,
+    })),
+  );
   const { appearance, preference, setPreference } = useAppearance();
   const [query, setQuery] = useState("");
   const [menuProjectId, setMenuProjectId] = useState<string>();
@@ -117,16 +140,20 @@ export function App() {
     useState<WorkspaceSnapshot>();
 
   useEffect(() => {
+    let current = true;
     let dispose: () => void = () => {};
     void initialize().then((cleanup) => {
-      dispose = cleanup;
+      if (current) dispose = cleanup;
+      else cleanup();
     });
-    return () => dispose();
+    return () => {
+      current = false;
+      dispose();
+    };
   }, [initialize]);
 
-  // Freshness is for whoever is looking. A hidden or occluded window stops
-  // polling entirely — every sweep spawns git and gh across all workspaces —
-  // and catches up the moment it comes back.
+  // Local filesystem changes are event-driven in the main process. Remote
+  // observations reconcile infrequently and only while somebody can see them.
   useEffect(() => {
     let interval: number | undefined;
     const stop = () => {
@@ -135,23 +162,30 @@ export function App() {
     };
     const start = () => {
       stop();
-      interval = window.setInterval(() => void refresh(), 30_000);
+      interval = window.setInterval(
+        () => void window.silvic.refreshObservations(),
+        5 * 60_000,
+      );
     };
     const onVisibility = () => {
       if (document.hidden) {
         stop();
+        void window.silvic.setRendererVisible(false);
       } else {
-        void refresh();
+        void window.silvic.setRendererVisible(true);
+        void window.silvic.refreshObservations();
         start();
       }
     };
+    void window.silvic.setRendererVisible(!document.hidden);
     if (!document.hidden) start();
     document.addEventListener("visibilitychange", onVisibility);
     return () => {
       stop();
+      void window.silvic.setRendererVisible(false);
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [refresh]);
+  }, []);
 
   const activeProjects = snapshot.projects.filter((candidate) =>
     activeProjectIds.includes(candidate.id),
@@ -214,7 +248,7 @@ export function App() {
     return () => {
       current = false;
     };
-  }, [project?.id, project]);
+  }, [project?.id]);
 
   return (
     <main className="shell">
@@ -830,7 +864,10 @@ function WorkspaceInspector({
   onProvision(): void;
 }) {
   const [openMenu, setOpenMenu] = useState(false);
-  const state = workspaceState(workspace);
+  const runtimeState = cardRuntimeState({ workspace, commands, processes });
+  const state = runtimeState
+    ? { label: runtimeState.label, tone: runtimeState.tone }
+    : workspaceState(workspace);
   const changes = localChangeCount(workspace);
   const grouped = useMemo(
     () =>
@@ -848,7 +885,10 @@ function WorkspaceInspector({
     [workspace, commands, processes, declaredResources],
   );
   const preview = resources.find(
-    (resource) => resource.provider === "web" && resource.url,
+    (resource) =>
+      resource.provider === "web" &&
+      resource.state === "active" &&
+      resource.url,
   )?.url;
   const runtimeResources = resources.filter((resource) =>
     ["runtime", "agent"].includes(resource.kind),
@@ -1110,6 +1150,7 @@ function PlotResourceRow({
     (process) =>
       process.plotPath === workspace.path && process.id === resource.commandId,
   )?.status;
+  const starting = processStatus === "starting";
   const running = processStatus === "running";
   const stopping = processStatus === "stopping";
   const open = (url: string) =>
@@ -1123,7 +1164,7 @@ function PlotResourceRow({
     setFailure(undefined);
     const request = { path: workspace.path, id };
     void (
-      running
+      starting || running
         ? window.silvic.stopPlotCommand(request)
         : window.silvic.startPlotCommand(request)
     )
@@ -1174,12 +1215,24 @@ function PlotResourceRow({
           {resource.commandId && (
             <button
               type="button"
-              aria-label={`${stopping ? "Stopping" : running ? "Stop" : "Start"} ${resource.label}`}
-              title={stopping ? "Stopping…" : running ? "Stop" : "Start"}
+              aria-label={`${stopping ? "Stopping" : starting ? "Stop starting" : running ? "Stop" : "Start"} ${resource.label}`}
+              title={
+                stopping
+                  ? "Stopping…"
+                  : starting
+                    ? "Starting… · click to stop"
+                    : running
+                      ? "Stop"
+                      : "Start"
+              }
               onClick={act}
               disabled={working || stopping}
             >
-              {running || stopping ? <Square size={10} /> : <Play size={10} />}
+              {starting || running || stopping ? (
+                <Square size={10} />
+              ) : (
+                <Play size={10} />
+              )}
             </button>
           )}
         </div>

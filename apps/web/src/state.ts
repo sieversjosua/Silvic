@@ -129,13 +129,26 @@ export function cardRuntimeState({
       .map((process) => [process.id, process]),
   );
   const running = ids.filter((id) => byId.get(id)?.status === "running");
-  const missing = ids.filter((id) => !running.includes(id));
+  const starting = ids.filter((id) => byId.get(id)?.status === "starting");
+  const active = ids.filter(
+    (id) =>
+      byId.get(id)?.status === "starting" || byId.get(id)?.status === "running",
+  );
+  const missing = ids.filter((id) => !active.includes(id));
   const failed = missing.some((id) => byId.get(id)?.status === "failed");
 
   // A stop in progress is its own state, not a lie about running: the card
   // says so and offers nothing to press until the group is actually gone.
   if (ids.some((id) => byId.get(id)?.status === "stopping")) {
     return { tone: "waiting", label: "Stopping…", startIds: [], stopIds: [] };
+  }
+  if (starting.length > 0) {
+    return {
+      tone: "waiting",
+      label: "Starting…",
+      startIds: missing,
+      stopIds: active,
+    };
   }
   if (running.length === ids.length) {
     return {

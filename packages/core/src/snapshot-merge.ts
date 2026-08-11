@@ -5,6 +5,24 @@ import type {
   SilvicSnapshot,
   WorkspaceSnapshot,
 } from "@silvic/contracts";
+import type { WorkspaceRecord } from "./workspace-registry";
+
+export function snapshotsSemanticallyEqual(
+  left: SilvicSnapshot,
+  right: SilvicSnapshot,
+): boolean {
+  return (
+    JSON.stringify({ ...left, refreshedAt: "" }) ===
+    JSON.stringify({ ...right, refreshedAt: "" })
+  );
+}
+
+export function workspaceRecordsEqual(
+  left: readonly WorkspaceRecord[],
+  right: readonly WorkspaceRecord[],
+): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
 
 /**
  * A fast scan may cover only the checkout that just changed. Merge that

@@ -29,6 +29,10 @@ const api: SilvicDesktopApi = {
   addRoot: () => ipcRenderer.invoke(ipcChannels.rootsAdd),
   removeRoot: (root) => ipcRenderer.invoke(ipcChannels.rootsRemove, root),
   refresh: () => ipcRenderer.invoke(ipcChannels.snapshotRefresh),
+  refreshObservations: () =>
+    ipcRenderer.invoke(ipcChannels.observationsRefresh),
+  setRendererVisible: (visible) =>
+    ipcRenderer.invoke(ipcChannels.rendererVisibilitySet, visible),
   createEnvironment: (request: CreateEnvironmentRequest) =>
     ipcRenderer.invoke(ipcChannels.environmentCreate, request),
   provisionPlot: (request: PlotProvisionRequest) =>

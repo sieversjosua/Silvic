@@ -72,7 +72,12 @@ function declaredResource(
   const process = definition.command
     ? processes.find((candidate) => candidate.id === definition.command)
     : undefined;
-  const url = process?.url ?? definition.url;
+  const url =
+    process?.status === "running"
+      ? process.url
+      : process
+        ? undefined
+        : definition.url;
   return {
     id: `declared:${id}`,
     provider: definition.provider,
@@ -97,6 +102,7 @@ function commandResource(
   const process = processes.find((candidate) => candidate.id === id);
   const provider = providerFor(id, command.run);
   const profile = providerProfile(provider, command.url === true);
+  const url = process?.status === "running" ? process.url : undefined;
   return {
     id: `command:${id}`,
     provider,
@@ -104,7 +110,7 @@ function commandResource(
     ...profile,
     state: processState(process),
     detail: process?.advice ?? command.run,
-    ...(process?.url ? { url: process.url } : {}),
+    ...(url ? { url } : {}),
     commandId: id,
   };
 }
@@ -129,6 +135,9 @@ function observationResource(observation: ConnectorObservation): PlotResource {
 
 function processState(process: PlotProcess | undefined): PlotResource["state"] {
   if (!process || process.status === "stopped") return "quiet";
+  if (process.status === "starting" || process.status === "stopping") {
+    return "waiting";
+  }
   return process.status === "running" ? "active" : "attention";
 }
 

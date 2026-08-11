@@ -38,7 +38,7 @@ interface Shelf<T> {
  * and stays near-live.
  */
 const listenerShelfLifeMs = 60_000;
-const taskShelfLifeMs = 3_000;
+const taskShelfLifeMs = 30_000;
 
 export function createLocalContextConnector(runner: CommandRunner): Connector {
   let listeners: Shelf<readonly Listener[]> | undefined;
@@ -93,37 +93,67 @@ async function readListeners(
   });
   if (result.exitCode !== 0) return [];
   const seeds = parseListenerSeeds(result.stdout);
+  if (seeds.length === 0) return [];
   const treeResult = await runner.run({
     executable: "ps",
     arguments: ["-axo", "pid=,ppid="],
   });
   const parents = parseProcessParents(treeResult.stdout);
-  const listeners = await mapWithConcurrency(seeds, 6, async (seed) => {
-    const cwdResult = await runner.run({
+  const processIds = [...new Set(seeds.map((seed) => seed.processId))];
+  const processList = processIds.join(",");
+  const [cwdResult, groupResult] = await Promise.all([
+    runner.run({
       executable: "lsof",
-      arguments: ["-a", "-p", String(seed.processId), "-d", "cwd", "-Fn"],
-    });
-    const cwd = cwdResult.stdout
-      .split(/\r?\n/)
-      .find((line) => line.startsWith("n/"))
-      ?.slice(1);
-    if (!cwd) return undefined;
-    const groupResult = await runner.run({
+      arguments: ["-a", "-p", processList, "-d", "cwd", "-Fpn"],
+    }),
+    runner.run({
       executable: "ps",
-      arguments: ["-o", "pgid=", "-p", String(seed.processId)],
-    });
-    const processGroupId = Number(groupResult.stdout.trim());
+      arguments: ["-o", "pid=,pgid=", "-p", processList],
+    }),
+  ]);
+  const workingDirectories = parseProcessWorkingDirectories(cwdResult.stdout);
+  const processGroups = parseProcessGroups(groupResult.stdout);
+  const listeners = seeds.map((seed) => {
+    const cwd = workingDirectories.get(seed.processId);
+    if (!cwd) return undefined;
+    const processGroupId = processGroups.get(seed.processId);
     const lineage = processLineage(seed.processId, parents);
     return {
       ...seed,
       cwd,
       ...(lineage ? { processLineage: lineage } : {}),
-      ...(Number.isSafeInteger(processGroupId) && processGroupId > 0
+      ...(processGroupId !== undefined && processGroupId > 0
         ? { processGroupId }
         : {}),
     };
   });
   return listeners.filter((listener) => listener !== undefined);
+}
+
+function parseProcessWorkingDirectories(
+  output: string,
+): ReadonlyMap<number, string> {
+  const directories = new Map<number, string>();
+  let processId: number | undefined;
+  for (const line of output.split(/\r?\n/)) {
+    if (line.startsWith("p")) processId = Number(line.slice(1));
+    else if (line.startsWith("n/") && processId) {
+      directories.set(processId, line.slice(1));
+    }
+  }
+  return directories;
+}
+
+function parseProcessGroups(output: string): ReadonlyMap<number, number> {
+  return new Map(
+    output
+      .split(/\r?\n/)
+      .map((line) => line.trim().split(/\s+/).map(Number))
+      .filter(
+        (pair): pair is [number, number] =>
+          pair.length === 2 && pair.every(Number.isSafeInteger),
+      ),
+  );
 }
 
 async function readCodexTasks(
@@ -256,23 +286,4 @@ function taskObservation(
     detail: "Codex task",
     metadata: { taskId: task.id },
   };
-}
-
-async function mapWithConcurrency<Input, Output>(
-  inputs: readonly Input[],
-  concurrency: number,
-  operation: (input: Input) => Promise<Output>,
-): Promise<Output[]> {
-  const results = new Array<Output>(inputs.length);
-  let nextIndex = 0;
-  await Promise.all(
-    Array.from({ length: Math.min(concurrency, inputs.length) }, async () => {
-      while (nextIndex < inputs.length) {
-        const index = nextIndex++;
-        const input = inputs[index];
-        if (input !== undefined) results[index] = await operation(input);
-      }
-    }),
-  );
-  return results;
 }

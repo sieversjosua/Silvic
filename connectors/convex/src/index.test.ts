@@ -57,6 +57,18 @@ describe("convexConnector", () => {
       },
     ]);
     expect(JSON.stringify(observations)).not.toContain("secret-value");
+
+    await writeFile(
+      join(path, ".env.local"),
+      "CONVEX_DEPLOYMENT=dev:changed-deployment-456\n",
+    );
+    expect((await convexConnector.observe(target))[0]?.label).toBe(
+      "helpful-otter-123",
+    );
+    convexConnector.invalidate?.({ workspacePath: path });
+    expect((await convexConnector.observe(target))[0]?.label).toBe(
+      "changed-deployment-456",
+    );
   });
 
   it("keeps the deployment name clean when the line carries a team comment", async () => {

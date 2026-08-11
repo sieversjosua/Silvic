@@ -12,6 +12,7 @@ interface PullRequestResponse {
   state: string;
   isDraft: boolean;
   url: string;
+  headRefName: string;
   /** The branch tip GitHub merged — the proof a squash left nothing behind. */
   headRefOid: string;
   statusCheckRollup: readonly {
@@ -118,12 +119,18 @@ function isIssueResponse(value: unknown): value is IssueResponse {
  * request goes through a forced refresh, which invalidates this cache.
  */
 const observationShelfLifeMs = 120_000;
+const failureShelfLifeMs = 30_000;
+const maximumFailureShelfLifeMs = 10 * 60_000;
+
+interface PullRequestShelf {
+  createdAt: number;
+  failures: number;
+  failed: boolean;
+  value: Promise<ReadonlyMap<string, PullRequestResponse>>;
+}
 
 export function createGitHubConnector(runner: CommandRunner): Connector {
-  const cache = new Map<
-    string,
-    { createdAt: number; value: Promise<readonly ConnectorObservation[]> }
-  >();
+  const cache = new Map<string, PullRequestShelf>();
   return {
     manifest: {
       id: "github",
@@ -131,55 +138,88 @@ export function createGitHubConnector(runner: CommandRunner): Connector {
       kind: "service",
       capabilities: ["observe"],
     },
-    invalidate: () => {
-      cache.clear();
+    invalidate: (scope) => {
+      if (scope?.projectId) cache.delete(scope.projectId);
+      else cache.clear();
     },
     observe: (target, context) => {
-      const key = `${target.workspaceId}:${target.path}`;
+      if (target.origin && !isGitHubOrigin(target.origin)) {
+        return Promise.resolve([]);
+      }
+      const key = target.projectId;
       const cached = cache.get(key);
       const now = Date.now();
-      if (cached && now - cached.createdAt < observationShelfLifeMs) {
-        return cached.value;
+      const shelfLife = cached?.failed
+        ? Math.min(
+            failureShelfLifeMs * 2 ** Math.max(0, cached.failures - 1),
+            maximumFailureShelfLifeMs,
+          )
+        : observationShelfLifeMs;
+      if (cached && now - cached.createdAt < shelfLife) {
+        return cached.value.then((pullRequests) =>
+          observationFor(target, pullRequests.get(target.branch)),
+        );
       }
-      const value = observePullRequest(runner, target, context);
-      cache.set(key, { createdAt: now, value });
-      // A failure is worth retrying, not remembering.
+      const value = listPullRequests(runner, target, context);
+      const shelf: PullRequestShelf = {
+        createdAt: now,
+        failures: cached?.failures ?? 0,
+        failed: false,
+        value,
+      };
+      cache.set(key, shelf);
       value.catch(() => {
-        if (cache.get(key)?.value === value) cache.delete(key);
+        if (cache.get(key)?.value !== value) return;
+        shelf.failed = true;
+        shelf.failures += 1;
       });
-      return value;
+      return value.then((pullRequests) =>
+        observationFor(target, pullRequests.get(target.branch)),
+      );
     },
   };
 }
 
-async function observePullRequest(
+async function listPullRequests(
   runner: CommandRunner,
   target: WorkspaceTarget,
   context: Parameters<Connector["observe"]>[1],
-): Promise<readonly ConnectorObservation[]> {
+): Promise<ReadonlyMap<string, PullRequestResponse>> {
   const result = await runner.run({
     executable: "gh",
     arguments: [
       "pr",
-      "view",
+      "list",
+      "--state",
+      "all",
+      "--limit",
+      "100",
       "--json",
-      "number,title,state,isDraft,url,statusCheckRollup,headRefOid",
+      "number,title,state,isDraft,url,statusCheckRollup,headRefOid,headRefName",
     ],
     cwd: target.path,
     ...(context?.signal ? { signal: context.signal } : {}),
   });
   if (result.exitCode !== 0) {
     const message = result.stderr.trim() || result.stdout.trim();
-    const normalized = message.toLowerCase();
-    if (
-      normalized.includes("no pull request") ||
-      normalized.includes("could not resolve to a pullrequest")
-    ) {
-      return [];
-    }
     throw new Error(message || "GitHub CLI is unavailable");
   }
-  const response = parsePullRequest(result.stdout);
+  const responses = parsePullRequests(result.stdout);
+  const byBranch = new Map<string, PullRequestResponse>();
+  for (const response of responses) {
+    const known = byBranch.get(response.headRefName);
+    if (!known || (known.state !== "OPEN" && response.state === "OPEN")) {
+      byBranch.set(response.headRefName, response);
+    }
+  }
+  return byBranch;
+}
+
+function observationFor(
+  target: WorkspaceTarget,
+  response: PullRequestResponse | undefined,
+): readonly ConnectorObservation[] {
+  if (!response) return [];
   const checks = summarizeChecks(response.statusCheckRollup);
   const observationState = stateForPullRequest(response, checks);
   return [
@@ -202,16 +242,23 @@ async function observePullRequest(
   ];
 }
 
-function parsePullRequest(output: string): PullRequestResponse {
+function parsePullRequests(output: string): readonly PullRequestResponse[] {
   const value: unknown = JSON.parse(output);
-  if (
-    typeof value !== "object" ||
+  if (!Array.isArray(value) || !value.every(isPullRequestResponse)) {
+    throw new Error("GitHub returned an unreadable pull-request response");
+  }
+  return value;
+}
+
+function isPullRequestResponse(value: unknown): value is PullRequestResponse {
+  return typeof value !== "object" ||
     value === null ||
     !("number" in value) ||
     !("title" in value) ||
     !("state" in value) ||
     !("isDraft" in value) ||
     !("url" in value) ||
+    !("headRefName" in value) ||
     !("headRefOid" in value) ||
     !("statusCheckRollup" in value) ||
     typeof value.number !== "number" ||
@@ -219,12 +266,19 @@ function parsePullRequest(output: string): PullRequestResponse {
     typeof value.state !== "string" ||
     typeof value.isDraft !== "boolean" ||
     typeof value.url !== "string" ||
+    typeof value.headRefName !== "string" ||
     typeof value.headRefOid !== "string" ||
     !Array.isArray(value.statusCheckRollup)
-  ) {
-    throw new Error("GitHub returned an unreadable pull-request response");
+    ? false
+    : true;
+}
+
+function isGitHubOrigin(origin: string): boolean {
+  try {
+    return new URL(origin).hostname.toLowerCase() === "github.com";
+  } catch {
+    return /@github\.com:|^github\.com[:/]/i.test(origin);
   }
-  return value as unknown as PullRequestResponse;
 }
 
 function summarizeChecks(

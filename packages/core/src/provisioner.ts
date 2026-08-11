@@ -76,6 +76,7 @@ export class Provisioner {
                 arguments: ["-c", command],
                 cwd: context.root,
                 environment: provisionEnvironment(context),
+                outputLimit: provisionOutputLimit * 2,
                 ...stepOptions,
               })
               .then((shell) => ({

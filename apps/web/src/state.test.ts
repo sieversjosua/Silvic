@@ -117,6 +117,24 @@ describe("cardRuntimeState", () => {
     });
   });
 
+  it("shows Starting until a named preview is actually reachable", () => {
+    expect(
+      cardRuntimeState({
+        workspace,
+        commands,
+        processes: [
+          { plotPath: workspace.path, id: "web", status: "starting" },
+          { plotPath: workspace.path, id: "convex", status: "running" },
+        ],
+      }),
+    ).toEqual({
+      tone: "waiting",
+      label: "Starting…",
+      startIds: [],
+      stopIds: ["web", "convex"],
+    });
+  });
+
   it("carries the supervisor's advice for a failed runtime", () => {
     expect(
       cardRuntimeState({

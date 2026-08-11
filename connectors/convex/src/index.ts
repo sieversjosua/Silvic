@@ -1,11 +1,21 @@
 import { readdir, readFile } from "node:fs/promises";
-import { join, relative } from "node:path";
+import { join, normalize, relative } from "node:path";
 
 import type {
   Connector,
   ConnectorObservation,
   WorkspaceTarget,
 } from "@silvic/contracts";
+
+const observationShelfLifeMs = 5 * 60_000;
+const observationCache = new Map<
+  string,
+  {
+    projectId: string;
+    createdAt: number;
+    value: Promise<readonly ConnectorObservation[]>;
+  }
+>();
 
 export const convexConnector: Connector = {
   manifest: {
@@ -14,7 +24,35 @@ export const convexConnector: Connector = {
     kind: "service",
     capabilities: ["observe"],
   },
-  observe: async (target) => discoverDeployments(target),
+  invalidate: (scope) => {
+    if (!scope) {
+      observationCache.clear();
+      return;
+    }
+    for (const [path, entry] of observationCache) {
+      if (
+        (scope.workspacePath && normalize(scope.workspacePath) === path) ||
+        (scope.projectId && scope.projectId === entry.projectId)
+      ) {
+        observationCache.delete(path);
+      }
+    }
+  },
+  observe: (target) => {
+    const key = normalize(target.path);
+    const cached = observationCache.get(key);
+    const now = Date.now();
+    if (cached && now - cached.createdAt < observationShelfLifeMs) {
+      return cached.value;
+    }
+    const value = discoverDeployments(target);
+    observationCache.set(key, {
+      projectId: target.projectId,
+      createdAt: now,
+      value,
+    });
+    return value;
+  },
 };
 
 async function discoverDeployments(

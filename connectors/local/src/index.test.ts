@@ -10,8 +10,10 @@ import { createLocalContextConnector } from "./index";
 
 class FakeRunner implements CommandRunner {
   listening = true;
+  readonly requests: CommandRequest[] = [];
 
   async run(request: CommandRequest): Promise<CommandResult> {
+    this.requests.push(request);
     if (request.executable === "lsof" && request.arguments?.includes("-Fpcn")) {
       return {
         exitCode: 0,
@@ -20,14 +22,14 @@ class FakeRunner implements CommandRunner {
       };
     }
     if (request.executable === "lsof") {
-      return { exitCode: 0, stdout: "n/plots/app\n", stderr: "" };
+      return { exitCode: 0, stdout: "p42\nn/plots/app\n", stderr: "" };
     }
     if (request.executable === "ps") {
       return {
         exitCode: 0,
         stdout: request.arguments?.includes("-axo")
           ? "  42  23\n  23  1\n"
-          : "  23\n",
+          : "  42  23\n",
         stderr: "",
       };
     }
@@ -56,6 +58,18 @@ describe("createLocalContextConnector", () => {
         },
       }),
     ]);
+    expect(
+      runner.requests.filter(
+        (request) =>
+          request.executable === "lsof" && request.arguments?.includes("-d"),
+      ),
+    ).toHaveLength(1);
+    expect(
+      runner.requests.filter(
+        (request) =>
+          request.executable === "ps" && request.arguments?.includes("-p"),
+      ),
+    ).toHaveLength(1);
     runner.listening = false;
     expect(await connector.observe(target)).toHaveLength(1);
 

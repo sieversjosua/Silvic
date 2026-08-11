@@ -138,10 +138,6 @@ export function WorkspaceNode({ data }: NodeProps<WorkspaceFlowNode>) {
       <Handle id="in-right" type="target" position={Position.Right} />
       <Handle id="out-left" type="source" position={Position.Left} />
       <span className="plot-ticks" aria-hidden="true" />
-      {state.tone === "active" && (
-        <span className="plot-sweep" aria-hidden="true" />
-      )}
-
       <header className="plot-head">
         <span className="micro">
           {workspace.isPrimary ? "Project" : locationLabel(workspace)}

@@ -1,6 +1,7 @@
 import type {
   Connector,
   ConnectorFailure,
+  ConnectorInvalidation,
   ConnectorObservation,
   ConnectorResult,
   WorkspaceTarget,
@@ -21,10 +22,10 @@ export class ConnectorRegistry {
   }
 
   /** Make one connector re-read external state on its next observation. */
-  invalidate(connectorId?: string): void {
+  invalidate(connectorId?: string, scope?: ConnectorInvalidation): void {
     for (const connector of this.connectors) {
       if (connectorId && connector.manifest.id !== connectorId) continue;
-      connector.invalidate?.();
+      connector.invalidate?.(scope);
     }
   }
 

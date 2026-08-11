@@ -1,5 +1,5 @@
-import { readdir, stat } from "node:fs/promises";
-import { basename, join, normalize } from "node:path";
+import { readFile, readdir, realpath, stat } from "node:fs/promises";
+import { basename, dirname, join, normalize, resolve } from "node:path";
 
 import type {
   ConnectorFailure,
@@ -17,23 +17,40 @@ export interface ProjectServiceOptions {
   connectors: ConnectorRegistry;
 }
 
+export interface ProjectSnapshotOptions {
+  signal?: AbortSignal;
+  /** Re-read the filesystem and external tools even when this query is cached. */
+  force?: boolean;
+  /** Projects outside this set remain Git-only suggestions. */
+  enrichProjectIds?: ReadonlySet<string>;
+}
+
 function remoteUrlFor(origin: string | undefined): { remoteUrl?: string } {
   const remoteUrl = remoteWebUrl(origin);
   return remoteUrl ? { remoteUrl } : {};
 }
 
 export class ProjectService {
+  private readonly snapshots = new Map<string, SilvicSnapshot>();
+
   constructor(private readonly options: ProjectServiceOptions) {}
 
   async snapshot(
     roots: readonly string[],
-    signal?: AbortSignal,
+    options: ProjectSnapshotOptions = {},
   ): Promise<SilvicSnapshot> {
+    const cacheKey = snapshotCacheKey(roots, options.enrichProjectIds);
+    const cached = this.snapshots.get(cacheKey);
+    if (!options.force && cached) return cached;
     const repositoryPaths = await discoverRepositories(roots);
     const repositories = (
       await mapWithConcurrency(repositoryPaths, 8, async (path) => {
         try {
-          return await readRepository(this.options.runner, path, signal);
+          return await readRepository(
+            this.options.runner,
+            path,
+            options.signal,
+          );
         } catch {
           return undefined;
         }
@@ -71,21 +88,25 @@ export class ProjectService {
             isPrimary:
               normalize(workspace.path) === normalize(preferred.rootPath),
           }));
-        const enriched = await mapWithConcurrency(
-          workspaces,
-          2,
-          async (workspace) => {
-            const result = await this.options.connectors.observe(
-              workspace,
-              signal,
-            );
-            connectorFailures.push(...result.failures);
-            return {
-              ...workspace,
-              observations: result.observations,
-            } satisfies WorkspaceSnapshot;
-          },
-        );
+        const shouldEnrich =
+          options.enrichProjectIds === undefined ||
+          options.enrichProjectIds.has(id);
+        const enriched = shouldEnrich
+          ? await mapWithConcurrency(workspaces, 2, async (workspace) => {
+              const result = await this.options.connectors.observe(
+                {
+                  ...workspace,
+                  ...(preferred.origin ? { origin: preferred.origin } : {}),
+                },
+                options.signal,
+              );
+              connectorFailures.push(...result.failures);
+              return {
+                ...workspace,
+                observations: result.observations,
+              } satisfies WorkspaceSnapshot;
+            })
+          : workspaces;
         return {
           id,
           name: preferred.name,
@@ -109,14 +130,25 @@ export class ProjectService {
       },
     );
 
-    return {
+    const snapshot = {
       projects: projects.sort((left, right) =>
         left.name.localeCompare(right.name),
       ),
       connectorFailures: uniqueFailures(connectorFailures),
       refreshedAt: new Date().toISOString(),
     };
+    this.snapshots.set(cacheKey, snapshot);
+    return snapshot;
   }
+}
+
+function snapshotCacheKey(
+  roots: readonly string[],
+  enrichProjectIds: ReadonlySet<string> | undefined,
+): string {
+  const paths = roots.map(normalize).sort();
+  const projects = enrichProjectIds ? [...enrichProjectIds].sort() : ["*"];
+  return JSON.stringify([paths, projects]);
 }
 
 export async function discoverRepositories(
@@ -168,9 +200,44 @@ export async function discoverRepositories(
       // Missing roots are expected when a removable volume is offline.
     }
   }
-  return [...repositories].sort((left, right) =>
-    basename(left).localeCompare(basename(right)),
-  );
+  const representatives = new Map<string, { path: string; primary: boolean }>();
+  for (const path of repositories) {
+    const family = await repositoryFamily(path);
+    const known = representatives.get(family.key);
+    if (!known || (!known.primary && family.primary)) {
+      representatives.set(family.key, { path, primary: family.primary });
+    }
+  }
+  return [...representatives.values()]
+    .map(({ path }) => path)
+    .sort((left, right) => basename(left).localeCompare(basename(right)));
+}
+
+/**
+ * Linked worktrees carry a `.git` file pointing into the primary checkout's
+ * shared administrative directory. Group them before asking Git anything, so
+ * one family is never read once per worktree.
+ */
+async function repositoryFamily(
+  path: string,
+): Promise<{ key: string; primary: boolean }> {
+  const gitPath = join(path, ".git");
+  try {
+    const information = await stat(gitPath);
+    if (information.isDirectory()) {
+      return { key: normalize(await realpath(gitPath)), primary: true };
+    }
+    const contents = await readFile(gitPath, "utf8");
+    const target = contents.match(/^gitdir:\s*(.+)\s*$/m)?.[1];
+    if (!target) return { key: normalize(gitPath), primary: false };
+    const gitDirectory = normalize(await realpath(resolve(path, target)));
+    const container = dirname(gitDirectory);
+    const commonDirectory =
+      basename(container) === "worktrees" ? dirname(container) : gitDirectory;
+    return { key: commonDirectory, primary: false };
+  } catch {
+    return { key: normalize(gitPath), primary: false };
+  }
 }
 
 async function mapWithConcurrency<Input, Output>(

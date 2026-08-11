@@ -27,6 +27,8 @@ export interface WorkspaceTarget {
   path: string;
   repositoryName: string;
   branch: string;
+  /** Remote identity used to route provider-specific connectors. */
+  origin?: string;
 }
 
 export interface ConnectorObservation {
@@ -90,10 +92,15 @@ export interface ConnectorContext {
   signal?: AbortSignal;
 }
 
+export interface ConnectorInvalidation {
+  projectId?: string;
+  workspacePath?: string;
+}
+
 export interface Connector {
   readonly manifest: ConnectorManifest;
   /** Discard observations cached by this connector before the next scan. */
-  invalidate?(): void;
+  invalidate?(scope?: ConnectorInvalidation): void;
   observe(
     target: WorkspaceTarget,
     context?: ConnectorContext,
@@ -795,10 +802,16 @@ export interface PlotProgressStep {
 export interface PlotProcess {
   plotPath: string;
   id: string;
-  status: "running" | "stopping" | "stopped" | "failed";
+  status: "starting" | "running" | "stopping" | "stopped" | "failed";
   processId?: number;
   /** Where it can be reached, when it was published under a name. */
   url?: string;
+  /** Portless alias owned by Silvic for this runtime. */
+  routeName?: string;
+  /** HTTP listener currently answering behind the stable URL. */
+  targetPort?: number;
+  /** Stable plot port offered through PORT before listener discovery. */
+  expectedPort?: number;
   startedAt?: string;
   exitCode?: number;
   /** Why this is not what was asked for, when Silvic had to settle. */
@@ -875,7 +888,9 @@ export interface SilvicDesktopApi {
   getRoots(): Promise<readonly string[]>;
   addRoot(): Promise<readonly string[]>;
   removeRoot(root: string): Promise<readonly string[]>;
-  refresh(): Promise<SilvicSnapshot>;
+  refresh(): Promise<void>;
+  refreshObservations(): Promise<void>;
+  setRendererVisible(visible: boolean): Promise<void>;
   createEnvironment(
     request: CreateEnvironmentRequest,
   ): Promise<PlotCreationResult>;
@@ -930,6 +945,8 @@ export interface SilvicDesktopApi {
 export const ipcChannels = {
   snapshotGet: "silvic:snapshot:get",
   snapshotRefresh: "silvic:snapshot:refresh",
+  observationsRefresh: "silvic:observations:refresh",
+  rendererVisibilitySet: "silvic:renderer:visibility:set",
   snapshotChanged: "silvic:snapshot:changed",
   rootsGet: "silvic:roots:get",
   rootsAdd: "silvic:roots:add",

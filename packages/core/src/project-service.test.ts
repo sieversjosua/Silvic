@@ -9,11 +9,27 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { Connector } from "@silvic/contracts";
 
 import { ConnectorRegistry } from "./connector-registry";
+import type {
+  CommandRequest,
+  CommandResult,
+  CommandRunner,
+} from "./command-runner";
 import { LocalCommandRunner } from "./command-runner";
 import { ProjectService } from "./project-service";
 
 const execute = promisify(execFile);
 const temporaryDirectories: string[] = [];
+
+class CountingRunner implements CommandRunner {
+  readonly requests: CommandRequest[] = [];
+
+  constructor(private readonly runner: CommandRunner) {}
+
+  async run(request: CommandRequest): Promise<CommandResult> {
+    this.requests.push(request);
+    return this.runner.run(request);
+  }
+}
 
 afterEach(async () => {
   await Promise.all(
@@ -43,6 +59,7 @@ describe("ProjectService.snapshot", () => {
     ]);
     await git(repository, ["worktree", "add", "-b", "agent/auth", worktree]);
 
+    const observedBranches: string[] = [];
     const connector: Connector = {
       manifest: {
         id: "test-runtime",
@@ -50,8 +67,9 @@ describe("ProjectService.snapshot", () => {
         kind: "service",
         capabilities: ["observe"],
       },
-      observe: async (target) =>
-        target.branch === "agent/auth"
+      observe: async (target) => {
+        observedBranches.push(target.branch);
+        return target.branch === "agent/auth"
           ? [
               {
                 connectorId: "test-runtime",
@@ -61,14 +79,29 @@ describe("ProjectService.snapshot", () => {
                 label: "localhost:3000",
               },
             ]
-          : [],
+          : [];
+      },
     };
+    const runner = new CountingRunner(new LocalCommandRunner());
     const service = new ProjectService({
-      runner: new LocalCommandRunner(),
+      runner,
       connectors: new ConnectorRegistry([connector]),
     });
 
     const snapshot = await service.snapshot([directory]);
+
+    expect(
+      runner.requests.filter(
+        (request) =>
+          request.executable === "git" && request.arguments?.[0] === "worktree",
+      ),
+    ).toHaveLength(1);
+    expect(
+      runner.requests.filter(
+        (request) =>
+          request.executable === "git" && request.arguments?.[0] === "status",
+      ),
+    ).toHaveLength(2);
 
     expect(snapshot.projects).toHaveLength(1);
     expect(snapshot.projects[0]?.id).toBe("github.com/example/silvic");
@@ -90,6 +123,21 @@ describe("ProjectService.snapshot", () => {
         label: "localhost:3000",
       },
     ]);
+
+    const processCount = runner.requests.length;
+    await expect(service.snapshot([directory])).resolves.toBe(snapshot);
+    expect(runner.requests).toHaveLength(processCount);
+
+    const gitOnly = await service.snapshot([directory], {
+      force: true,
+      enrichProjectIds: new Set(["another-project"]),
+    });
+    expect(
+      gitOnly.projects.flatMap((project) =>
+        project.workspaces.flatMap((workspace) => workspace.observations),
+      ),
+    ).toEqual([]);
+    expect(observedBranches.sort()).toEqual(["agent/auth", "main"]);
 
     const worktreeOnlySnapshot = await service.snapshot([worktree]);
     expect(worktreeOnlySnapshot.projects[0]?.rootPath).toBe(

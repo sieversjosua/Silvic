@@ -70,20 +70,23 @@ describe("GitHub connector", () => {
   it("maps the current branch pull request and check rollup", async () => {
     const runner = new RecordingRunner({
       exitCode: 0,
-      stdout: JSON.stringify({
-        number: 42,
-        title: "Fix authentication",
-        state: "OPEN",
-        isDraft: false,
-        url: "https://github.com/example/silvic/pull/42",
-        headRefOid: "abc123def456",
-        statusCheckRollup: [
-          {
-            status: "COMPLETED",
-            conclusion: "SUCCESS",
-          },
-        ],
-      }),
+      stdout: JSON.stringify([
+        {
+          number: 42,
+          title: "Fix authentication",
+          state: "OPEN",
+          isDraft: false,
+          url: "https://github.com/example/silvic/pull/42",
+          headRefName: "agent/auth",
+          headRefOid: "abc123def456",
+          statusCheckRollup: [
+            {
+              status: "COMPLETED",
+              conclusion: "SUCCESS",
+            },
+          ],
+        },
+      ]),
       stderr: "",
     });
 
@@ -112,9 +115,13 @@ describe("GitHub connector", () => {
         executable: "gh",
         arguments: [
           "pr",
-          "view",
+          "list",
+          "--state",
+          "all",
+          "--limit",
+          "100",
           "--json",
-          "number,title,state,isDraft,url,statusCheckRollup,headRefOid",
+          "number,title,state,isDraft,url,statusCheckRollup,headRefOid,headRefName",
         ],
         cwd: "/projects/silvic",
         signal: undefined,
@@ -124,9 +131,9 @@ describe("GitHub connector", () => {
 
   it("answers repeat observations from its shelf until invalidated", async () => {
     const runner = new RecordingRunner({
-      exitCode: 1,
-      stdout: "",
-      stderr: "no pull request found",
+      exitCode: 0,
+      stdout: "[]",
+      stderr: "",
     });
     const connector = createGitHubConnector(runner);
 
@@ -137,6 +144,43 @@ describe("GitHub connector", () => {
     connector.invalidate?.();
     await connector.observe(target);
     expect(runner.requests).toHaveLength(2);
+  });
+
+  it("shares one project-level request across workspaces and backs off failures", async () => {
+    const runner = new RecordingRunner({
+      exitCode: 1,
+      stdout: "",
+      stderr: "temporary GitHub failure",
+    });
+    const connector = createGitHubConnector(runner);
+
+    await Promise.allSettled([
+      connector.observe({ ...target, workspaceId: "one", branch: "one" }),
+      connector.observe({ ...target, workspaceId: "two", branch: "two" }),
+    ]);
+    await Promise.allSettled([
+      connector.observe({ ...target, workspaceId: "one", branch: "one" }),
+      connector.observe({ ...target, workspaceId: "two", branch: "two" }),
+    ]);
+
+    expect(runner.requests).toHaveLength(1);
+  });
+
+  it("does not invoke GitHub for a non-GitHub origin", async () => {
+    const runner = new RecordingRunner({
+      exitCode: 0,
+      stdout: "[]",
+      stderr: "",
+    });
+
+    await expect(
+      createGitHubConnector(runner).observe({
+        ...target,
+        origin: "git@gitlab.com:example/silvic.git",
+      }),
+    ).resolves.toEqual([]);
+
+    expect(runner.requests).toEqual([]);
   });
 });
 

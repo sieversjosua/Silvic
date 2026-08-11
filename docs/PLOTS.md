@@ -150,7 +150,15 @@ dynamically detect the requesting development origin, so every Plot sends its
 own named origin consistently.
 
 Silvic writes that address into the Plot's local and Convex environments before
-schema/functions are pushed, then starts the runtime under the same route.
+schema/functions are pushed. The runtime and route deliberately have separate
+lifecycles: Silvic starts the declared command, discovers the responding HTTP
+listener inside that exact process tree, and publishes a Portless alias to it.
+This matters for monorepo scripts that ignore `PORT` or start several sidecars;
+the stable URL follows the actual HTML listener instead of pointing at an empty
+port. A routed runtime remains `STARTING` until both its direct listener and the
+named address answer. Silvic then monitors both and republishes the alias if a
+dev server comes back on a different port.
+
 portless requires the one-time `portless service install` setup on the machine.
 Silvic can open that explicit Terminal/admin flow from the Plot dialog and
 rechecks the service while it completes. Before creating the worktree or

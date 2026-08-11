@@ -1,7 +1,7 @@
-import { existsSync } from "node:fs";
+import { existsSync, watch, type FSWatcher } from "node:fs";
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir, platform } from "node:os";
-import { basename, join, normalize } from "node:path";
+import { basename, isAbsolute, join, normalize, relative } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
   request as httpRequest,
@@ -85,12 +85,15 @@ import {
   resolvePlotAddress,
   proxyAdvice,
   provisionEnvironment,
+  primeResolvedCommandPath,
   provisionCompleted,
   provisionStepLabel,
   waitForReadiness,
   readRecipe,
   mergeSnapshots,
+  snapshotsSemanticallyEqual,
   withoutWorkspace,
+  workspaceRecordsEqual,
   routeNameFor,
   runtimeStartResult,
   readRecipeSource,
@@ -129,10 +132,12 @@ const recordedOutputLimit = 4_000;
 const windowBackground = { light: "#f4f4f1", dark: "#0f1210" } as const;
 
 const runner = new LocalCommandRunner();
+const localContextConnector = createLocalContextConnector(runner);
+const localContextRegistry = new ConnectorRegistry([localContextConnector]);
 const connectors = new ConnectorRegistry([
   createGitHubConnector(runner),
   convexConnector,
-  createLocalContextConnector(runner),
+  localContextConnector,
 ]);
 const projectService = new ProjectService({ runner, connectors });
 /**
@@ -149,7 +154,9 @@ const deliveryService = new DeliveryService(runner);
 const provisioner = new Provisioner(runner);
 const teardownService = new TeardownService(runner);
 const workspaceRegistry = new WorkspaceRegistry();
-let runtimeRefreshTimer: NodeJS.Timeout | undefined;
+let runtimeObservationRefreshTimer: NodeJS.Timeout | undefined;
+let lastSupervisedPaths = new Set<string>();
+const pendingRuntimeObservationPaths = new Set<string>();
 const supervisor = new CommandSupervisor({
   logDirectory: join(app.getPath("userData"), "command-logs"),
   onChange: (processes) => {
@@ -158,11 +165,14 @@ const supervisor = new CommandSupervisor({
     settings.set("runningCommands", [...processes]);
     mainWindow?.webContents.send(ipcChannels.plotCommandsChanged, processes);
     connectors.invalidate("local-context");
-    if (runtimeRefreshTimer) clearTimeout(runtimeRefreshTimer);
-    runtimeRefreshTimer = setTimeout(() => {
-      connectors.invalidate("local-context");
-      void refreshSnapshot(true);
-    }, 750);
+    const nextPaths = new Set(
+      processes.map((process) => normalize(process.plotPath)),
+    );
+    for (const path of [...lastSupervisedPaths, ...nextPaths]) {
+      pendingRuntimeObservationPaths.add(path);
+    }
+    lastSupervisedPaths = nextPaths;
+    scheduleRuntimeObservationRefresh();
   },
 });
 const settings = new Store<Settings>({
@@ -190,6 +200,10 @@ let latestSnapshot: SilvicSnapshot = {
 };
 let activeRefresh: Promise<SilvicSnapshot> | undefined;
 let queuedFreshRefresh: Promise<SilvicSnapshot> | undefined;
+let rootWatchers: FSWatcher[] = [];
+let filesystemRefreshTimer: NodeJS.Timeout | undefined;
+let rendererVisible = true;
+const pendingFilesystemPaths = new Set<string>();
 
 app.setName("Silvic");
 if (process.platform === "darwin" && !app.isPackaged) {
@@ -208,12 +222,13 @@ if (!app.requestSingleInstanceLock()) {
 
   app.whenReady().then(async () => {
     setDevelopmentDockIcon();
+    void primeResolvedCommandPath();
     await migrateLegacySettings();
     nativeTheme.themeSource = settings.get("appearance");
     nativeTheme.on("updated", () => {
       mainWindow?.setBackgroundColor(currentWindowBackground());
     });
-    supervisor.adopt(settings.get("runningCommands"));
+    await supervisor.adopt(settings.get("runningCommands"));
     desktopUpdater = new DesktopUpdater({
       source: autoUpdater,
       currentVersion: app.getVersion(),
@@ -227,10 +242,11 @@ if (!app.requestSingleInstanceLock()) {
         mainWindow?.webContents.send(ipcChannels.updateStateChanged, state),
     });
     registerIpc();
+    installRootWatchers();
     createWindow();
     scheduleAutomaticUpdateChecks();
-    await paintFromGit(settings.get("roots"));
-    await refreshSnapshot();
+    await paintFromGit(settings.get("roots"), "replace");
+    void refreshConnectorObservations();
 
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -239,6 +255,12 @@ if (!app.requestSingleInstanceLock()) {
 }
 
 app.on("before-quit", () => {
+  rootWatchers.forEach((watcher) => watcher.close());
+  rootWatchers = [];
+  if (runtimeObservationRefreshTimer) {
+    clearTimeout(runtimeObservationRefreshTimer);
+    runtimeObservationRefreshTimer = undefined;
+  }
   if (!settings.get("keepCommandsRunning")) supervisor.stopAll();
 });
 
@@ -298,10 +320,23 @@ function registerIpc(): void {
     assertTrustedSender(event);
     return latestSnapshot;
   });
-  ipcMain.handle(ipcChannels.snapshotRefresh, (event) => {
+  ipcMain.handle(ipcChannels.snapshotRefresh, async (event) => {
     assertTrustedSender(event);
-    return refreshSnapshot();
+    await refreshSnapshot(true);
   });
+  ipcMain.handle(ipcChannels.observationsRefresh, async (event) => {
+    assertTrustedSender(event);
+    await refreshConnectorObservations();
+  });
+  ipcMain.handle(
+    ipcChannels.rendererVisibilitySet,
+    async (event, visible: unknown) => {
+      assertTrustedSender(event);
+      if (typeof visible !== "boolean") throw new Error("Invalid visibility");
+      rendererVisible = visible;
+      if (visible) await flushFilesystemRefresh();
+    },
+  );
   ipcMain.handle(ipcChannels.rootsGet, (event) => {
     assertTrustedSender(event);
     return settings.get("roots");
@@ -315,11 +350,12 @@ function registerIpc(): void {
     if (result.canceled) return settings.get("roots");
     const roots = uniquePaths([...settings.get("roots"), ...result.filePaths]);
     settings.set("roots", roots);
+    installRootWatchers();
     // Only the chosen paths, and without connectors, so the rail updates as
     // soon as the picker closes. Everything else is re-read in the background.
     await paintFromGit(result.filePaths);
     adoptChosenProjects(result.filePaths);
-    void refreshSnapshot(true);
+    void refreshConnectorObservations();
     return roots;
   });
   ipcMain.handle(ipcChannels.rootsRemove, async (event, root: unknown) => {
@@ -329,8 +365,9 @@ function registerIpc(): void {
       .get("roots")
       .filter((candidate) => normalize(candidate) !== normalize(root));
     settings.set("roots", roots);
+    installRootWatchers();
     await paintFromGit(roots, "replace");
-    void refreshSnapshot(true);
+    void refreshConnectorObservations();
     return roots;
   });
   ipcMain.handle(
@@ -431,6 +468,7 @@ function registerIpc(): void {
       .filter((candidate) => candidate !== projectId);
     const next = active ? [...remaining, projectId] : remaining;
     settings.set("activeProjects", next);
+    if (active) void refreshConnectorObservations();
     return next;
   });
   ipcMain.handle(ipcChannels.clipboardWrite, (event, text: unknown) => {
@@ -1122,7 +1160,40 @@ async function bringPlotOnline({
           durationMs: 0,
           detail: `Preview runtimes stopped during startup: ${failedPreviewCommands.join(", ")}`,
         }
-      : await waitForReadiness({ url, probe: probePreview });
+      : await waitForReadiness({
+          url,
+          probe: async (target) => {
+            const processes = new Map(
+              supervisor
+                .list()
+                .filter(
+                  (process) =>
+                    normalize(process.plotPath) === normalize(plotPath),
+                )
+                .map((process) => [process.id, process]),
+            );
+            const failed = servingCommands
+              .map(([id]) => processes.get(id))
+              .find((process) => process?.status === "failed");
+            if (failed) {
+              throw new Error(
+                failed.advice ??
+                  `The preview runtime exited with code ${failed.exitCode ?? 1}`,
+              );
+            }
+            // A named runtime is "starting" until its actual listener and
+            // Portless alias have both answered. This prevents Portless's own
+            // missing-route 404 from becoming a false-positive readiness.
+            if (
+              servingCommands.some(
+                ([id]) => processes.get(id)?.status !== "running",
+              )
+            ) {
+              return false;
+            }
+            return probePreview(target);
+          },
+        });
   if (readiness.status === "ready") {
     progress.finished(readinessStepId, readiness.durationMs);
   } else {
@@ -1310,7 +1381,7 @@ function supervisedIn(plotPath: string): readonly string[] {
     .list()
     .filter(
       (entry) =>
-        entry.status === "running" &&
+        (entry.status === "starting" || entry.status === "running") &&
         normalize(entry.plotPath) === normalize(plotPath),
     )
     .map((entry) => entry.id);
@@ -1387,6 +1458,212 @@ function takenPlotPorts(): Set<number> {
   return new Set(Object.values(settings.get("plotPorts")));
 }
 
+function installRootWatchers(): void {
+  rootWatchers.forEach((watcher) => watcher.close());
+  rootWatchers = [];
+  for (const root of settings.get("roots")) {
+    try {
+      const watcher = watch(
+        root,
+        { recursive: true, persistent: false },
+        (_event, filename) => {
+          const changedPath = filename ? join(root, filename.toString()) : root;
+          if (ignoredFilesystemEvent(changedPath)) return;
+          pendingFilesystemPaths.add(normalize(changedPath));
+          scheduleFilesystemRefresh();
+        },
+      );
+      watcher.on("error", () => undefined);
+      rootWatchers.push(watcher);
+    } catch {
+      // An offline or unsupported root remains available to explicit refresh.
+    }
+  }
+}
+
+/**
+ * A process change invalidates the expensive lsof shelf immediately, but the
+ * resulting local observation still has to reach the renderer. Refresh only
+ * the affected workspaces and only this connector: a Stop must not leave a
+ * ghost `node :port` row, and it must not wake GitHub or Convex to remove it.
+ */
+function scheduleRuntimeObservationRefresh(): void {
+  if (runtimeObservationRefreshTimer) {
+    clearTimeout(runtimeObservationRefreshTimer);
+  }
+  runtimeObservationRefreshTimer = setTimeout(() => {
+    runtimeObservationRefreshTimer = undefined;
+    void refreshRuntimeObservations();
+  }, 350);
+}
+
+async function refreshRuntimeObservations(): Promise<void> {
+  const paths = new Set(pendingRuntimeObservationPaths);
+  pendingRuntimeObservationPaths.clear();
+  if (paths.size === 0 || latestSnapshot.projects.length === 0) return;
+  const failures: { connectorId: string; message: string }[] = [];
+  const projects = await Promise.all(
+    latestSnapshot.projects.map(async (project) => ({
+      ...project,
+      workspaces: await Promise.all(
+        project.workspaces.map(async (workspace) => {
+          if (!paths.has(normalize(workspace.path))) return workspace;
+          const result = await localContextRegistry.observe({
+            ...workspace,
+            ...(project.origin ? { origin: project.origin } : {}),
+          });
+          failures.push(...result.failures);
+          return {
+            ...workspace,
+            observations: [
+              ...workspace.observations.filter(
+                (observation) => observation.connectorId !== "local-context",
+              ),
+              ...result.observations,
+            ],
+          };
+        }),
+      ),
+    })),
+  );
+  publishSnapshot(
+    {
+      projects,
+      connectorFailures: [
+        ...latestSnapshot.connectorFailures.filter(
+          (failure) => failure.connectorId !== "local-context",
+        ),
+        ...failures,
+      ],
+      refreshedAt: new Date().toISOString(),
+    },
+    "replace",
+  );
+}
+
+function ignoredFilesystemEvent(path: string): boolean {
+  const segments = normalize(path).split("/");
+  if (
+    segments.some((segment) =>
+      new Set([
+        ".build",
+        ".cache",
+        ".next",
+        ".pnpm-store",
+        "DerivedData",
+        "node_modules",
+        "Pods",
+        "vendor",
+      ]).has(segment),
+    )
+  ) {
+    return true;
+  }
+  const gitIndex = segments.lastIndexOf(".git");
+  return (
+    gitIndex >= 0 && ["logs", "objects"].includes(segments[gitIndex + 1] ?? "")
+  );
+}
+
+function scheduleFilesystemRefresh(): void {
+  if (!rendererVisible) return;
+  if (filesystemRefreshTimer) clearTimeout(filesystemRefreshTimer);
+  filesystemRefreshTimer = setTimeout(() => {
+    filesystemRefreshTimer = undefined;
+    void flushFilesystemRefresh();
+  }, 750);
+}
+
+async function flushFilesystemRefresh(): Promise<void> {
+  if (!rendererVisible || pendingFilesystemPaths.size === 0) return;
+  if (filesystemRefreshTimer) {
+    clearTimeout(filesystemRefreshTimer);
+    filesystemRefreshTimer = undefined;
+  }
+  const changed = [...pendingFilesystemPaths];
+  pendingFilesystemPaths.clear();
+  if (activeRefresh) {
+    try {
+      await activeRefresh;
+    } catch {
+      // The targeted read below gets its own chance to recover.
+    }
+  }
+  const affected = latestSnapshot.projects.filter((project) =>
+    changed.some((path) =>
+      project.workspaces.some((workspace) =>
+        containsPath(workspace.path, path),
+      ),
+    ),
+  );
+  if (affected.length === 0) {
+    if (changed.some((path) => normalize(path).split("/").includes(".git"))) {
+      await refreshSnapshot(true);
+    }
+    return;
+  }
+  try {
+    const rawSnapshot = await projectService.snapshot(
+      affected.map((project) => project.rootPath),
+      {
+        force: true,
+        enrichProjectIds: new Set<string>(),
+      },
+    );
+    publishSnapshot(rawSnapshot, "merge");
+  } catch {
+    // A later filesystem event or explicit refresh retries the survey.
+  }
+}
+
+function containsPath(parent: string, child: string): boolean {
+  const relation = relative(normalize(parent), normalize(child));
+  return (
+    relation === "" || (!relation.startsWith("..") && !isAbsolute(relation))
+  );
+}
+
+async function refreshConnectorObservations(): Promise<void> {
+  const active = new Set(settings.get("activeProjects"));
+  const failures: { connectorId: string; message: string }[] = [];
+  const projects = await Promise.all(
+    latestSnapshot.projects.map(async (project) => {
+      if (!active.has(project.id)) return project;
+      const workspaces = await Promise.all(
+        project.workspaces.map(async (workspace) => {
+          const result = await connectors.observe({
+            ...workspace,
+            ...(project.origin ? { origin: project.origin } : {}),
+          });
+          failures.push(...result.failures);
+          return { ...workspace, observations: result.observations };
+        }),
+      );
+      return { ...project, workspaces };
+    }),
+  );
+  publishSnapshot(
+    {
+      projects,
+      connectorFailures: uniqueConnectorFailures(failures),
+      refreshedAt: new Date().toISOString(),
+    },
+    "replace",
+  );
+}
+
+function uniqueConnectorFailures(
+  failures: readonly { connectorId: string; message: string }[],
+): { connectorId: string; message: string }[] {
+  const seen = new Set<string>();
+  return failures.filter((failure) => {
+    const key = `${failure.connectorId}:${failure.message}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function refreshSnapshot(forceFresh = false): Promise<SilvicSnapshot> {
   // Forced means something happened: connectors must look again rather than
   // answer from their shelf.
@@ -1395,19 +1672,25 @@ function refreshSnapshot(forceFresh = false): Promise<SilvicSnapshot> {
     if (!forceFresh) return activeRefresh;
     if (!queuedFreshRefresh) {
       queuedFreshRefresh = activeRefresh
-        .then(startSnapshotRefresh, startSnapshotRefresh)
+        .then(
+          () => startSnapshotRefresh(true),
+          () => startSnapshotRefresh(true),
+        )
         .finally(() => {
           queuedFreshRefresh = undefined;
         });
     }
     return queuedFreshRefresh;
   }
-  return startSnapshotRefresh();
+  return startSnapshotRefresh(forceFresh);
 }
 
-function startSnapshotRefresh(): Promise<SilvicSnapshot> {
+function startSnapshotRefresh(forceFresh: boolean): Promise<SilvicSnapshot> {
   const refresh = projectService
-    .snapshot(settings.get("roots"))
+    .snapshot(settings.get("roots"), {
+      force: forceFresh,
+      enrichProjectIds: new Set(settings.get("activeProjects")),
+    })
     .then((rawSnapshot) => publishSnapshot(rawSnapshot, "replace"));
   activeRefresh = refresh;
   void refresh.then(
@@ -1429,10 +1712,18 @@ function publishSnapshot(
     rawSnapshot,
     settings.get("workspaceRecords"),
   );
-  settings.set("workspaceRecords", [...reconciled.records]);
+  if (
+    !workspaceRecordsEqual(settings.get("workspaceRecords"), reconciled.records)
+  ) {
+    settings.set("workspaceRecords", [...reconciled.records]);
+  }
   const decorated = withProvisioning(reconciled.snapshot);
-  latestSnapshot =
+  const candidate =
     mode === "merge" ? mergeSnapshots(latestSnapshot, decorated) : decorated;
+  if (snapshotsSemanticallyEqual(latestSnapshot, candidate)) {
+    return latestSnapshot;
+  }
+  latestSnapshot = candidate;
   mainWindow?.webContents.send(ipcChannels.snapshotChanged, latestSnapshot);
   return latestSnapshot;
 }
@@ -1447,7 +1738,9 @@ async function paintFromGit(
   mode: "replace" | "merge" = "merge",
 ): Promise<void> {
   try {
-    const rawSnapshot = await fastProjectService.snapshot(paths);
+    const rawSnapshot = await fastProjectService.snapshot(paths, {
+      force: true,
+    });
     publishSnapshot(rawSnapshot, mode);
   } catch {
     // The full refresh reports anything that genuinely failed.

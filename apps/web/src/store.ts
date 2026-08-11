@@ -61,12 +61,22 @@ export const useSilvic = create<SilvicState>((set, get) => ({
           window.silvic.getDefaultHarness(),
           window.silvic.getPlotProcesses(),
         ]);
-      set({ activeProjectIds, defaultHarness, processes });
-      setSelectionForSnapshot(set, get, snapshot);
-      set({ snapshot, roots, loading: false });
+      const initialState = { ...get(), activeProjectIds };
+      set({
+        activeProjectIds,
+        defaultHarness,
+        processes,
+        snapshot,
+        roots,
+        loading: false,
+        ...selectionForSnapshot(initialState, snapshot),
+      });
       const stopWatchingSnapshot = window.silvic.onSnapshot((nextSnapshot) => {
-        setSelectionForSnapshot(set, get, nextSnapshot);
-        set({ snapshot: nextSnapshot, loading: false });
+        set((state) => ({
+          snapshot: nextSnapshot,
+          loading: false,
+          ...selectionForSnapshot(state, nextSnapshot),
+        }));
       });
       const stopWatchingProcesses = window.silvic.onPlotProcesses((next) =>
         set({ processes: next }),
@@ -83,9 +93,8 @@ export const useSilvic = create<SilvicState>((set, get) => ({
   refresh: async () => {
     set({ loading: true, error: undefined });
     try {
-      const snapshot = await window.silvic.refresh();
-      setSelectionForSnapshot(set, get, snapshot);
-      set({ snapshot, loading: false });
+      await window.silvic.refresh();
+      set({ loading: false });
     } catch (error) {
       set({ error: message(error), loading: false });
     }
@@ -96,8 +105,11 @@ export const useSilvic = create<SilvicState>((set, get) => ({
       // Choosing a repository directly adopts it, so the activation set and the
       // selection both have to catch up once the picker closes.
       const activeProjectIds = await window.silvic.getActiveProjects();
-      set({ roots, activeProjectIds });
-      setSelectionForSnapshot(set, get, get().snapshot);
+      set((state) => ({
+        roots,
+        activeProjectIds,
+        ...selectionForSnapshot({ ...state, activeProjectIds }, state.snapshot),
+      }));
     } catch (error) {
       set({ error: message(error) });
     }
@@ -108,8 +120,10 @@ export const useSilvic = create<SilvicState>((set, get) => ({
         projectId,
         active,
       });
-      set({ activeProjectIds });
-      setSelectionForSnapshot(set, get, get().snapshot);
+      set((state) => ({
+        activeProjectIds,
+        ...selectionForSnapshot({ ...state, activeProjectIds }, state.snapshot),
+      }));
     } catch (error) {
       set({ error: message(error) });
     }
@@ -123,19 +137,21 @@ export const useSilvic = create<SilvicState>((set, get) => ({
     }
   },
   /**
-   * `loading` belongs to the background survey, which runs on a timer. Creating
+   * `loading` belongs to the explicit repository survey. Creating
    * a plot takes minutes and reports its own progress, so it is the dialog that
    * holds the pending state and shows the failure.
    */
   createEnvironment: async (request) => {
     const result = await window.silvic.createEnvironment(request);
-    setSelectionForSnapshot(set, get, result.snapshot);
     const created = result.snapshot.projects
       .flatMap((project) => project.workspaces)
       .find((workspace) => workspace.path === result.plot.path);
+    const selection = selectionForSnapshot(get(), result.snapshot);
     set({
       snapshot: result.snapshot,
-      selectedWorkspaceId: created?.workspaceId ?? get().selectedWorkspaceId,
+      ...selection,
+      selectedWorkspaceId:
+        created?.workspaceId ?? selection.selectedWorkspaceId,
     });
     return result;
   },
@@ -152,12 +168,13 @@ export const useSilvic = create<SilvicState>((set, get) => ({
   reportFailure: (error) => set({ error }),
 }));
 
-function setSelectionForSnapshot(
-  set: (partial: Partial<SilvicState>) => void,
-  get: () => SilvicState,
+function selectionForSnapshot(
+  state: Pick<
+    SilvicState,
+    "activeProjectIds" | "selectedProjectId" | "selectedWorkspaceId"
+  >,
   snapshot: SilvicSnapshot,
-): void {
-  const state = get();
+): Pick<SilvicState, "selectedProjectId" | "selectedWorkspaceId"> {
   // Only projects the user has added are selectable; suggestions stay inert
   // until they are accepted into the rail.
   const available = snapshot.projects.filter((project) =>
@@ -170,10 +187,10 @@ function setSelectionForSnapshot(
     selectedProject?.workspaces.find(
       (workspace) => workspace.workspaceId === state.selectedWorkspaceId,
     ) ?? selectedProject?.workspaces[0];
-  set({
+  return {
     selectedProjectId: selectedProject?.id,
     selectedWorkspaceId: selectedWorkspace?.workspaceId,
-  });
+  };
 }
 
 function message(error: unknown): string {

@@ -6,7 +6,12 @@ import type {
   WorkspaceSnapshot,
 } from "@silvic/contracts";
 
-import { mergeSnapshots, withoutWorkspace } from "./snapshot-merge";
+import {
+  mergeSnapshots,
+  snapshotsSemanticallyEqual,
+  withoutWorkspace,
+  workspaceRecordsEqual,
+} from "./snapshot-merge";
 
 const workspace = (
   path: string,
@@ -149,5 +154,45 @@ describe("withoutWorkspace", () => {
 
   it("changes nothing when the path belongs to no plot", () => {
     expect(withoutWorkspace(snapshot, "/plots/elsewhere")).toEqual(snapshot);
+  });
+});
+
+describe("semantic snapshot equality", () => {
+  const value: SilvicSnapshot = {
+    projects: [project("like.photo", "/repos/like.photo", [])],
+    connectorFailures: [],
+    refreshedAt: "before",
+  };
+
+  it("ignores refresh timestamps but catches domain changes", () => {
+    expect(
+      snapshotsSemanticallyEqual(value, { ...value, refreshedAt: "after" }),
+    ).toBe(true);
+    expect(
+      snapshotsSemanticallyEqual(value, {
+        ...value,
+        projects: [{ ...value.projects[0]!, name: "changed" }],
+      }),
+    ).toBe(false);
+  });
+
+  it("recognises unchanged workspace records", () => {
+    const records = [
+      {
+        workspaceId: "one",
+        projectId: "project",
+        path: "/project",
+        branch: "main",
+      },
+    ];
+    expect(
+      workspaceRecordsEqual(
+        records,
+        records.map((record) => ({ ...record })),
+      ),
+    ).toBe(true);
+    expect(
+      workspaceRecordsEqual(records, [{ ...records[0]!, branch: "other" }]),
+    ).toBe(false);
   });
 });

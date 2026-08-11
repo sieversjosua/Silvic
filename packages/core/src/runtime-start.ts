@@ -2,7 +2,7 @@ import type { PlotRuntimeStart } from "@silvic/contracts";
 
 export interface RuntimeStartupProcess {
   id: string;
-  status: "running" | "stopping" | "stopped" | "failed";
+  status: "starting" | "running" | "stopping" | "stopped" | "failed";
   exitCode?: number;
   advice?: string;
 }
@@ -30,7 +30,11 @@ export function runtimeStartResult({
     const explicit = failures[id];
     if (explicit) return [[id, explicit] as const];
     const process = processes.find((candidate) => candidate.id === id);
-    if (process?.status === "running") return [];
+    // A routed preview remains "starting" until its concrete listener and
+    // named address both answer. The later readiness phase owns that wait.
+    if (process?.status === "starting" || process?.status === "running") {
+      return [];
+    }
     const reason =
       process?.advice ??
       (process?.exitCode === undefined
