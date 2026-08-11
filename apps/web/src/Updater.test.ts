@@ -79,6 +79,19 @@ describe("UpdateButton", () => {
     expect(markup).toContain("Check for updates");
   });
 
+  it("stacks its copy above the action in the narrow sidebar", () => {
+    const markup = renderToStaticMarkup(
+      createElement(UpdateButton, {
+        state: { phase: "current", currentVersion: "0.1.0" },
+        onAction: vi.fn(),
+      }),
+    );
+
+    expect(markup).toContain(
+      '<span class="app-update-copy"><span class="micro">Silvic 0.1.0</span><span class="app-update-detail" title="Up to date">Up to date</span></span><button',
+    );
+  });
+
   it("shows the failure reason in place, not only on hover", () => {
     const markup = renderToStaticMarkup(
       createElement(UpdateButton, {

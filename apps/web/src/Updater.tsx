@@ -68,8 +68,10 @@ export function UpdateButton({
   if (state.phase === "unsupported") {
     return (
       <div className="app-update" data-tone={state.phase}>
-        <span className="micro">Silvic {state.currentVersion}</span>
-        <span className="app-update-detail">Development build</span>
+        <span className="app-update-copy">
+          <span className="micro">Silvic {state.currentVersion}</span>
+          <span className="app-update-detail">Development build</span>
+        </span>
       </div>
     );
   }
@@ -91,12 +93,14 @@ export function UpdateButton({
   // performUpdateAction already ignores clicks while checking or downloading.
   return (
     <div className="app-update" data-tone={state.phase} role="status">
-      <span className="micro">Silvic {state.currentVersion}</span>
-      {detail && (
-        <span className="app-update-detail" title={detail}>
-          {detail}
-        </span>
-      )}
+      <span className="app-update-copy">
+        <span className="micro">Silvic {state.currentVersion}</span>
+        {detail && (
+          <span className="app-update-detail" title={detail}>
+            {detail}
+          </span>
+        )}
+      </span>
       <button type="button" aria-disabled={pending} onClick={onAction}>
         {icon}
         {label}
