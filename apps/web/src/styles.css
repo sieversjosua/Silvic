@@ -571,22 +571,44 @@ button {
 
 .app-update {
   display: flex;
-  flex-direction: column;
-  gap: 5px;
-  align-items: flex-start;
+  width: 100%;
+  min-width: 0;
+  gap: 6px;
+  align-items: center;
   margin-bottom: 4px;
   padding: 7px 8px;
   border: 1px solid var(--rule);
   border-radius: var(--r-md);
   color: var(--ink-muted);
   font-size: 10.5px;
+  text-align: left;
 }
 
-.app-update-copy {
-  display: flex;
+.app-update svg {
+  flex: 0 0 auto;
+}
+
+.app-update-version {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.app-update-label {
   min-width: 0;
-  flex-direction: column;
-  gap: 3px;
+  overflow: hidden;
+  font-weight: 560;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-update-label::before {
+  margin-right: 6px;
+  color: var(--ink-faint);
+  content: "·";
 }
 
 /* At rest the box is just a version line; the frame is for states that act. */
@@ -597,40 +619,12 @@ button {
   border-color: transparent;
 }
 
-.app-update .micro {
-  overflow: hidden;
-  color: inherit;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.app-update-detail {
-  display: -webkit-box;
-  overflow: hidden;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  color: var(--ink-faint);
-  line-height: 1.35;
-}
-
-.app-update button {
-  display: flex;
-  gap: 5px;
-  align-items: center;
-  padding: 5px 7px;
-  border-radius: var(--r-sm);
-  color: var(--ink-muted);
-  font-size: 10.5px;
-  font-weight: 560;
-  white-space: nowrap;
-}
-
-.app-update button:hover:not([aria-disabled="true"]) {
+button.app-update:hover:not([aria-disabled="true"]) {
   color: var(--ink);
   background: var(--surface-active);
 }
 
-.app-update button[aria-disabled="true"] {
+button.app-update[aria-disabled="true"] {
   cursor: default;
   opacity: 0.72;
 }
@@ -641,8 +635,8 @@ button {
   background: var(--accent-wash);
 }
 
-.app-update[data-tone="available"] button,
-.app-update[data-tone="ready"] button {
+.app-update[data-tone="available"],
+.app-update[data-tone="ready"] {
   color: var(--accent);
 }
 
@@ -650,7 +644,7 @@ button {
   border-color: color-mix(in srgb, var(--tone-attention) 32%, var(--rule));
 }
 
-.app-update[data-tone="error"] button {
+.app-update[data-tone="error"] {
   color: var(--tone-attention);
 }
 

@@ -18,8 +18,8 @@ describe("UpdateButton", () => {
       }),
     );
 
-    expect(markup).toContain("Silvic 0.1.0");
-    expect(markup).toContain("Update to 0.1.1");
+    expect(markup).toContain("Silvic 0.1.1");
+    expect(markup).toContain('class="app-update-label">Update</span>');
     expect(markup).toContain('data-tone="available"');
   });
 
@@ -35,12 +35,12 @@ describe("UpdateButton", () => {
       }),
     );
 
-    expect(markup).toContain("Restart to update");
-    expect(markup).not.toContain("Update to 0.1.1");
+    expect(markup).toContain('class="app-update-label">Restart</span>');
+    expect(markup).not.toContain(">Update<");
   });
 
   it.each([
-    [{ phase: "idle", currentVersion: "0.1.0" }, "Check for updates"],
+    [{ phase: "idle", currentVersion: "0.1.0" }, "Check updates"],
     [{ phase: "checking", currentVersion: "0.1.0" }, "Checking…"],
     [
       {
@@ -49,7 +49,7 @@ describe("UpdateButton", () => {
         availableVersion: "0.1.1",
         progressPercent: 49,
       },
-      "Downloading 49%",
+      "49%",
     ],
     [
       {
@@ -57,7 +57,7 @@ describe("UpdateButton", () => {
         currentVersion: "0.1.0",
         message: "Release offline",
       },
-      "Retry update",
+      "Retry",
     ],
   ] as const)("explains update state %# in place", (state, label) => {
     const markup = renderToStaticMarkup(
@@ -67,19 +67,7 @@ describe("UpdateButton", () => {
     expect(markup).toContain(label);
   });
 
-  it("confirms a completed check instead of silently resetting", () => {
-    const markup = renderToStaticMarkup(
-      createElement(UpdateButton, {
-        state: { phase: "current", currentVersion: "0.1.0" },
-        onAction: vi.fn(),
-      }),
-    );
-
-    expect(markup).toContain("Up to date");
-    expect(markup).toContain("Check for updates");
-  });
-
-  it("stacks its copy above the action in the narrow sidebar", () => {
+  it("keeps a completed check in the compact button's accessible copy", () => {
     const markup = renderToStaticMarkup(
       createElement(UpdateButton, {
         state: { phase: "current", currentVersion: "0.1.0" },
@@ -88,11 +76,27 @@ describe("UpdateButton", () => {
     );
 
     expect(markup).toContain(
-      '<span class="app-update-copy"><span class="micro">Silvic 0.1.0</span><span class="app-update-detail" title="Up to date">Up to date</span></span><button',
+      'aria-label="Silvic 0.1.0. Check updates. Up to date"',
     );
+    expect(markup).not.toContain(">Up to date<");
   });
 
-  it("shows the failure reason in place, not only on hover", () => {
+  it("combines version and action into one compact sidebar button", () => {
+    const markup = renderToStaticMarkup(
+      createElement(UpdateButton, {
+        state: { phase: "current", currentVersion: "0.1.0" },
+        onAction: vi.fn(),
+      }),
+    );
+
+    expect(markup).toContain(
+      '<span class="app-update-version">Silvic 0.1.0</span><span class="app-update-label">Check updates</span>',
+    );
+    expect(markup.match(/<button/g)).toHaveLength(1);
+    expect(markup).not.toContain(">Up to date<");
+  });
+
+  it("keeps the failure reason accessible without adding another line", () => {
     const markup = renderToStaticMarkup(
       createElement(UpdateButton, {
         state: {
@@ -105,7 +109,8 @@ describe("UpdateButton", () => {
     );
 
     expect(markup).toContain("Release offline");
-    expect(markup).toContain('role="status"');
+    expect(markup).toContain('aria-live="polite"');
+    expect(markup).not.toContain(">Release offline<");
   });
 
   it("identifies a development build without offering a broken action", () => {
@@ -131,8 +136,8 @@ describe("UpdateButton", () => {
       }),
     );
 
-    expect(markup).toContain("Move to Applications");
-    expect(markup).not.toContain("Check for updates");
+    expect(markup).toContain('class="app-update-label">Install</span>');
+    expect(markup).not.toContain("Check updates");
   });
 
   it("makes installation visibly non-interactive", () => {

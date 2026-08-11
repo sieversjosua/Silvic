@@ -68,16 +68,18 @@ export function UpdateButton({
   if (state.phase === "unsupported") {
     return (
       <div className="app-update" data-tone={state.phase}>
-        <span className="app-update-copy">
-          <span className="micro">Silvic {state.currentVersion}</span>
-          <span className="app-update-detail">Development build</span>
+        <span className="app-update-version">
+          Silvic {state.currentVersion}
         </span>
+        <span className="app-update-label">Development build</span>
       </div>
     );
   }
 
   const label = updateLabel(state);
   const detail = updateDetail(state);
+  const version =
+    "availableVersion" in state ? state.availableVersion : state.currentVersion;
   const pending = ["checking", "downloading", "installing"].includes(
     state.phase,
   );
@@ -92,20 +94,24 @@ export function UpdateButton({
   // aria-disabled instead of disabled so focus survives the pending phases;
   // performUpdateAction already ignores clicks while checking or downloading.
   return (
-    <div className="app-update" data-tone={state.phase} role="status">
-      <span className="app-update-copy">
-        <span className="micro">Silvic {state.currentVersion}</span>
-        {detail && (
-          <span className="app-update-detail" title={detail}>
-            {detail}
-          </span>
-        )}
-      </span>
-      <button type="button" aria-disabled={pending} onClick={onAction}>
-        {icon}
-        {label}
-      </button>
-    </div>
+    <button
+      type="button"
+      className="app-update"
+      data-tone={state.phase}
+      aria-disabled={pending}
+      aria-label={
+        detail
+          ? `Silvic ${version}. ${label}. ${detail}`
+          : `Silvic ${version}. ${label}`
+      }
+      aria-live="polite"
+      title={detail}
+      onClick={onAction}
+    >
+      {icon}
+      <span className="app-update-version">Silvic {version}</span>
+      <span className="app-update-label">{label}</span>
+    </button>
   );
 }
 
@@ -113,21 +119,21 @@ function updateLabel(state: AppUpdateState): string {
   switch (state.phase) {
     case "idle":
     case "current":
-      return "Check for updates";
+      return "Check updates";
     case "relocation-required":
-      return "Move to Applications";
+      return "Install";
     case "checking":
       return "Checking…";
     case "available":
-      return `Update to ${state.availableVersion}`;
+      return "Update";
     case "downloading":
-      return `Downloading ${state.progressPercent}%`;
+      return `${state.progressPercent}%`;
     case "ready":
-      return "Restart to update";
+      return "Restart";
     case "installing":
       return "Installing…";
     case "error":
-      return "Retry update";
+      return "Retry";
     case "unsupported":
       return "Development build";
   }
