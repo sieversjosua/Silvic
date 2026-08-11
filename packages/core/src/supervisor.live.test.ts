@@ -14,6 +14,13 @@ const directories: string[] = [];
 const namedRoutes: string[] = [];
 const extraPorts: number[] = [];
 
+function directPortlessEnvironment(): NodeJS.ProcessEnv {
+  const environment = { ...process.env };
+  delete environment.npm_command;
+  delete environment.PNPM_SCRIPT_SRC_DIR;
+  return environment;
+}
+
 afterAll(async () => {
   // Whatever this test started is detached, so it outlives the runner unless
   // it is ended here.
@@ -32,6 +39,7 @@ afterAll(async () => {
     try {
       execFileSync("portless", ["alias", "--remove", routeName], {
         stdio: "ignore",
+        env: directPortlessEnvironment(),
       });
     } catch {
       // A successfully stopped supervisor has already removed it.
@@ -215,6 +223,9 @@ it("publishes the real monorepo listener when the command ignores PORT", async (
   }
   expect(supervisor.list()).toEqual([]);
   expect(
-    execFileSync("portless", ["list"], { encoding: "utf8" }),
+    execFileSync("portless", ["list"], {
+      encoding: "utf8",
+      env: directPortlessEnvironment(),
+    }),
   ).not.toContain(routeName);
 }, 60_000);

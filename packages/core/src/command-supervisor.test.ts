@@ -1,3 +1,4 @@
+import { readdirSync } from "node:fs";
 import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -32,6 +33,31 @@ describe("needsProxy", () => {
 });
 
 describe("CommandSupervisor", () => {
+  it("does not report a command started before its log is open", async () => {
+    const logDirectory = await mkdtemp(join(tmpdir(), "silvic-supervisor-"));
+    temporaryDirectories.push(logDirectory);
+    const supervisor = new CommandSupervisor({
+      logDirectory,
+      onChange: () => {},
+    });
+
+    await supervisor.start({
+      plotPath: logDirectory,
+      id: "web",
+      command: { run: "sleep 10" },
+      routeName: "web-test",
+      environment: {},
+      canRoute: false,
+      detached: false,
+    });
+
+    try {
+      expect(readdirSync(logDirectory)).toHaveLength(1);
+    } finally {
+      supervisor.stopAll();
+    }
+  });
+
   it("publishes a routed command's real listener before calling it running", async () => {
     const logDirectory = await mkdtemp(join(tmpdir(), "silvic-supervisor-"));
     temporaryDirectories.push(logDirectory);

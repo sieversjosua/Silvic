@@ -304,6 +304,17 @@ function executeCommand(
   arguments_: readonly string[],
 ): Promise<CommandResult> {
   return new Promise((resolve) => {
+    const environment: NodeJS.ProcessEnv = {
+      ...process.env,
+      PATH: resolvedCommandPath(),
+    };
+    if (executable === "portless") {
+      // Silvic invokes the resolved CLI directly. Inheriting these markers
+      // from a pnpm-started parent makes Portless mistake that direct call for
+      // `pnpm dlx` / `npx` and refuse even a globally installed binary.
+      delete environment.npm_command;
+      delete environment.PNPM_SCRIPT_SRC_DIR;
+    }
     execFile(
       executable,
       [...arguments_],
@@ -311,7 +322,7 @@ function executeCommand(
         encoding: "utf8",
         timeout: 4_000,
         maxBuffer: 1_000_000,
-        env: { ...process.env, PATH: resolvedCommandPath() },
+        env: environment,
       },
       (error, stdout, stderr) => {
         const exitCode =
@@ -327,7 +338,10 @@ function executeCommand(
 }
 
 function cleanFailure(result: CommandResult): string {
-  return (
-    `${result.stderr}\n${result.stdout}`.trim().split(/\r?\n/).at(-1) ?? ""
-  );
+  const lines = `${result.stderr}\n${result.stdout}`
+    .trim()
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  return lines.find((line) => /^error\b/i.test(line)) ?? lines.at(-1) ?? "";
 }

@@ -1,4 +1,5 @@
 import { execFile, spawn } from "node:child_process";
+import { once } from "node:events";
 import { createWriteStream, type WriteStream } from "node:fs";
 import { mkdir, readFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
@@ -548,6 +549,16 @@ export class CommandSupervisor {
     const stream = createWriteStream(this.logPath(key), {
       flags: append ? "a" : "w",
     });
+    stream.on("error", () => {
+      // A full or detached volume must not take the whole control plane down.
+      if (this.logs.get(key) === stream) this.logs.delete(key);
+    });
+    try {
+      await once(stream, "open");
+    } catch (error) {
+      stream.destroy();
+      throw error;
+    }
     this.logs.set(key, stream);
     return stream;
   }
