@@ -16,9 +16,11 @@ import {
   clipboard,
   dialog,
   ipcMain,
+  Menu,
   nativeTheme,
   shell,
   type IpcMainInvokeEvent,
+  type MenuItemConstructorOptions,
 } from "electron";
 import Store from "electron-store";
 import { autoUpdater } from "electron-updater";
@@ -48,6 +50,7 @@ import {
   recipeSaveRequestSchema,
   workspacePathRequestSchema,
   type AppearancePreference,
+  type AppUpdateState,
   type CreateEnvironmentRequest,
   type HarnessId,
   type PlotCreationResult,
@@ -106,6 +109,10 @@ import {
 } from "@silvic/core";
 
 import { PlotProgressReporter } from "./plot-progress";
+import {
+  updateMenuPresentation,
+  type UpdateMenuAction,
+} from "./application-menu";
 import { DesktopUpdater } from "./updater";
 
 interface Settings {
@@ -229,18 +236,23 @@ if (!app.requestSingleInstanceLock()) {
       mainWindow?.setBackgroundColor(currentWindowBackground());
     });
     await supervisor.adopt(settings.get("runningCommands"));
+    const hasUpdateChannel =
+      app.isPackaged &&
+      process.env.SILVIC_DISABLE_UPDATES !== "1" &&
+      existsSync(join(process.resourcesPath, "app-update.yml"));
     desktopUpdater = new DesktopUpdater({
       source: autoUpdater,
       currentVersion: app.getVersion(),
       // A locally packaged build ships without app-update.yml; checking would
       // only ever produce an ENOENT, so it has no update channel at all.
-      enabled:
-        app.isPackaged &&
-        process.env.SILVIC_DISABLE_UPDATES !== "1" &&
-        existsSync(join(process.resourcesPath, "app-update.yml")),
-      onState: (state) =>
-        mainWindow?.webContents.send(ipcChannels.updateStateChanged, state),
+      enabled: hasUpdateChannel,
+      relocationRequired:
+        hasUpdateChannel &&
+        process.platform === "darwin" &&
+        !app.isInApplicationsFolder(),
+      onState: publishUpdateState,
     });
+    installApplicationMenu();
     registerIpc();
     installRootWatchers();
     createWindow();
@@ -645,6 +657,10 @@ function registerIpc(): void {
     assertTrustedSender(event);
     return knownUpdater().download();
   });
+  ipcMain.handle(ipcChannels.updateMoveToApplications, (event) => {
+    assertTrustedSender(event);
+    return moveApplicationToApplicationsFolder();
+  });
   ipcMain.handle(ipcChannels.updateInstall, (event) => {
     assertTrustedSender(event);
     knownUpdater().install();
@@ -656,8 +672,131 @@ function knownUpdater(): DesktopUpdater {
   return desktopUpdater;
 }
 
+function publishUpdateState(state: AppUpdateState): void {
+  mainWindow?.webContents.send(ipcChannels.updateStateChanged, state);
+  installApplicationMenu();
+}
+
+function installApplicationMenu(): void {
+  if (process.platform !== "darwin" || !desktopUpdater) return;
+  const update = updateMenuPresentation(desktopUpdater.getState());
+  const template: MenuItemConstructorOptions[] = [
+    {
+      label: app.name,
+      submenu: [
+        { role: "about" },
+        { type: "separator" },
+        {
+          label: update.label,
+          enabled: update.enabled,
+          click: () => {
+            const current = updateMenuPresentation(knownUpdater().getState());
+            if (current.action) void performUpdateMenuAction(current.action);
+          },
+        },
+        { type: "separator" },
+        { role: "services" },
+        { type: "separator" },
+        { role: "hide" },
+        { role: "hideOthers" },
+        { role: "unhide" },
+        { type: "separator" },
+        { role: "quit" },
+      ],
+    },
+    { label: "File", submenu: [{ role: "close" }] },
+    {
+      label: "Edit",
+      submenu: [
+        { role: "undo" },
+        { role: "redo" },
+        { type: "separator" },
+        { role: "cut" },
+        { role: "copy" },
+        { role: "paste" },
+        { role: "selectAll" },
+      ],
+    },
+    {
+      label: "View",
+      submenu: [
+        { role: "reload" },
+        { role: "forceReload" },
+        { role: "toggleDevTools" },
+        { type: "separator" },
+        { role: "resetZoom" },
+        { role: "zoomIn" },
+        { role: "zoomOut" },
+        { type: "separator" },
+        { role: "togglefullscreen" },
+      ],
+    },
+    { role: "windowMenu" },
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
+async function performUpdateMenuAction(
+  action: UpdateMenuAction,
+): Promise<void> {
+  switch (action) {
+    case "relocate":
+      moveApplicationToApplicationsFolder();
+      return;
+    case "check":
+      await knownUpdater().check();
+      return;
+    case "download":
+      await knownUpdater().download();
+      return;
+    case "install":
+      knownUpdater().install();
+  }
+}
+
+function moveApplicationToApplicationsFolder(): boolean {
+  if (process.platform !== "darwin" || !app.isPackaged) return false;
+  if (app.isInApplicationsFolder()) return true;
+  try {
+    return app.moveToApplicationsFolder({
+      conflictHandler: (conflictType) => {
+        const options = {
+          type: "warning" as const,
+          title: "Install Silvic",
+          message:
+            conflictType === "existsAndRunning"
+              ? "Silvic is already running from Applications"
+              : "Silvic already exists in Applications",
+          detail:
+            conflictType === "existsAndRunning"
+              ? "Use the installed copy and close this disk-image copy?"
+              : "Replace the installed copy? macOS will move it to Trash.",
+          buttons: ["Cancel", "Continue"],
+          defaultId: 0,
+          cancelId: 0,
+          noLink: true,
+        };
+        const response = mainWindow
+          ? dialog.showMessageBoxSync(mainWindow, options)
+          : dialog.showMessageBoxSync(options);
+        return response === 1;
+      },
+    });
+  } catch (error) {
+    knownUpdater().reportError(error);
+    return false;
+  }
+}
+
 function scheduleAutomaticUpdateChecks(): void {
-  if (desktopUpdater?.getState().phase === "unsupported") return;
+  if (
+    desktopUpdater &&
+    ["unsupported", "relocation-required"].includes(
+      desktopUpdater.getState().phase,
+    )
+  ) {
+    return;
+  }
   const initialCheck = setTimeout(() => void desktopUpdater?.check(), 10_000);
   const recurringCheck = setInterval(
     () => void desktopUpdater?.check(),

@@ -7,6 +7,7 @@ import { DesktopUpdater } from "./updater";
 class FakeUpdater extends EventEmitter {
   autoDownload = true;
   autoInstallOnAppQuit = false;
+  autoRunAppAfterInstall = false;
   checkForUpdates = vi.fn(async () => null);
   downloadUpdate = vi.fn(async () => [] as string[]);
   quitAndInstall = vi.fn();
@@ -29,6 +30,7 @@ describe("DesktopUpdater", () => {
     });
     expect(source.autoDownload).toBe(false);
     expect(source.autoInstallOnAppQuit).toBe(false);
+    expect(source.autoRunAppAfterInstall).toBe(true);
 
     await updater.check();
     expect(source.checkForUpdates).toHaveBeenCalledOnce();
@@ -53,6 +55,10 @@ describe("DesktopUpdater", () => {
     });
 
     updater.install();
+    expect(updater.getState()).toMatchObject({
+      phase: "installing",
+      availableVersion: "0.1.1",
+    });
     expect(source.quitAndInstall).toHaveBeenCalledWith(false, true);
     expect(states).toEqual([
       "checking",
@@ -60,7 +66,40 @@ describe("DesktopUpdater", () => {
       "downloading",
       "downloading",
       "ready",
+      "installing",
     ]);
+  });
+
+  it("requires relocation before contacting the update feed", async () => {
+    const source = new FakeUpdater();
+    const updater = new DesktopUpdater({
+      source,
+      currentVersion: "0.1.0",
+      enabled: true,
+      relocationRequired: true,
+      onState: () => undefined,
+    });
+
+    expect(updater.getState()).toEqual({
+      phase: "relocation-required",
+      currentVersion: "0.1.0",
+    });
+    await updater.check();
+    await updater.download();
+    updater.install();
+
+    expect(source.checkForUpdates).not.toHaveBeenCalled();
+    expect(source.downloadUpdate).not.toHaveBeenCalled();
+    expect(source.quitAndInstall).not.toHaveBeenCalled();
+
+    updater.reportError(new Error("Applications folder is unavailable"));
+    expect(updater.getState()).toEqual({
+      phase: "relocation-required",
+      currentVersion: "0.1.0",
+      message: "Applications folder is unavailable",
+    });
+    await updater.check();
+    expect(source.checkForUpdates).not.toHaveBeenCalled();
   });
 
   it("turns update failures into a retryable state", async () => {

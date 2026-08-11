@@ -8,6 +8,7 @@ import type {
 export interface UpdateSource {
   autoDownload: boolean;
   autoInstallOnAppQuit: boolean;
+  autoRunAppAfterInstall: boolean;
   on(
     event: "update-available",
     listener: (information: UpdateInfo) => void,
@@ -41,17 +42,23 @@ export class DesktopUpdater {
       source: UpdateSource;
       currentVersion: string;
       enabled: boolean;
+      relocationRequired?: boolean;
       onState(state: AppUpdateState): void;
     },
   ) {
     this.state = {
-      phase: options.enabled ? "idle" : "unsupported",
+      phase: !options.enabled
+        ? "unsupported"
+        : options.relocationRequired
+          ? "relocation-required"
+          : "idle",
       currentVersion: options.currentVersion,
     };
-    if (!options.enabled) return;
+    if (!options.enabled || options.relocationRequired) return;
 
     options.source.autoDownload = false;
     options.source.autoInstallOnAppQuit = false;
+    options.source.autoRunAppAfterInstall = true;
     options.source.on("update-available", (information) => {
       this.publish({
         phase: "available",
@@ -92,6 +99,7 @@ export class DesktopUpdater {
   async check(): Promise<AppUpdateState> {
     if (
       !this.options.enabled ||
+      this.options.relocationRequired ||
       !["idle", "current", "error"].includes(this.state.phase)
     ) {
       return this.state;
@@ -125,7 +133,24 @@ export class DesktopUpdater {
 
   install(): void {
     if (this.state.phase !== "ready") return;
-    this.options.source.quitAndInstall(false, true);
+    this.publish({ ...this.state, phase: "installing" });
+    try {
+      this.options.source.quitAndInstall(false, true);
+    } catch (error) {
+      this.fail(error);
+    }
+  }
+
+  reportError(error: unknown): void {
+    if (this.options.relocationRequired) {
+      this.publish({
+        phase: "relocation-required",
+        currentVersion: this.options.currentVersion,
+        message: failureMessage(error),
+      });
+      return;
+    }
+    this.fail(error);
   }
 
   private publish(state: AppUpdateState): void {

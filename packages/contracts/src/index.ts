@@ -855,10 +855,14 @@ interface AppUpdateStateBase {
 
 export type AppUpdateState =
   | (AppUpdateStateBase & {
+      phase: "relocation-required";
+      message?: string;
+    })
+  | (AppUpdateStateBase & {
       phase: "unsupported" | "idle" | "checking" | "current";
     })
   | (AppUpdateStateBase & {
-      phase: "available" | "ready";
+      phase: "available" | "ready" | "installing";
       availableVersion: string;
     })
   | (AppUpdateStateBase & {
@@ -920,6 +924,7 @@ export interface SilvicDesktopApi {
   getUpdateState(): Promise<AppUpdateState>;
   checkForUpdates(): Promise<AppUpdateState>;
   downloadUpdate(): Promise<AppUpdateState>;
+  moveToApplications(): Promise<boolean>;
   installUpdate(): Promise<void>;
   onUpdateState(listener: (state: AppUpdateState) => void): () => void;
   getActiveProjects(): Promise<readonly string[]>;
@@ -964,6 +969,7 @@ export const ipcChannels = {
   updateStateGet: "silvic:update:state:get",
   updateCheck: "silvic:update:check",
   updateDownload: "silvic:update:download",
+  updateMoveToApplications: "silvic:update:move-to-applications",
   updateInstall: "silvic:update:install",
   updateStateChanged: "silvic:update:state:changed",
   projectsActiveGet: "silvic:projects:active:get",

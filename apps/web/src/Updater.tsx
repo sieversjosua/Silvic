@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
-import { Download, RefreshCw } from "lucide-react";
+import { Download, FolderInput, RefreshCw } from "lucide-react";
 
 import type { AppUpdateState } from "@silvic/contracts";
 
 export interface UpdateActions {
   check(): Promise<unknown>;
   download(): Promise<unknown>;
+  relocate(): Promise<unknown>;
   install(): Promise<unknown>;
 }
 
@@ -13,7 +14,9 @@ export async function performUpdateAction(
   state: AppUpdateState,
   actions: UpdateActions,
 ): Promise<void> {
-  if (["idle", "current", "error"].includes(state.phase)) {
+  if (state.phase === "relocation-required") {
+    await actions.relocate();
+  } else if (["idle", "current", "error"].includes(state.phase)) {
     await actions.check();
   } else if (state.phase === "available") {
     await actions.download();
@@ -47,6 +50,7 @@ export function AppUpdater() {
         void performUpdateAction(state, {
           check: () => window.silvic.checkForUpdates(),
           download: () => window.silvic.downloadUpdate(),
+          relocate: () => window.silvic.moveToApplications(),
           install: () => window.silvic.installUpdate(),
         })
       }
@@ -72,9 +76,13 @@ export function UpdateButton({
 
   const label = updateLabel(state);
   const detail = updateDetail(state);
-  const pending = ["checking", "downloading"].includes(state.phase);
+  const pending = ["checking", "downloading", "installing"].includes(
+    state.phase,
+  );
   const icon =
-    state.phase === "available" ? (
+    state.phase === "relocation-required" ? (
+      <FolderInput size={12} />
+    ) : state.phase === "available" ? (
       <Download size={12} />
     ) : (
       <RefreshCw size={12} className={pending ? "spinning" : undefined} />
@@ -102,6 +110,8 @@ function updateLabel(state: AppUpdateState): string {
     case "idle":
     case "current":
       return "Check for updates";
+    case "relocation-required":
+      return "Move to Applications";
     case "checking":
       return "Checking…";
     case "available":
@@ -110,6 +120,8 @@ function updateLabel(state: AppUpdateState): string {
       return `Downloading ${state.progressPercent}%`;
     case "ready":
       return "Restart to update";
+    case "installing":
+      return "Installing…";
     case "error":
       return "Retry update";
     case "unsupported":
@@ -119,8 +131,15 @@ function updateLabel(state: AppUpdateState): string {
 
 function updateDetail(state: AppUpdateState): string | undefined {
   switch (state.phase) {
+    case "relocation-required":
+      return (
+        state.message ??
+        "Install once so future updates can apply automatically"
+      );
     case "current":
       return "Up to date";
+    case "installing":
+      return "Silvic will reopen when the installation finishes";
     case "error":
       return state.message;
     default:

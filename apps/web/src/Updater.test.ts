@@ -107,13 +107,52 @@ describe("UpdateButton", () => {
     expect(markup).not.toContain("<button");
   });
 
+  it("moves a packaged app before offering downloads", () => {
+    const markup = renderToStaticMarkup(
+      createElement(UpdateButton, {
+        state: {
+          phase: "relocation-required",
+          currentVersion: "0.1.0",
+        } as never,
+        onAction: vi.fn(),
+      }),
+    );
+
+    expect(markup).toContain("Move to Applications");
+    expect(markup).not.toContain("Check for updates");
+  });
+
+  it("makes installation visibly non-interactive", () => {
+    const markup = renderToStaticMarkup(
+      createElement(UpdateButton, {
+        state: {
+          phase: "installing",
+          currentVersion: "0.1.0",
+          availableVersion: "0.1.1",
+        } as never,
+        onAction: vi.fn(),
+      }),
+    );
+
+    expect(markup).toContain("Installing…");
+    expect(markup).toContain('aria-disabled="true"');
+  });
+
   it("maps each visible action to exactly one desktop update command", async () => {
     const actions = {
       check: vi.fn(async () => undefined),
       download: vi.fn(async () => undefined),
+      relocate: vi.fn(async () => undefined),
       install: vi.fn(async () => undefined),
     };
 
+    await performUpdateAction(
+      {
+        phase: "relocation-required",
+        currentVersion: "0.1.0",
+      },
+      actions,
+    );
     await performUpdateAction(
       {
         phase: "available",
@@ -133,6 +172,7 @@ describe("UpdateButton", () => {
 
     expect(actions.check).not.toHaveBeenCalled();
     expect(actions.download).toHaveBeenCalledOnce();
+    expect(actions.relocate).toHaveBeenCalledOnce();
     expect(actions.install).toHaveBeenCalledOnce();
   });
 });

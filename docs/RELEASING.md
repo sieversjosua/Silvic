@@ -55,6 +55,12 @@ An installed Silvic checks shortly after launch and every four hours. It never
 downloads without a click: **Update to …** downloads the release, and only
 **Restart to update** quits and installs it.
 
+On macOS the app must live in an Applications folder before Squirrel can replace
+it. A copy opened directly from the read-only DMG therefore offers **Move to
+Applications** before it offers an update download. The same action is available
+from the Silvic application menu. A successful move quits and relaunches the
+installed copy automatically.
+
 ## Install on another Mac
 
 Open the repository's public GitHub Releases page on the other Mac, download the

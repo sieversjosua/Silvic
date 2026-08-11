@@ -74,6 +74,8 @@ const api: SilvicDesktopApi = {
   getUpdateState: () => ipcRenderer.invoke(ipcChannels.updateStateGet),
   checkForUpdates: () => ipcRenderer.invoke(ipcChannels.updateCheck),
   downloadUpdate: () => ipcRenderer.invoke(ipcChannels.updateDownload),
+  moveToApplications: () =>
+    ipcRenderer.invoke(ipcChannels.updateMoveToApplications),
   installUpdate: () => ipcRenderer.invoke(ipcChannels.updateInstall),
   onUpdateState: (listener: (state: AppUpdateState) => void) => {
     const handler = (
