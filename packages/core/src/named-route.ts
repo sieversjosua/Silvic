@@ -82,7 +82,7 @@ export class PortlessRoutePublisher implements NamedRoutePublisher {
   ): Promise<PublishedNamedRoute> {
     const deadline = this.now() + (request.timeoutMs ?? 45_000);
     let latest =
-      "No responding HTTP listener appeared in the runtime process tree.";
+      "No browser-facing HTML listener appeared in the runtime output or process tree.";
 
     while (true) {
       const listeners = await this.inspect(request.processId);
@@ -176,42 +176,70 @@ async function selectListener({
       .map((match) => Number(match[1]))
       .filter((port) => port > 0 && port <= 65_535),
   );
+  // A dev server may report that another instance already owns its port and
+  // then exit. That existing server is no longer a descendant of the newly
+  // supervised command, but its explicit localhost URL is still the strongest
+  // available signal that it is the browser app this command intended to run.
+  const listenersByPort = new Map(
+    listeners.map((listener) => [listener.port, listener]),
+  );
+  for (const port of announced) {
+    if (!listenersByPort.has(port)) {
+      listenersByPort.set(port, { processId: 0, port });
+    }
+  }
   const candidates = await Promise.all(
-    listeners.map(async (listener) => ({
+    [...listenersByPort.values()].map(async (listener) => ({
       listener,
       response: await probe(`http://127.0.0.1:${listener.port}/`),
     })),
   );
 
-  return candidates
-    .filter(
-      (
-        candidate,
-      ): candidate is {
-        listener: ProcessListener;
-        response: RouteProbe;
-      } => candidate.response !== undefined && candidate.response.status < 500,
-    )
-    .sort((left, right) => {
-      const score = (candidate: {
-        listener: ProcessListener;
-        response: RouteProbe;
-      }) =>
-        // PORT is an offered address, not proof of identity. A monorepo can
-        // hand it to a health/API sidecar while its browser app chooses another
-        // listener, so browser-facing and announced listeners rank above it.
-        (candidate.response.contentType?.toLowerCase().includes("text/html")
-          ? 10_000
-          : 0) +
-        (announced.has(candidate.listener.port) ? 1_000 : 0) +
-        (candidate.listener.port === expectedPort ? 100 : 0) +
-        (candidate.response.status >= 200 && candidate.response.status < 400
-          ? 10
-          : 0);
-      return (
-        score(right) - score(left) || left.listener.port - right.listener.port
-      );
-    })[0]?.listener;
+  return (
+    candidates
+      .filter(
+        (
+          candidate,
+        ): candidate is {
+          listener: ProcessListener;
+          response: RouteProbe;
+        } =>
+          candidate.response !== undefined && candidate.response.status < 500,
+      )
+      // A route marked as a web preview must actually render in a browser.
+      // Health checks and API sidecars commonly answer 200 with `OK` or JSON;
+      // publishing either would make a broken web runtime look successful.
+      .filter((candidate) => browserFacing(candidate.response))
+      .sort((left, right) => {
+        const score = (candidate: {
+          listener: ProcessListener;
+          response: RouteProbe;
+        }) =>
+          // PORT is an offered address, not proof of identity. A monorepo can
+          // hand it to a health/API sidecar while its browser app chooses another
+          // listener, so browser-facing and announced listeners rank above it.
+          (candidate.response.contentType?.toLowerCase().includes("text/html")
+            ? 10_000
+            : 0) +
+          (announced.has(candidate.listener.port) ? 1_000 : 0) +
+          (candidate.listener.port === expectedPort ? 100 : 0) +
+          (candidate.response.status >= 200 && candidate.response.status < 400
+            ? 10
+            : 0);
+        return (
+          score(right) - score(left) || left.listener.port - right.listener.port
+        );
+      })[0]?.listener
+  );
+}
+
+function browserFacing(response: RouteProbe): boolean {
+  const type = mediaType(response.contentType);
+  return (
+    type === "text/html" ||
+    type === "application/xhtml+xml" ||
+    (response.status >= 300 && response.status < 400)
+  );
 }
 
 function mediaType(contentType: string | undefined): string {
