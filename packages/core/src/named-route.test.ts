@@ -68,6 +68,59 @@ describe("PortlessRoutePublisher", () => {
     ]);
   });
 
+  it("does not publish a plain-text sidecar that happens to claim PORT", async () => {
+    const execute = vi.fn().mockResolvedValue({
+      exitCode: 0,
+      stdout: "Alias registered",
+      stderr: "",
+    });
+    const probe = vi.fn(async (url: string) => {
+      if (url === "http://127.0.0.1:8691/") {
+        return { status: 200, contentType: "text/plain", body: "OK" };
+      }
+      if (url === "http://127.0.0.1:4321/") {
+        return {
+          status: 200,
+          contentType: "text/html; charset=utf-8",
+          body: "<!doctype html><title>Web app</title>",
+        };
+      }
+      if (url === "https://web-cmd-k-menu-mono.localhost/") {
+        return {
+          status: 200,
+          contentType: "text/html; charset=utf-8",
+          body: "<!doctype html><title>Web app</title>",
+        };
+      }
+      return undefined;
+    });
+    const publisher = new PortlessRoutePublisher({
+      execute,
+      probe,
+      inspect: async () => [
+        { processId: 201, port: 8691 },
+        { processId: 202, port: 4321 },
+      ],
+      wait: async () => undefined,
+    });
+
+    const published = await publisher.publish({
+      routeName: "web-cmd-k-menu-mono",
+      processId: 200,
+      expectedPort: 8691,
+      output: () => "Local: http://localhost:4321",
+      timeoutMs: 10,
+    });
+
+    expect(published).toEqual({ port: 4321 });
+    expect(execute).toHaveBeenCalledWith("portless", [
+      "alias",
+      "web-cmd-k-menu-mono",
+      "4321",
+      "--force",
+    ]);
+  });
+
   it("does not call a Portless 502 or missing route healthy", async () => {
     const namedStatus = { current: 502 };
     const publisher = new PortlessRoutePublisher({
@@ -87,6 +140,29 @@ describe("PortlessRoutePublisher", () => {
       }),
     ).resolves.toBe(false);
     namedStatus.current = 404;
+    await expect(
+      publisher.healthy({
+        routeName: "web-cmd-k-menu-mono",
+        port: 4321,
+      }),
+    ).resolves.toBe(false);
+  });
+
+  it("does not call a named route healthy when it serves OK instead of the app", async () => {
+    const publisher = new PortlessRoutePublisher({
+      execute: vi.fn(),
+      inspect: async () => [],
+      probe: async (url) =>
+        url.startsWith("http://127.0.0.1")
+          ? {
+              status: 200,
+              contentType: "text/html; charset=utf-8",
+              body: "<!doctype html><title>Web app</title>",
+            }
+          : { status: 200, contentType: "text/plain", body: "OK" },
+      wait: async () => undefined,
+    });
+
     await expect(
       publisher.healthy({
         routeName: "web-cmd-k-menu-mono",

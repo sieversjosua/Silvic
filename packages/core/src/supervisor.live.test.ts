@@ -153,7 +153,7 @@ it("starts a real command, stops its whole group, and is taken back", async () =
   expect(listeners.trim()).toBe("0");
 }, 60_000);
 
-it("publishes the real monorepo listener when the command ignores PORT", async () => {
+it("publishes the real web listener when a monorepo sidecar claims PORT", async () => {
   const plot = await mkdtemp(join(tmpdir(), "silvic-routed-live-"));
   const logs = await mkdtemp(join(tmpdir(), "silvic-routed-logs-"));
   directories.push(plot, logs);
@@ -174,10 +174,15 @@ it("publishes the real monorepo listener when the command ignores PORT", async (
     command: {
       run: [
         "node -e",
-        '\'require("http").createServer((request, response) => {',
+        '\'const http = require("http");',
+        "http.createServer((request, response) => {",
         'response.writeHead(200, {"content-type": "text/html"});',
         'response.end("<h1>Silvic route is live</h1>");',
-        '}).listen(Number(process.env.ACTUAL_PORT), "127.0.0.1")\'',
+        '}).listen(Number(process.env.ACTUAL_PORT), "127.0.0.1");',
+        "http.createServer((request, response) => {",
+        'response.writeHead(200, {"content-type": "text/plain"});',
+        'response.end("OK");',
+        '}).listen(Number(process.env.PORT), "127.0.0.1")\'',
       ].join(" "),
       url: true,
     },
@@ -204,17 +209,10 @@ it("publishes the real monorepo listener when the command ignores PORT", async (
 
   const served = execFileSync(
     "curl",
-    [
-      "-ksS",
-      "-o",
-      "/dev/null",
-      "-w",
-      "%{http_code}",
-      `https://${routeName}.localhost/`,
-    ],
+    ["-ksS", `https://${routeName}.localhost/`],
     { encoding: "utf8" },
   );
-  expect(served.trim()).toBe("200");
+  expect(served.trim()).toBe("<h1>Silvic route is live</h1>");
 
   supervisor.stop(plot, "web");
   for (let attempt = 0; attempt < 50; attempt += 1) {

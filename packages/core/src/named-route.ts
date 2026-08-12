@@ -139,6 +139,12 @@ export class PortlessRoutePublisher implements NamedRoutePublisher {
     if (!direct || !named || direct.status >= 500 || named.status >= 500) {
       return false;
     }
+    // Portless preserves the upstream content type. A different type means the
+    // alias reached another listener even when both listeners answered 200 —
+    // commonly a monorepo health sidecar whose entire response is `OK`.
+    if (mediaType(direct.contentType) !== mediaType(named.contentType)) {
+      return false;
+    }
     // Portless's own missing-route page is a 404. A real app may also use a
     // 404 at its root, so it is healthy only when the upstream agrees.
     if (named.status === 404 && direct.status !== 404) return false;
@@ -191,11 +197,14 @@ async function selectListener({
         listener: ProcessListener;
         response: RouteProbe;
       }) =>
-        (candidate.listener.port === expectedPort ? 10_000 : 0) +
-        (announced.has(candidate.listener.port) ? 1_000 : 0) +
+        // PORT is an offered address, not proof of identity. A monorepo can
+        // hand it to a health/API sidecar while its browser app chooses another
+        // listener, so browser-facing and announced listeners rank above it.
         (candidate.response.contentType?.toLowerCase().includes("text/html")
-          ? 100
+          ? 10_000
           : 0) +
+        (announced.has(candidate.listener.port) ? 1_000 : 0) +
+        (candidate.listener.port === expectedPort ? 100 : 0) +
         (candidate.response.status >= 200 && candidate.response.status < 400
           ? 10
           : 0);
@@ -203,6 +212,10 @@ async function selectListener({
         score(right) - score(left) || left.listener.port - right.listener.port
       );
     })[0]?.listener;
+}
+
+function mediaType(contentType: string | undefined): string {
+  return contentType?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
 }
 
 export function descendantListenerPorts({

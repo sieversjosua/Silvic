@@ -128,6 +128,64 @@ describe("CommandSupervisor", () => {
     expect(onChange).toHaveBeenLastCalledWith([]);
   });
 
+  it("repairs a persisted named route when Silvic reopens", async () => {
+    const logDirectory = await mkdtemp(join(tmpdir(), "silvic-supervisor-"));
+    temporaryDirectories.push(logDirectory);
+    const originalPublisher: NamedRoutePublisher = {
+      publish: vi.fn().mockResolvedValue({ port: 4321 }),
+      healthy: vi.fn().mockResolvedValue(true),
+      remove: vi.fn().mockResolvedValue(undefined),
+    };
+    const original = new CommandSupervisor({
+      logDirectory,
+      onChange: () => {},
+      routePublisher: originalPublisher,
+    });
+    await original.start({
+      plotPath: logDirectory,
+      id: "web",
+      command: { run: "sleep 10", url: true },
+      routeName: "web-persisted",
+      environment: { PORT: "8691" },
+      canRoute: true,
+      detached: false,
+    });
+    await vi.waitFor(() =>
+      expect(original.list()[0]).toMatchObject({
+        status: "running",
+        targetPort: 4321,
+      }),
+    );
+
+    const reopenedPublisher: NamedRoutePublisher = {
+      publish: vi.fn().mockResolvedValue({ port: 4321 }),
+      healthy: vi.fn().mockResolvedValue(false),
+      remove: vi.fn().mockResolvedValue(undefined),
+    };
+    const reopened = new CommandSupervisor({
+      logDirectory,
+      onChange: () => {},
+      routePublisher: reopenedPublisher,
+    });
+    await reopened.adopt(original.list());
+
+    await vi.waitFor(() =>
+      expect(reopenedPublisher.publish).toHaveBeenCalledWith(
+        expect.objectContaining({
+          routeName: "web-persisted",
+          processId: original.list()[0]?.processId,
+          expectedPort: 8691,
+        }),
+      ),
+    );
+    expect(reopened.list()[0]).toMatchObject({
+      status: "running",
+      targetPort: 4321,
+    });
+    expect(reopened.list()[0]).not.toHaveProperty("advice");
+    reopened.stopAll();
+  });
+
   it("republishes a named route when its healthy listener changes", async () => {
     const logDirectory = await mkdtemp(join(tmpdir(), "silvic-supervisor-"));
     temporaryDirectories.push(logDirectory);
