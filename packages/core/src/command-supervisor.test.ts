@@ -128,7 +128,7 @@ describe("CommandSupervisor", () => {
     expect(onChange).toHaveBeenLastCalledWith([]);
   });
 
-  it("repairs a persisted named route when Silvic reopens", async () => {
+  it("rediscovers a persisted named route when Silvic reopens", async () => {
     const logDirectory = await mkdtemp(join(tmpdir(), "silvic-supervisor-"));
     temporaryDirectories.push(logDirectory);
     const originalPublisher: NamedRoutePublisher = {
@@ -159,7 +159,9 @@ describe("CommandSupervisor", () => {
 
     const reopenedPublisher: NamedRoutePublisher = {
       publish: vi.fn().mockResolvedValue({ port: 4321 }),
-      healthy: vi.fn().mockResolvedValue(false),
+      // Reaching the persisted target proves only that the alias is wired to
+      // that port. It can still be the old `OK` sidecar rather than the app.
+      healthy: vi.fn().mockResolvedValue(true),
       remove: vi.fn().mockResolvedValue(undefined),
     };
     const reopened = new CommandSupervisor({
@@ -178,6 +180,7 @@ describe("CommandSupervisor", () => {
         }),
       ),
     );
+    expect(reopenedPublisher.healthy).not.toHaveBeenCalled();
     expect(reopened.list()[0]).toMatchObject({
       status: "running",
       targetPort: 4321,

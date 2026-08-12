@@ -111,13 +111,17 @@ export class CommandSupervisor {
       if (!running) continue;
       const key = keyFor(entry.plotPath, entry.id);
       this.running.set(key, entry);
-      if (entry.routeName && entry.targetPort) {
-        void this.reconcileAdoptedRoute(key, {
-          ...entry,
-          processId: entry.processId,
-          routeName: entry.routeName,
-          targetPort: entry.targetPort,
-        });
+      const expectedPort = entry.expectedPort ?? entry.targetPort;
+      if (entry.routeName && expectedPort) {
+        void this.reconcileAdoptedRoute(
+          key,
+          {
+            ...entry,
+            processId: entry.processId,
+            routeName: entry.routeName,
+          },
+          expectedPort,
+        );
       }
     }
     // This also clears stale persisted entries when none of their processes
@@ -282,29 +286,15 @@ export class CommandSupervisor {
     entry: SupervisedCommand & {
       processId: number;
       routeName: string;
-      targetPort: number;
     },
+    expectedPort: number,
   ): Promise<void> {
-    if (
-      await this.routePublisher.healthy({
-        routeName: entry.routeName,
-        port: entry.targetPort,
-      })
-    ) {
-      const current = this.running.get(key);
-      if (!current || current.processId !== entry.processId) return;
-      this.running.set(key, { ...current, status: "running" });
-      this.announce();
-      this.scheduleRouteHealth(key, entry.processId);
-      return;
-    }
-
     const current = this.running.get(key);
     if (!current || current.processId !== entry.processId) return;
     this.running.set(key, {
       ...current,
       status: "starting",
-      advice: "The preview route was lost; Silvic is reconnecting it.",
+      advice: "Silvic is rediscovering the preview after reopening.",
     });
     this.announce();
     const output = await this.output(entry.plotPath, entry.id);
@@ -312,7 +302,7 @@ export class CommandSupervisor {
       key,
       processId: entry.processId,
       routeName: entry.routeName,
-      expectedPort: entry.expectedPort ?? entry.targetPort,
+      expectedPort,
       output: () => output,
       timeoutMs: 15_000,
     });

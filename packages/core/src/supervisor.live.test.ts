@@ -92,23 +92,31 @@ it("starts a real command, stops its whole group, and is taken back", async () =
   expect(started?.status).toBe("running");
   expect(announced).toHaveLength(1);
 
-  await settle(500);
   const afterPublishing = supervisor.list()[0];
   expect(afterPublishing?.status).toBe("running");
   expect(afterPublishing?.advice).toBeUndefined();
   expect(afterPublishing?.url).toBe(`http://localhost:${port}`);
-  const served = execFileSync(
-    "curl",
-    [
-      "-sS",
-      "-o",
-      "/dev/null",
-      "-w",
-      "%{http_code}",
-      `http://127.0.0.1:${port}/`,
-    ],
-    { encoding: "utf8" },
-  );
+  let served = "";
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    try {
+      served = execFileSync(
+        "curl",
+        [
+          "-sS",
+          "-o",
+          "/dev/null",
+          "-w",
+          "%{http_code}",
+          `http://127.0.0.1:${port}/`,
+        ],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+      );
+    } catch {
+      served = "";
+    }
+    if (served.trim() === "200") break;
+    await settle(100);
+  }
   expect(served.trim()).toBe("200");
 
   // A second supervisor, as a new window would be: it should take the running
@@ -165,7 +173,7 @@ it("publishes the real web listener when a monorepo sidecar claims PORT", async 
   const supervisor = new CommandSupervisor({
     logDirectory: logs,
     onChange: () => undefined,
-    routeHealthIntervalMs: 500,
+    routeHealthIntervalMs: 60_000,
   });
 
   await supervisor.start({
@@ -214,7 +222,55 @@ it("publishes the real web listener when a monorepo sidecar claims PORT", async 
   );
   expect(served.trim()).toBe("<h1>Silvic route is live</h1>");
 
-  supervisor.stop(plot, "web");
+  // Reproduce an older Silvic persisting the responding but wrong sidecar as
+  // the route target. Both direct and named probes say `OK`, so checking only
+  // that the persisted alias is reachable cannot discover the mistake.
+  execFileSync(
+    "portless",
+    ["alias", routeName, String(offeredPort), "--force"],
+    { stdio: "ignore", env: directPortlessEnvironment() },
+  );
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const body = execFileSync(
+      "curl",
+      ["-ksS", `https://${routeName}.localhost/`],
+      { encoding: "utf8" },
+    ).trim();
+    if (body === "OK") break;
+    await settle(50);
+  }
+  expect(
+    execFileSync("curl", ["-ksS", `https://${routeName}.localhost/`], {
+      encoding: "utf8",
+    }).trim(),
+  ).toBe("OK");
+
+  const reopened = new CommandSupervisor({
+    logDirectory: logs,
+    onChange: () => undefined,
+    routeHealthIntervalMs: 500,
+  });
+  await reopened.adopt([
+    {
+      ...(supervisor.list()[0] as SupervisedCommand),
+      targetPort: offeredPort,
+    },
+  ]);
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    if (reopened.list()[0]?.targetPort === actualPort) break;
+    await settle(100);
+  }
+  expect(reopened.list()[0]).toMatchObject({
+    status: "running",
+    targetPort: actualPort,
+  });
+  expect(
+    execFileSync("curl", ["-ksS", `https://${routeName}.localhost/`], {
+      encoding: "utf8",
+    }).trim(),
+  ).toBe("<h1>Silvic route is live</h1>");
+
+  reopened.stop(plot, "web");
   for (let attempt = 0; attempt < 50; attempt += 1) {
     if (supervisor.list().length === 0) break;
     await settle(100);
