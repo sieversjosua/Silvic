@@ -61,8 +61,15 @@ const settle = (ms: number) => new Promise((done) => setTimeout(done, ms));
 // this look like a failure of the thing being tested.
 const port = 4600 + Math.floor(Math.random() * 300);
 
-it("publishes an IPv6-only web server through the IPv4 Portless router", async () => {
-  const webServer = createServer((_request, response) => {
+it("publishes a web server with its public origin through Portless", async () => {
+  const webServer = createServer((request, response) => {
+    if (request.url === "/app") {
+      response.writeHead(302, {
+        location: `${request.headers["x-forwarded-proto"]}://${request.headers["x-forwarded-host"]}/app/login`,
+      });
+      response.end();
+      return;
+    }
     response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
     response.end("<h1>IPv6 Silvic route is live</h1>");
   });
@@ -89,12 +96,23 @@ it("publishes an IPv6-only web server through the IPv4 Portless router", async (
       timeoutMs: 2_000,
     });
 
-    expect(published.port).not.toBe(address.port);
+    expect(published.port).toBe(address.port);
     const served = await execFileAsync("curl", [
       "-ksS",
       `https://${routeName}.localhost/`,
     ]);
     expect(served.stdout.trim()).toBe("<h1>IPv6 Silvic route is live</h1>");
+    const redirected = await execFileAsync("curl", [
+      "-ksS",
+      "-D",
+      "-",
+      "-o",
+      "/dev/null",
+      `https://${routeName}.localhost/app`,
+    ]);
+    expect(redirected.stdout).toMatch(
+      new RegExp(`location: https://${routeName}\\.localhost/app/login`, "i"),
+    );
   } finally {
     await publisher.remove(routeName);
     await new Promise<void>((resolve) => webServer.close(() => resolve()));
@@ -259,12 +277,11 @@ it("publishes the real web listener when a monorepo sidecar claims PORT", async 
     url: `https://${routeName}.localhost`,
   });
 
-  const served = execFileSync(
-    "curl",
-    ["-ksS", `https://${routeName}.localhost/`],
-    { encoding: "utf8" },
-  );
-  expect(served.trim()).toBe("<h1>Silvic route is live</h1>");
+  const served = await execFileAsync("curl", [
+    "-ksS",
+    `https://${routeName}.localhost/`,
+  ]);
+  expect(served.stdout.trim()).toBe("<h1>Silvic route is live</h1>");
 
   // Reproduce an older Silvic persisting the responding but wrong sidecar as
   // the route target. Both direct and named probes say `OK`, so checking only
@@ -275,18 +292,16 @@ it("publishes the real web listener when a monorepo sidecar claims PORT", async 
     { stdio: "ignore", env: directPortlessEnvironment() },
   );
   for (let attempt = 0; attempt < 20; attempt += 1) {
-    const body = execFileSync(
-      "curl",
-      ["-ksS", `https://${routeName}.localhost/`],
-      { encoding: "utf8" },
-    ).trim();
+    const body = (
+      await execFileAsync("curl", ["-ksS", `https://${routeName}.localhost/`])
+    ).stdout.trim();
     if (body === "OK") break;
     await settle(50);
   }
   expect(
-    execFileSync("curl", ["-ksS", `https://${routeName}.localhost/`], {
-      encoding: "utf8",
-    }).trim(),
+    (
+      await execFileAsync("curl", ["-ksS", `https://${routeName}.localhost/`])
+    ).stdout.trim(),
   ).toBe("OK");
 
   const reopened = new CommandSupervisor({
@@ -309,9 +324,9 @@ it("publishes the real web listener when a monorepo sidecar claims PORT", async 
     targetPort: actualPort,
   });
   expect(
-    execFileSync("curl", ["-ksS", `https://${routeName}.localhost/`], {
-      encoding: "utf8",
-    }).trim(),
+    (
+      await execFileAsync("curl", ["-ksS", `https://${routeName}.localhost/`])
+    ).stdout.trim(),
   ).toBe("<h1>Silvic route is live</h1>");
 
   reopened.stop(plot, "web");

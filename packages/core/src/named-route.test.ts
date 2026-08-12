@@ -2,6 +2,19 @@ import { describe, expect, it, vi } from "vitest";
 
 import { PortlessRoutePublisher, descendantListenerPorts } from "./named-route";
 
+const directBridge = async (
+  _routeName: string,
+  selected: {
+    listener: { port: number };
+    hostname: "127.0.0.1" | "::1";
+  },
+) => ({
+  hostname: selected.hostname,
+  targetPort: selected.listener.port,
+  port: selected.listener.port,
+  close: async () => undefined,
+});
+
 describe("descendantListenerPorts", () => {
   it("keeps listeners owned by the supervised process tree", () => {
     expect(
@@ -44,6 +57,7 @@ describe("PortlessRoutePublisher", () => {
     const publisher = new PortlessRoutePublisher({
       execute,
       probe,
+      bridge: directBridge,
       inspect: async () => [
         { processId: 201, port: 55341 },
         { processId: 202, port: 4321 },
@@ -97,6 +111,7 @@ describe("PortlessRoutePublisher", () => {
     const publisher = new PortlessRoutePublisher({
       execute,
       probe,
+      bridge: directBridge,
       inspect: async () => [
         { processId: 201, port: 8691 },
         { processId: 202, port: 4321 },
@@ -160,6 +175,7 @@ describe("PortlessRoutePublisher", () => {
     const publisher = new PortlessRoutePublisher({
       execute,
       probe,
+      bridge: directBridge,
       // The existing Astro server is outside the newly started command tree;
       // only LiveKit's health listener is a descendant.
       inspect: async () => [{ processId: 38304, port: 49731 }],
@@ -230,6 +246,7 @@ describe("PortlessRoutePublisher", () => {
     });
     const publisher = new PortlessRoutePublisher({
       execute,
+      bridge: directBridge,
       inspect: async () => [{ processId: 36926, port: 4321 }],
       probe: async (url) =>
         url.includes(":4321/") ||

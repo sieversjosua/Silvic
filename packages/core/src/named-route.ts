@@ -1,12 +1,12 @@
 import { execFile } from "node:child_process";
-import { request as httpRequest } from "node:http";
-import { request as httpsRequest } from "node:https";
 import {
-  connect as connectTcp,
-  createServer as createTcpServer,
-  type Server as TcpServer,
-  type Socket,
-} from "node:net";
+  createServer as createHttpServer,
+  request as httpRequest,
+  type IncomingHttpHeaders,
+  type Server as HttpServer,
+} from "node:http";
+import { request as httpsRequest } from "node:https";
+import { connect as connectTcp, type Socket } from "node:net";
 
 import { resolvedCommandPath } from "./command-runner";
 
@@ -45,17 +45,6 @@ export interface NamedRoutePublisher {
   remove(routeName: string): Promise<void>;
 }
 
-interface RoutePublisherOptions {
-  execute?(
-    executable: string,
-    arguments_: readonly string[],
-  ): Promise<CommandResult>;
-  inspect?(rootProcessId: number): Promise<readonly ProcessListener[]>;
-  probe?(url: string): Promise<RouteProbe | undefined>;
-  wait?(milliseconds: number): Promise<void>;
-  now?(): number;
-}
-
 interface ListenerSelection {
   listener: ProcessListener;
   hostname: "127.0.0.1" | "::1";
@@ -63,10 +52,25 @@ interface ListenerSelection {
 }
 
 interface LoopbackBridge {
-  hostname: "::1";
+  hostname: "127.0.0.1" | "::1";
   targetPort: number;
   port: number;
   close(): Promise<void>;
+}
+
+interface RoutePublisherOptions {
+  execute?(
+    executable: string,
+    arguments_: readonly string[],
+  ): Promise<CommandResult>;
+  inspect?(rootProcessId: number): Promise<readonly ProcessListener[]>;
+  probe?(url: string): Promise<RouteProbe | undefined>;
+  bridge?(
+    routeName: string,
+    selected: ListenerSelection,
+  ): Promise<LoopbackBridge>;
+  wait?(milliseconds: number): Promise<void>;
+  now?(): number;
 }
 
 const pause = (milliseconds: number) =>
@@ -85,6 +89,7 @@ export class PortlessRoutePublisher implements NamedRoutePublisher {
   private readonly execute: NonNullable<RoutePublisherOptions["execute"]>;
   private readonly inspect: NonNullable<RoutePublisherOptions["inspect"]>;
   private readonly probe: NonNullable<RoutePublisherOptions["probe"]>;
+  private readonly bridge: NonNullable<RoutePublisherOptions["bridge"]>;
   private readonly wait: NonNullable<RoutePublisherOptions["wait"]>;
   private readonly now: NonNullable<RoutePublisherOptions["now"]>;
   private readonly bridges = new Map<string, LoopbackBridge>();
@@ -93,6 +98,7 @@ export class PortlessRoutePublisher implements NamedRoutePublisher {
     this.execute = options.execute ?? executeCommand;
     this.inspect = options.inspect ?? inspectProcessListeners;
     this.probe = options.probe ?? probeUrl;
+    this.bridge = options.bridge ?? createPreviewBridge;
     this.wait = options.wait ?? pause;
     this.now = options.now ?? Date.now;
   }
@@ -132,10 +138,10 @@ export class PortlessRoutePublisher implements NamedRoutePublisher {
           if (
             await this.healthy({
               routeName: request.routeName,
-              port: targetPort,
+              port: selected.listener.port,
             })
           ) {
-            return { port: targetPort };
+            return { port: selected.listener.port };
           }
           latest = `Portless registered ${request.routeName}.localhost, but it did not reach localhost:${targetPort}.`;
           await this.wait(Math.min(150, Math.max(0, deadline - this.now())));
@@ -154,11 +160,6 @@ export class PortlessRoutePublisher implements NamedRoutePublisher {
     routeName: string,
     selected: ListenerSelection,
   ): Promise<number> {
-    if (selected.hostname === "127.0.0.1") {
-      await this.closeBridge(routeName);
-      return selected.listener.port;
-    }
-
     const existing = this.bridges.get(routeName);
     if (
       existing?.hostname === selected.hostname &&
@@ -167,10 +168,7 @@ export class PortlessRoutePublisher implements NamedRoutePublisher {
       return existing.port;
     }
     await this.closeBridge(routeName);
-    const bridge = await createLoopbackBridge(
-      selected.hostname,
-      selected.listener.port,
-    );
+    const bridge = await this.bridge(routeName, selected);
     this.bridges.set(routeName, bridge);
     return bridge.port;
   }
@@ -189,8 +187,9 @@ export class PortlessRoutePublisher implements NamedRoutePublisher {
     routeName: string;
     port: number;
   }): Promise<boolean> {
+    const directPort = this.bridges.get(routeName)?.port ?? port;
     const [direct, named] = await Promise.all([
-      this.probe(`http://127.0.0.1:${port}/`),
+      this.probe(`http://127.0.0.1:${directPort}/`),
       this.probe(`https://${routeName}.localhost/`),
     ]);
     if (!direct || !named) return false;
@@ -311,22 +310,64 @@ function browserFacing(response: RouteProbe): boolean {
   );
 }
 
-function createLoopbackBridge(
-  hostname: "::1",
-  targetPort: number,
+function createPreviewBridge(
+  routeName: string,
+  selected: ListenerSelection,
 ): Promise<LoopbackBridge> {
+  const hostname = selected.hostname;
+  const targetPort = selected.listener.port;
+  const publicHost = `${routeName}.localhost`;
   return new Promise((resolve, reject) => {
     const sockets = new Set<Socket>();
-    const server = createTcpServer((client) => {
+    const server = createHttpServer((request, response) => {
+      const upstream = httpRequest(
+        {
+          host: hostname,
+          port: targetPort,
+          method: request.method,
+          path: request.url,
+          headers: previewHeaders(request.headers, publicHost),
+        },
+        (upstreamResponse) => {
+          response.writeHead(
+            upstreamResponse.statusCode ?? 502,
+            upstreamResponse.statusMessage,
+            rewriteLocation(upstreamResponse.headers, publicHost, targetPort),
+          );
+          upstreamResponse.pipe(response);
+        },
+      );
+      upstream.on("socket", (socket) => trackSocket(sockets, socket));
+      upstream.once("error", () => {
+        if (!response.headersSent) {
+          response.writeHead(502, { "content-type": "text/plain" });
+        }
+        response.end("Preview server unavailable");
+      });
+      request.once("aborted", () => upstream.destroy());
+      request.pipe(upstream);
+    });
+    server.on("connection", (socket) => trackSocket(sockets, socket));
+    server.on("upgrade", (request, client, head) => {
       const upstream = connectTcp({ host: hostname, port: targetPort });
-      sockets.add(client);
-      sockets.add(upstream);
-      const forget = (socket: Socket) => sockets.delete(socket);
-      client.once("close", () => forget(client));
-      upstream.once("close", () => forget(upstream));
+      trackSocket(sockets, upstream);
       client.once("error", () => upstream.destroy());
       upstream.once("error", () => client.destroy());
-      client.pipe(upstream).pipe(client);
+      upstream.once("connect", () => {
+        const headers = previewHeaders(request.headers, publicHost);
+        const lines = Object.entries(headers).flatMap(([name, value]) =>
+          Array.isArray(value)
+            ? value.map((entry) => `${name}: ${entry}`)
+            : value === undefined
+              ? []
+              : [`${name}: ${value}`],
+        );
+        upstream.write(
+          `${request.method ?? "GET"} ${request.url ?? "/"} HTTP/${request.httpVersion}\r\n${lines.join("\r\n")}\r\n\r\n`,
+        );
+        if (head.length > 0) upstream.write(head);
+        client.pipe(upstream).pipe(client);
+      });
     });
     const failed = (error: Error) => {
       server.close();
@@ -349,14 +390,55 @@ function createLoopbackBridge(
         hostname,
         targetPort,
         port: address.port,
-        close: () => closeTcpBridge(server, sockets),
+        close: () => closePreviewBridge(server, sockets),
       });
     });
   });
 }
 
-function closeTcpBridge(
-  server: TcpServer,
+function previewHeaders(
+  headers: IncomingHttpHeaders,
+  publicHost: string,
+): IncomingHttpHeaders {
+  return {
+    ...headers,
+    host: publicHost,
+    "x-forwarded-host": publicHost,
+    "x-forwarded-port": "443",
+    "x-forwarded-proto": "https",
+  };
+}
+
+function rewriteLocation(
+  headers: IncomingHttpHeaders,
+  publicHost: string,
+  targetPort: number,
+): IncomingHttpHeaders {
+  const location = headers.location;
+  if (!location) return headers;
+  try {
+    const target = new URL(location);
+    if (
+      (target.hostname === "127.0.0.1" || target.hostname === "[::1]") &&
+      Number(target.port) === targetPort
+    ) {
+      target.protocol = "https:";
+      target.host = publicHost;
+      return { ...headers, location: target.toString() };
+    }
+  } catch {
+    // Relative and malformed locations pass through untouched.
+  }
+  return headers;
+}
+
+function trackSocket(sockets: Set<Socket>, socket: Socket): void {
+  sockets.add(socket);
+  socket.once("close", () => sockets.delete(socket));
+}
+
+function closePreviewBridge(
+  server: HttpServer,
   sockets: ReadonlySet<Socket>,
 ): Promise<void> {
   for (const socket of sockets) socket.destroy();
