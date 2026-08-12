@@ -221,6 +221,42 @@ describe("PortlessRoutePublisher", () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
+  it("publishes an HTML error page from the real web server", async () => {
+    let elapsed = 0;
+    const execute = vi.fn().mockResolvedValue({
+      exitCode: 0,
+      stdout: "Alias registered",
+      stderr: "",
+    });
+    const publisher = new PortlessRoutePublisher({
+      execute,
+      inspect: async () => [{ processId: 36926, port: 4321 }],
+      probe: async (url) =>
+        url.includes(":4321/") ||
+        url === "https://web-mcp-upgrades-mono.localhost/"
+          ? {
+              status: 500,
+              contentType: "text/html; charset=utf-8",
+              body: "<title>Error</title>",
+            }
+          : undefined,
+      now: () => elapsed,
+      wait: async (milliseconds) => {
+        elapsed += milliseconds;
+      },
+    });
+
+    await expect(
+      publisher.publish({
+        routeName: "web-mcp-upgrades-mono",
+        processId: 36850,
+        expectedPort: 7090,
+        output: () => "Local: http://localhost:4321",
+        timeoutMs: 10,
+      }),
+    ).resolves.toEqual({ port: 4321 });
+  });
+
   it("does not call a Portless 502 or missing route healthy", async () => {
     const namedStatus = { current: 502 };
     const publisher = new PortlessRoutePublisher({
@@ -267,6 +303,22 @@ describe("PortlessRoutePublisher", () => {
       publisher.healthy({
         routeName: "web-cmd-k-menu-mono",
         port: 4321,
+      }),
+    ).resolves.toBe(false);
+  });
+
+  it("does not call matching empty 404 endpoints a healthy web preview", async () => {
+    const publisher = new PortlessRoutePublisher({
+      execute: vi.fn(),
+      inspect: async () => [],
+      probe: async () => ({ status: 404 }),
+      wait: async () => undefined,
+    });
+
+    await expect(
+      publisher.healthy({
+        routeName: "web-mcp-upgrades-mono",
+        port: 9236,
       }),
     ).resolves.toBe(false);
   });

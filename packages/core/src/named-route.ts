@@ -1,6 +1,12 @@
 import { execFile } from "node:child_process";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
+import {
+  connect as connectTcp,
+  createServer as createTcpServer,
+  type Server as TcpServer,
+  type Socket,
+} from "node:net";
 
 import { resolvedCommandPath } from "./command-runner";
 
@@ -50,6 +56,19 @@ interface RoutePublisherOptions {
   now?(): number;
 }
 
+interface ListenerSelection {
+  listener: ProcessListener;
+  hostname: "127.0.0.1" | "::1";
+  response: RouteProbe;
+}
+
+interface LoopbackBridge {
+  hostname: "::1";
+  targetPort: number;
+  port: number;
+  close(): Promise<void>;
+}
+
 const pause = (milliseconds: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 
@@ -68,6 +87,7 @@ export class PortlessRoutePublisher implements NamedRoutePublisher {
   private readonly probe: NonNullable<RoutePublisherOptions["probe"]>;
   private readonly wait: NonNullable<RoutePublisherOptions["wait"]>;
   private readonly now: NonNullable<RoutePublisherOptions["now"]>;
+  private readonly bridges = new Map<string, LoopbackBridge>();
 
   constructor(options: RoutePublisherOptions = {}) {
     this.execute = options.execute ?? executeCommand;
@@ -93,13 +113,15 @@ export class PortlessRoutePublisher implements NamedRoutePublisher {
         probe: this.probe,
       });
       if (selected) {
+        const targetPort = await this.targetPort(request.routeName, selected);
         const result = await this.execute("portless", [
           "alias",
           request.routeName,
-          String(selected.port),
+          String(targetPort),
           "--force",
         ]);
         if (result.exitCode !== 0) {
+          await this.closeBridge(request.routeName);
           throw new Error(
             cleanFailure(result) ||
               "Portless could not publish the preview route.",
@@ -110,19 +132,54 @@ export class PortlessRoutePublisher implements NamedRoutePublisher {
           if (
             await this.healthy({
               routeName: request.routeName,
-              port: selected.port,
+              port: targetPort,
             })
           ) {
-            return { port: selected.port };
+            return { port: targetPort };
           }
-          latest = `Portless registered ${request.routeName}.localhost, but it did not reach localhost:${selected.port}.`;
+          latest = `Portless registered ${request.routeName}.localhost, but it did not reach localhost:${targetPort}.`;
           await this.wait(Math.min(150, Math.max(0, deadline - this.now())));
         }
       }
 
-      if (this.now() >= deadline) throw new Error(latest);
+      if (this.now() >= deadline) {
+        await this.closeBridge(request.routeName);
+        throw new Error(latest);
+      }
       await this.wait(Math.min(250, Math.max(0, deadline - this.now())));
     }
+  }
+
+  private async targetPort(
+    routeName: string,
+    selected: ListenerSelection,
+  ): Promise<number> {
+    if (selected.hostname === "127.0.0.1") {
+      await this.closeBridge(routeName);
+      return selected.listener.port;
+    }
+
+    const existing = this.bridges.get(routeName);
+    if (
+      existing?.hostname === selected.hostname &&
+      existing.targetPort === selected.listener.port
+    ) {
+      return existing.port;
+    }
+    await this.closeBridge(routeName);
+    const bridge = await createLoopbackBridge(
+      selected.hostname,
+      selected.listener.port,
+    );
+    this.bridges.set(routeName, bridge);
+    return bridge.port;
+  }
+
+  private async closeBridge(routeName: string): Promise<void> {
+    const bridge = this.bridges.get(routeName);
+    if (!bridge) return;
+    this.bridges.delete(routeName);
+    await bridge.close();
   }
 
   async healthy({
@@ -136,23 +193,26 @@ export class PortlessRoutePublisher implements NamedRoutePublisher {
       this.probe(`http://127.0.0.1:${port}/`),
       this.probe(`https://${routeName}.localhost/`),
     ]);
-    if (!direct || !named || direct.status >= 500 || named.status >= 500) {
-      return false;
-    }
+    if (!direct || !named) return false;
+    if (!browserFacing(direct) || !browserFacing(named)) return false;
     // Portless preserves the upstream content type. A different type means the
     // alias reached another listener even when both listeners answered 200 —
     // commonly a monorepo health sidecar whose entire response is `OK`.
     if (mediaType(direct.contentType) !== mediaType(named.contentType)) {
       return false;
     }
-    // Portless's own missing-route page is a 404. A real app may also use a
-    // 404 at its root, so it is healthy only when the upstream agrees.
-    if (named.status === 404 && direct.status !== 404) return false;
+    // Portless preserves the upstream status. Exact agreement lets a real
+    // browser error overlay through while rejecting Portless's own 404/502.
+    if (direct.status !== named.status) return false;
     return true;
   }
 
   async remove(routeName: string): Promise<void> {
-    await this.execute("portless", ["alias", "--remove", routeName]);
+    try {
+      await this.execute("portless", ["alias", "--remove", routeName]);
+    } finally {
+      await this.closeBridge(routeName);
+    }
   }
 }
 
@@ -166,11 +226,11 @@ async function selectListener({
   expectedPort: number;
   output: string;
   probe(url: string): Promise<RouteProbe | undefined>;
-}): Promise<ProcessListener | undefined> {
+}): Promise<ListenerSelection | undefined> {
   const announced = new Set(
     [
       ...output.matchAll(
-        /(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::\]):(\d{2,5})/gi,
+        /(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1?\]):(\d{2,5})/gi,
       ),
     ]
       .map((match) => Number(match[1]))
@@ -189,10 +249,15 @@ async function selectListener({
     }
   }
   const candidates = await Promise.all(
-    [...listenersByPort.values()].map(async (listener) => ({
-      listener,
-      response: await probe(`http://127.0.0.1:${listener.port}/`),
-    })),
+    [...listenersByPort.values()].flatMap((listener) =>
+      (["127.0.0.1", "::1"] as const).map(async (hostname) => ({
+        listener,
+        hostname,
+        response: await probe(
+          `http://${hostname === "::1" ? `[${hostname}]` : hostname}:${listener.port}/`,
+        ),
+      })),
+    ),
   );
 
   return (
@@ -202,9 +267,9 @@ async function selectListener({
           candidate,
         ): candidate is {
           listener: ProcessListener;
+          hostname: "127.0.0.1" | "::1";
           response: RouteProbe;
-        } =>
-          candidate.response !== undefined && candidate.response.status < 500,
+        } => candidate.response !== undefined,
       )
       // A route marked as a web preview must actually render in a browser.
       // Health checks and API sidecars commonly answer 200 with `OK` or JSON;
@@ -213,6 +278,7 @@ async function selectListener({
       .sort((left, right) => {
         const score = (candidate: {
           listener: ProcessListener;
+          hostname: "127.0.0.1" | "::1";
           response: RouteProbe;
         }) =>
           // PORT is an offered address, not proof of identity. A monorepo can
@@ -225,11 +291,14 @@ async function selectListener({
           (candidate.listener.port === expectedPort ? 100 : 0) +
           (candidate.response.status >= 200 && candidate.response.status < 400
             ? 10
-            : 0);
+            : 0) +
+          // Avoid an unnecessary bridge when both loopback families serve the
+          // same browser app.
+          (candidate.hostname === "127.0.0.1" ? 1 : 0);
         return (
           score(right) - score(left) || left.listener.port - right.listener.port
         );
-      })[0]?.listener
+      })[0]
   );
 }
 
@@ -240,6 +309,58 @@ function browserFacing(response: RouteProbe): boolean {
     type === "application/xhtml+xml" ||
     (response.status >= 300 && response.status < 400)
   );
+}
+
+function createLoopbackBridge(
+  hostname: "::1",
+  targetPort: number,
+): Promise<LoopbackBridge> {
+  return new Promise((resolve, reject) => {
+    const sockets = new Set<Socket>();
+    const server = createTcpServer((client) => {
+      const upstream = connectTcp({ host: hostname, port: targetPort });
+      sockets.add(client);
+      sockets.add(upstream);
+      const forget = (socket: Socket) => sockets.delete(socket);
+      client.once("close", () => forget(client));
+      upstream.once("close", () => forget(upstream));
+      client.once("error", () => upstream.destroy());
+      upstream.once("error", () => client.destroy());
+      client.pipe(upstream).pipe(client);
+    });
+    const failed = (error: Error) => {
+      server.close();
+      reject(error);
+    };
+    server.once("error", failed);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", failed);
+      // A bridge failure makes the route health check fail and triggers normal
+      // rediscovery. It must not crash the Electron main process.
+      server.on("error", () => undefined);
+      server.unref();
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        server.close();
+        reject(new Error("Silvic could not allocate an IPv4 preview bridge."));
+        return;
+      }
+      resolve({
+        hostname,
+        targetPort,
+        port: address.port,
+        close: () => closeTcpBridge(server, sockets),
+      });
+    });
+  });
+}
+
+function closeTcpBridge(
+  server: TcpServer,
+  sockets: ReadonlySet<Socket>,
+): Promise<void> {
+  for (const socket of sockets) socket.destroy();
+  return new Promise((resolve) => server.close(() => resolve()));
 }
 
 function mediaType(contentType: string | undefined): string {
@@ -310,18 +431,18 @@ async function inspectProcessListeners(
 
 function probeUrl(url: string): Promise<RouteProbe | undefined> {
   const target = new URL(url);
+  const hostname = target.hostname.replace(/^\[|\]$/g, "");
   return new Promise((resolve) => {
     const send = target.protocol === "https:" ? httpsRequest : httpRequest;
     const request = send(
       {
         protocol: target.protocol,
-        hostname: target.hostname,
+        hostname,
         ...(target.port ? { port: target.port } : {}),
         path: `${target.pathname}${target.search}`,
         method: "GET",
         headers: { connection: "close", "accept-encoding": "identity" },
-        ...(target.protocol === "https:" &&
-        target.hostname.endsWith(".localhost")
+        ...(target.protocol === "https:" && hostname.endsWith(".localhost")
           ? { rejectUnauthorized: false }
           : {}),
       },

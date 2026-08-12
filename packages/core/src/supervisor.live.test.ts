@@ -1,7 +1,9 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
+import { createServer } from "node:http";
+import { promisify } from "node:util";
 
 import { afterAll, expect, it } from "vitest";
 
@@ -9,10 +11,12 @@ import {
   CommandSupervisor,
   type SupervisedCommand,
 } from "./command-supervisor";
+import { PortlessRoutePublisher } from "./named-route";
 
 const directories: string[] = [];
 const namedRoutes: string[] = [];
 const extraPorts: number[] = [];
+const execFileAsync = promisify(execFile);
 
 function directPortlessEnvironment(): NodeJS.ProcessEnv {
   const environment = { ...process.env };
@@ -56,6 +60,46 @@ const settle = (ms: number) => new Promise((done) => setTimeout(done, ms));
 // A fresh port each run, so a leaked server from a previous one cannot make
 // this look like a failure of the thing being tested.
 const port = 4600 + Math.floor(Math.random() * 300);
+
+it("publishes an IPv6-only web server through the IPv4 Portless router", async () => {
+  const webServer = createServer((_request, response) => {
+    response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    response.end("<h1>IPv6 Silvic route is live</h1>");
+  });
+  await new Promise<void>((resolve, reject) => {
+    webServer.once("error", reject);
+    webServer.listen(0, "::1", resolve);
+  });
+  const address = webServer.address();
+  if (!address || typeof address === "string") {
+    throw new Error("The IPv6 test server did not expose a TCP port.");
+  }
+  const routeName = `silvic-ipv6-${process.pid}-${address.port}`;
+  namedRoutes.push(routeName);
+  const publisher = new PortlessRoutePublisher({
+    inspect: async () => [{ processId: process.pid, port: address.port }],
+  });
+
+  try {
+    const published = await publisher.publish({
+      routeName,
+      processId: process.pid,
+      expectedPort: address.port + 1,
+      output: () => `Local: http://localhost:${address.port}`,
+      timeoutMs: 2_000,
+    });
+
+    expect(published.port).not.toBe(address.port);
+    const served = await execFileAsync("curl", [
+      "-ksS",
+      `https://${routeName}.localhost/`,
+    ]);
+    expect(served.stdout.trim()).toBe("<h1>IPv6 Silvic route is live</h1>");
+  } finally {
+    await publisher.remove(routeName);
+    await new Promise<void>((resolve) => webServer.close(() => resolve()));
+  }
+}, 10_000);
 
 it("starts a real command, stops its whole group, and is taken back", async () => {
   const plot = await mkdtemp(join(tmpdir(), "silvic-live-"));
