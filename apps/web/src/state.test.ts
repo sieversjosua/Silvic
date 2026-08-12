@@ -5,6 +5,7 @@ import type { WorkspaceSnapshot } from "@silvic/contracts";
 import {
   cardRuntimeState,
   cardSignals,
+  plotCardActions,
   plotConclusion,
   workspaceState,
 } from "./state";
@@ -206,6 +207,22 @@ describe("plotConclusion", () => {
         observations: [mergedReview],
       }),
     ).toEqual({ label: "Merged", tone: "ready" });
+  });
+});
+
+describe("plotCardActions", () => {
+  it("keeps Start available next to teardown after a pull request merged", () => {
+    expect(
+      plotCardActions({
+        conclusion: "merged",
+        runtime: {
+          tone: "quiet",
+          label: "Stopped",
+          startIds: ["web", "convex"],
+          stopIds: [],
+        },
+      }),
+    ).toEqual({ teardown: true, start: true, stop: false });
   });
 });
 

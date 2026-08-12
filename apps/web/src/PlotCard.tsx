@@ -34,6 +34,7 @@ import { HarnessRows, harnessLabel } from "./harnesses";
 import {
   cardSignals,
   locationLabel,
+  plotCardActions,
   plotConclusion,
   workingTreeLabel,
   workspaceState,
@@ -99,9 +100,7 @@ export function WorkspaceNode({ data }: NodeProps<WorkspaceFlowNode>) {
 
   // Ready to be seen off: the pull request has concluded and nothing is
   // running or midway through stopping.
-  const sendOff =
-    conclusion !== undefined &&
-    (!runtime || (runtime.stopIds.length === 0 && runtime.startIds.length > 0));
+  const actions = plotCardActions({ conclusion, runtime });
 
   const runRuntimes = (action: "start" | "stop", ids: readonly string[]) => {
     setRuntimeWorking(action);
@@ -251,19 +250,21 @@ export function WorkspaceNode({ data }: NodeProps<WorkspaceFlowNode>) {
           <HarnessMark id={data.defaultHarness} size={13} />
           {harnessLabel(data.defaultHarness)}
         </button>
-        <button
-          type="button"
-          className="icon"
-          aria-label="Open in Terminal"
-          onClick={(event) => {
-            event.stopPropagation();
-            data.onOpen(workspace.path, "terminal");
-          }}
-        >
-          <Terminal size={12} />
-        </button>
+        {!(actions.teardown && actions.start) && (
+          <button
+            type="button"
+            className="icon"
+            aria-label="Open in Terminal"
+            onClick={(event) => {
+              event.stopPropagation();
+              data.onOpen(workspace.path, "terminal");
+            }}
+          >
+            <Terminal size={12} />
+          </button>
+        )}
         <span className="plot-actions-gap" />
-        {sendOff && (
+        {actions.teardown && (
           /* The plot's work has landed (or been abandoned); the card's one
              offer is to see it off — worktree, branch and all. */
           <button
@@ -284,7 +285,7 @@ export function WorkspaceNode({ data }: NodeProps<WorkspaceFlowNode>) {
             Tear down…
           </button>
         )}
-        {!sendOff && runtime && runtime.stopIds.length > 0 && (
+        {actions.stop && runtime && (
           <button
             type="button"
             className="plot-runtime-toggle"
@@ -305,7 +306,7 @@ export function WorkspaceNode({ data }: NodeProps<WorkspaceFlowNode>) {
             {runtimeWorking === "stop" ? "Stopping…" : "Stop"}
           </button>
         )}
-        {!sendOff && runtime && runtime.startIds.length > 0 && (
+        {actions.start && runtime && (
           <button
             type="button"
             className="plot-runtime-toggle"

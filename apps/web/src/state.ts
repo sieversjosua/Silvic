@@ -88,6 +88,31 @@ export interface CardRuntimeState {
   advice?: string;
 }
 
+export interface PlotCardActions {
+  teardown: boolean;
+  start: boolean;
+  stop: boolean;
+}
+
+export function plotCardActions({
+  conclusion,
+  runtime,
+}: {
+  conclusion: "merged" | "closed" | undefined;
+  runtime: CardRuntimeState | undefined;
+}): PlotCardActions {
+  const teardown =
+    conclusion !== undefined &&
+    (!runtime || (runtime.stopIds.length === 0 && runtime.startIds.length > 0));
+  return {
+    teardown,
+    // A concluded pull request recommends teardown; it does not revoke the
+    // remaining worktree's ability to run for one last local inspection.
+    start: runtime !== undefined && runtime.startIds.length > 0,
+    stop: !teardown && runtime !== undefined && runtime.stopIds.length > 0,
+  };
+}
+
 /**
  * The end of a plot's story, read from its pull request. A merged branch is
  * work that arrived; a closed one is work that was abandoned. Either way the
