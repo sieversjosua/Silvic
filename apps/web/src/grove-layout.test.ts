@@ -11,6 +11,7 @@ import {
   NODE_WIDTH,
   anyNodeInView,
   layout,
+  stabilizePlacements,
   viewShift,
   type Point,
 } from "./grove-layout";
@@ -96,6 +97,97 @@ describe("layout", () => {
     expect(main?.position.y).toBeCloseTo(middle);
   });
 
+  it("keeps every existing plot still when only one operational state changes", () => {
+    const kids = Array.from({ length: 30 }, (_, index) =>
+      changed(`kid-${String(index).padStart(2, "0")}`),
+    );
+    const before = layout(project([trunk, ...kids]), true);
+    const after = layout(
+      project([
+        trunk,
+        ...kids.map((kid) =>
+          kid.workspaceId === "kid-29"
+            ? { ...kid, git: { ...kid.git, conflicted: 1 } }
+            : kid,
+        ),
+      ]),
+      true,
+    );
+
+    expect(
+      Object.fromEntries(
+        before.placements.map(({ key, position }) => [key, position]),
+      ),
+    ).toEqual(
+      Object.fromEntries(
+        after.placements.map(({ key, position }) => [key, position]),
+      ),
+    );
+  });
+
+  it("keeps every existing plot still when another plot is added", () => {
+    const kids = Array.from({ length: 20 }, (_, index) =>
+      changed(`kid-${String(index).padStart(2, "0")}`),
+    );
+    const before = layout(project([trunk, ...kids]), true).placements;
+    const previous = new Map(
+      before.map(({ key, position }) => [key, position] as const),
+    );
+    const after = stabilizePlacements(
+      layout(project([trunk, ...kids, changed("kid-20")]), true).placements,
+      previous,
+    );
+
+    for (const placement of before) {
+      expect(
+        after.find((item) => item.key === placement.key)?.position,
+      ).toEqual(placement.position);
+    }
+  });
+
+  it("separates established cards when their measured height grows", () => {
+    const placements = [
+      { key: "upper", position: { x: 376, y: 0 } },
+      { key: "lower", position: { x: 376, y: 206 } },
+    ];
+    const previous = new Map(
+      placements.map(({ key, position }) => [key, position] as const),
+    );
+    const sizes = new Map([
+      ["upper", { width: 268, height: 244 }],
+      ["lower", { width: 268, height: 244 }],
+    ]);
+
+    expect(stabilizePlacements(placements, previous, sizes)).toEqual([
+      { key: "upper", position: { x: 376, y: 0 } },
+      { key: "lower", position: { x: 376, y: 266 } },
+    ]);
+  });
+
+  it("moves a tall newcomer instead of an established plot", () => {
+    const placements = [
+      { key: "new", position: { x: 376, y: 0 } },
+      { key: "existing", position: { x: 376, y: 206 } },
+    ];
+    const result = stabilizePlacements(
+      placements,
+      new Map([["existing", { x: 376, y: 206 }]]),
+      new Map([
+        ["new", { width: 268, height: 244 }],
+        ["existing", { width: 268, height: 244 }],
+      ]),
+    );
+
+    expect(result.find((item) => item.key === "existing")?.position).toEqual({
+      x: 376,
+      y: 206,
+    });
+    expect(result.find((item) => item.key === "new")?.position).toEqual({
+      x: 376,
+      y: 472,
+    });
+  });
+
   it.each([6, 12, 18, 30, 60])(
     "keeps a fan of %i roughly canvas-shaped rather than one tall stack",
     (count) => {
@@ -148,6 +240,45 @@ describe("layout", () => {
     expect(placements.filter((item) => item.workspace)).toHaveLength(7);
   });
 
+  it("keeps visible plots still when a quiet stack automatically unfolds", () => {
+    const loud = Array.from({ length: 8 }, (_, index) =>
+      changed(`loud-${index}`),
+    );
+    const quiet = Array.from({ length: 3 }, (_, index) =>
+      workspace(`quiet-${index}`),
+    );
+    const before = layout(
+      project([trunk, ...loud, ...quiet]),
+      false,
+    ).placements;
+    const previous = new Map(
+      before.map(({ key, position }) => [key, position] as const),
+    );
+    const after = stabilizePlacements(
+      layout(
+        project([
+          trunk,
+          ...loud,
+          ...quiet.map((item) =>
+            item.workspaceId === "quiet-2"
+              ? { ...item, git: { ...item.git, conflicted: 1 } }
+              : item,
+          ),
+        ]),
+        false,
+      ).placements,
+      previous,
+    );
+
+    for (const placement of before.filter(
+      (item) => !item.key.startsWith("quiet:"),
+    )) {
+      expect(
+        after.find((item) => item.key === placement.key)?.position,
+      ).toEqual(placement.position);
+    }
+  });
+
   it("does not treat a shared deployment as activity worth showing", () => {
     const attached = Array.from({ length: 4 }, (_, index) =>
       workspace(`attached-${index}`, { observations: [deployment] }),
@@ -171,6 +302,44 @@ describe("layout", () => {
       (item) => `${item.position.x}:${item.position.y}`,
     );
     expect(new Set(cells).size).toBe(placements.length);
+  });
+
+  it("never overlaps card rectangles across varied lineage trees", () => {
+    let seed = 0x51_1c;
+    const random = () => {
+      seed = (seed * 1_664_525 + 1_013_904_223) >>> 0;
+      return seed / 0x1_0000_0000;
+    };
+
+    for (let run = 0; run < 500; run += 1) {
+      const kids: WorkspaceSnapshot[] = [];
+      const count = 8 + Math.floor(random() * 53);
+      for (let index = 0; index < count; index += 1) {
+        const name = `plot-${String(index).padStart(2, "0")}`;
+        const candidates = [trunk, ...kids];
+        const parent = candidates[Math.floor(random() * candidates.length)];
+        kids.push({
+          ...changed(name),
+          lineage: {
+            parentWorkspaceId: parent?.workspaceId ?? trunk.workspaceId,
+            evidence: "recorded",
+          },
+        });
+      }
+      const placements = layout(project([trunk, ...kids]), true).placements;
+      const overlap = placements.flatMap((left, leftIndex) =>
+        placements
+          .slice(leftIndex + 1)
+          .flatMap((right) =>
+            Math.abs(left.position.x - right.position.x) < NODE_WIDTH &&
+            Math.abs(left.position.y - right.position.y) < NODE_HEIGHT
+              ? [[left.key, right.key]]
+              : [],
+          ),
+      )[0];
+
+      expect(overlap, `lineage stress run ${run}`).toBeUndefined();
+    }
   });
 
   it("keeps grandchildren on the side their parent was placed", () => {

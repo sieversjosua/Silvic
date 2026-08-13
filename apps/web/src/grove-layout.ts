@@ -28,6 +28,78 @@ export interface Link {
   side: number;
 }
 
+export interface NodeSize {
+  width: number;
+  height: number;
+}
+
+/**
+ * Preserve the spatial address of every surviving plot across snapshot
+ * changes. Measured growth may push a lower established plot down; newcomers
+ * yield to established plots instead of making the existing grove jump.
+ */
+export function stabilizePlacements(
+  placements: readonly Placement[],
+  previous: ReadonlyMap<string, Point>,
+  sizes: ReadonlyMap<string, NodeSize> = new Map(),
+): Placement[] {
+  const result = new Map<string, Placement>();
+  const columns = Map.groupBy(
+    placements,
+    (placement) => (previous.get(placement.key) ?? placement.position).x,
+  );
+
+  for (const [, column] of columns) {
+    const ordered = [...column].sort((left, right) => {
+      const leftPosition = previous.get(left.key) ?? left.position;
+      const rightPosition = previous.get(right.key) ?? right.position;
+      return (
+        leftPosition.y - rightPosition.y || left.key.localeCompare(right.key)
+      );
+    });
+    const established = ordered.filter((placement) =>
+      previous.has(placement.key),
+    );
+    const newcomers = ordered.filter(
+      (placement) => !previous.has(placement.key),
+    );
+    const occupied: Array<{ y: number; height: number }> = [];
+    let nextY = Number.NEGATIVE_INFINITY;
+    for (const placement of established) {
+      const preferred = previous.get(placement.key) ?? placement.position;
+      const position = {
+        x: preferred.x,
+        y: Math.max(preferred.y, nextY),
+      };
+      result.set(placement.key, { ...placement, position });
+      const height = sizes.get(placement.key)?.height ?? NODE_HEIGHT;
+      nextY = position.y + height + ROW_GAP;
+      occupied.push({ y: position.y, height });
+    }
+    for (const placement of newcomers) {
+      const height = sizes.get(placement.key)?.height ?? NODE_HEIGHT;
+      let y = placement.position.y;
+      let collision = occupied.find(
+        (item) =>
+          y < item.y + item.height + ROW_GAP && y + height + ROW_GAP > item.y,
+      );
+      while (collision) {
+        y = collision.y + collision.height + ROW_GAP;
+        collision = occupied.find(
+          (item) =>
+            y < item.y + item.height + ROW_GAP && y + height + ROW_GAP > item.y,
+        );
+      }
+      const position = { x: placement.position.x, y };
+      result.set(placement.key, { ...placement, position });
+      occupied.push({ y, height });
+      occupied.sort((left, right) => left.y - right.y);
+    }
+  }
+
+  return placements.map((placement) => result.get(placement.key) ?? placement);
+}
+
 export function isQuiet(workspace: WorkspaceSnapshot): boolean {
   return workspaceState(workspace).tone === "quiet";
 }
@@ -124,7 +196,10 @@ export function layout(
       .filter((id) => !visited.has(id))
       .map((id) => byId.get(id))
       .filter((workspace) => workspace !== undefined)
-      .sort(byUrgency);
+      // Operational state changes continuously while work is running. It may
+      // change a card's emphasis, but it must never change the card's address
+      // on the canvas. Workspace identity is the stable spatial order.
+      .sort((left, right) => left.workspaceId.localeCompare(right.workspaceId));
     if (kids.length === 0) continue;
 
     const loud = kids.filter((workspace) => !isQuiet(workspace));
@@ -134,8 +209,8 @@ export function layout(
       ? [...loud, undefined]
       : [...loud, ...quiet];
 
-    // The trunk splits its children; the most urgent half grows right, which is
-    // the direction the eye already travels.
+    // The trunk splits its stably ordered children; the first half grows right,
+    // which is the direction the eye already travels.
     const rightCount =
       parent.direction === 0
         ? Math.ceil(entries.length / 2)
@@ -251,7 +326,7 @@ export function layout(
     });
   }
 
-  return { placements, links };
+  return { placements: stabilizePlacements(placements, new Map()), links };
 }
 
 /**
@@ -277,23 +352,6 @@ function columnsPerSide(perSide: number, sides: number): number {
     }
   }
   return best;
-}
-
-const urgency: Record<string, number> = {
-  attention: 0,
-  ready: 1,
-  waiting: 2,
-  active: 3,
-  changed: 4,
-  unknown: 5,
-  quiet: 6,
-};
-
-function byUrgency(left: WorkspaceSnapshot, right: WorkspaceSnapshot): number {
-  const rank =
-    (urgency[workspaceState(left).tone] ?? 9) -
-    (urgency[workspaceState(right).tone] ?? 9);
-  return rank !== 0 ? rank : left.name.localeCompare(right.name);
 }
 
 export interface ViewportWindow {
