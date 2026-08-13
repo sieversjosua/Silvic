@@ -12,6 +12,7 @@ import {
   useStoreApi,
   type Edge,
   type Node,
+  type NodeChange,
   type NodeProps,
 } from "@xyflow/react";
 import { Compass, Maximize2, Minus, Plus } from "lucide-react";
@@ -31,7 +32,9 @@ import {
   anyNodeInView,
   isQuiet,
   layout,
+  stabilizePlacements,
   viewShift,
+  type NodeSize,
   type Point,
 } from "./grove-layout";
 import { WorkspaceNode, type WorkspaceFlowNode } from "./PlotCard";
@@ -99,6 +102,13 @@ function GroveCanvas({
   const [menuPlotId, setMenuPlotId] = useState<string>();
   const draggingId = useRef<string>(undefined);
   const shown = useRef(new Map<string, Point>());
+  const spatial = useRef<{
+    projectId: string;
+    positions: Map<string, Point>;
+    sizes: Map<string, NodeSize>;
+  }>({ projectId: project.id, positions: new Map(), sizes: new Map() });
+  const [measurementRevision, setMeasurementRevision] = useState(0);
+  const measurementFrame = useRef<number>(undefined);
   const { zoomIn, zoomOut, fitView, setViewport } = useReactFlow();
   const store = useStoreApi();
   const transform = useStore((state) => state.transform);
@@ -110,10 +120,28 @@ function GroveCanvas({
 
   // Searching should reach folded environments, not hide them.
   const searching = query.trim().length > 0;
-  const tidy = useMemo(
+  const proposed = useMemo(
     () => layout(project, showQuiet || searching),
     [project, showQuiet, searching],
   );
+  if (spatial.current.projectId !== project.id) {
+    spatial.current = {
+      projectId: project.id,
+      positions: new Map(),
+      sizes: new Map(),
+    };
+  }
+  const tidy = useMemo(() => {
+    const placements = stabilizePlacements(
+      proposed.placements,
+      spatial.current.positions,
+      spatial.current.sizes,
+    );
+    spatial.current.positions = new Map(
+      placements.map((placement) => [placement.key, placement.position]),
+    );
+    return { ...proposed, placements };
+  }, [proposed, measurementRevision]);
   const paint = substrate[appearance];
 
   const computed = useMemo<GroveNode[]>(() => {
@@ -188,26 +216,72 @@ function GroveCanvas({
     () => new Map(computed.map((node) => [node.id, node.position])),
     [computed],
   );
-  const lost = nothingInSight(visibleCards, {
-    x: transform[0],
-    y: transform[1],
-    zoom: transform[2],
-    width: flowWidth,
-    height: flowHeight,
-  });
+  const lost = nothingInSight(
+    visibleCards,
+    {
+      x: transform[0],
+      y: transform[1],
+      zoom: transform[2],
+      width: flowWidth,
+      height: flowHeight,
+    },
+    spatial.current.sizes,
+  );
 
   const quietTotal = project.workspaces.filter(isQuiet).length;
   const foldable = quietTotal >= QUIET_FOLD_MIN;
 
   const [nodes, setNodes, onNodesChange] = useNodesState<GroveNode>([]);
+  useEffect(
+    () => () => {
+      if (measurementFrame.current !== undefined) {
+        window.cancelAnimationFrame(measurementFrame.current);
+      }
+    },
+    [],
+  );
+  const handleNodesChange = useCallback(
+    (changes: NodeChange<GroveNode>[]) => {
+      onNodesChange(changes);
+      let changed = false;
+      for (const change of changes) {
+        if (change.type !== "dimensions" || !change.dimensions) continue;
+        const next = {
+          width: change.dimensions.width,
+          height: change.dimensions.height,
+        };
+        const current = spatial.current.sizes.get(change.id);
+        if (
+          current &&
+          Math.abs(current.width - next.width) < 0.5 &&
+          Math.abs(current.height - next.height) < 0.5
+        ) {
+          continue;
+        }
+        spatial.current.sizes.set(change.id, next);
+        changed = true;
+      }
+      if (changed && measurementFrame.current === undefined) {
+        // React Flow reports dimensions from a ResizeObserver. Repositioning
+        // synchronously inside that observer can make the browser deliver a
+        // second resize in the same cycle; one frame of separation keeps the
+        // measurement and layout phases finite and warning-free.
+        measurementFrame.current = window.requestAnimationFrame(() => {
+          measurementFrame.current = undefined;
+          setMeasurementRevision((revision) => revision + 1);
+        });
+      }
+    },
+    [onNodesChange],
+  );
 
   const comeBack = useCallback(() => {
     void fitView({ padding: 0.24, maxZoom: 1, duration: 320 });
   }, [fitView]);
 
-  // A plot torn down rebalances the fan, so the cards that remain move. The
-  // camera moves with them: what the reader was watching stays where they left
-  // it, and the grove only refits when that subject is gone for good.
+  // Stable anchors normally keep surviving cards fixed. If measured growth or
+  // a topology change still moves one, the camera follows it; the grove only
+  // refits when the subject being watched is gone for good.
   useEffect(() => {
     if (draggingId.current !== undefined) {
       // A card torn down mid-drag never reports its own drag end.
@@ -268,6 +342,10 @@ function GroveCanvas({
   const onNodeDragStop = useCallback(
     (_event: unknown, node: Node) => {
       draggingId.current = undefined;
+      // The user moved the paper on purpose. Record the dropped position as
+      // already shown so the automatic layout follower cannot counter-pan and
+      // make a successful drag look as though the whole canvas jumped.
+      shown.current.set(node.id, node.position);
       const anchor = tidy.placements.find(
         (placement) => placement.key === node.id,
       );
@@ -292,7 +370,7 @@ function GroveCanvas({
         nodes={nodes}
         edges={edges}
         nodeTypes={nodeTypes}
-        onNodesChange={onNodesChange}
+        onNodesChange={handleNodesChange}
         onNodeDragStart={(_event, node) => {
           draggingId.current = node.id;
         }}
@@ -416,10 +494,14 @@ function nothingInSight(
     width: number;
     height: number;
   },
+  sizes: ReadonlyMap<string, NodeSize> = new Map(),
 ): boolean {
   if (cards.size === 0 || view.width === 0 || view.height === 0) return false;
   return !anyNodeInView(
-    [...cards.values()].map((position) => ({ position })),
+    [...cards].map(([key, position]) => {
+      const measured = sizes.get(key);
+      return { position, ...(measured ? { measured } : {}) };
+    }),
     view,
   );
 }
