@@ -13,6 +13,7 @@ import {
   anyNodeInView,
   latestSessionActivity,
   layout,
+  projectForQuery,
   recentActivityOrder,
   showsByDefault,
   stabilizePlacements,
@@ -86,6 +87,30 @@ const changed = (name: string) =>
   });
 
 describe("layout", () => {
+  it("keeps non-matching plots out of the search bounds", () => {
+    const unrelated = Array.from({ length: 39 }, (_, index) =>
+      changed(`unrelated-${String(index).padStart(2, "0")}`),
+    );
+    const matching: WorkspaceSnapshot = {
+      ...changed("website-color-scheme"),
+      task: { title: "Design a website color scheme" },
+    };
+    const focused = projectForQuery(
+      project([trunk, ...unrelated, matching]),
+      "design",
+    );
+    const { placements } = layout(focused, true, now);
+
+    expect(placements.map((placement) => placement.key)).toEqual([
+      "main",
+      "website-color-scheme",
+    ]);
+    expect(
+      Math.max(...placements.map((placement) => placement.position.y)) -
+        Math.min(...placements.map((placement) => placement.position.y)),
+    ).toBeLessThanOrEqual(NODE_HEIGHT + 22);
+  });
+
   it("splits the trunk's children onto both sides", () => {
     const kids = Array.from({ length: 6 }, (_, index) =>
       changed(`kid-${index}`),
@@ -302,6 +327,39 @@ describe("layout", () => {
       after.find((item) => item.key.startsWith("quiet:"))?.hiddenCount,
     ).toBe(2);
     expect(after.some((item) => item.key === "quiet-2")).toBe(true);
+  });
+
+  it("does not stretch the grove across repeated fold and search cycles", () => {
+    const recent = Array.from({ length: 7 }, (_, index) =>
+      recentlyActive(`recent-${index}`, index * 1_000),
+    );
+    const older = Array.from({ length: 32 }, (_, index) =>
+      workspace(`older-${String(index).padStart(2, "0")}`),
+    );
+    const snapshot = project([trunk, ...recent, ...older]);
+    const compact = layout(snapshot, false, now).placements;
+    const expanded = layout(snapshot, true, now).placements;
+    const height = (placements: readonly { position: Point }[]) => {
+      const ys = placements.map((placement) => placement.position.y);
+      return Math.max(...ys) - Math.min(...ys) + NODE_HEIGHT;
+    };
+
+    let previous = new Map(
+      compact.map(({ key, position }) => [key, position] as const),
+    );
+    let current = expanded;
+    for (let cycle = 0; cycle < 6; cycle += 1) {
+      current = stabilizePlacements(expanded, previous);
+      previous = new Map(
+        current.map(({ key, position }) => [key, position] as const),
+      );
+      const folded = stabilizePlacements(compact, previous);
+      previous = new Map(
+        folded.map(({ key, position }) => [key, position] as const),
+      );
+    }
+
+    expect(height(current)).toBeLessThanOrEqual(height(expanded));
   });
 
   it("does not treat a shared deployment as activity worth showing", () => {

@@ -30,9 +30,11 @@ import { substrate, type Appearance } from "./appearance";
 import {
   anyNodeInView,
   layout,
+  projectForQuery,
   recentActivityOrder,
   stabilizePlacements,
   viewShift,
+  workspaceMatchesQuery,
   type NodeSize,
   type Point,
 } from "./grove-layout";
@@ -116,6 +118,7 @@ function GroveCanvas({
   });
   const [measurementRevision, setMeasurementRevision] = useState(0);
   const measurementFrame = useRef<number>(undefined);
+  const focusFrame = useRef<number>(undefined);
   const { zoomIn, zoomOut, fitView, setViewport } = useReactFlow();
   const store = useStoreApi();
   const transform = useStore((state) => state.transform);
@@ -127,9 +130,13 @@ function GroveCanvas({
 
   // Searching should reach folded environments, not hide them.
   const searching = query.trim().length > 0;
+  const viewProject = useMemo(
+    () => projectForQuery(project, query),
+    [project, query],
+  );
   const proposed = useMemo(
-    () => layout(project, showInactive || searching),
-    [project, showInactive, searching],
+    () => layout(viewProject, showInactive || searching),
+    [viewProject, showInactive, searching],
   );
   const activityOrder = useMemo(
     () => recentActivityOrder(project.workspaces).join("\0"),
@@ -164,7 +171,9 @@ function GroveCanvas({
   const computed = useMemo<GroveNode[]>(() => {
     const needle = query.trim().toLowerCase();
     return tidy.placements.map(({ key, workspace, hiddenCount, position }) => {
-      const nudge = nudges[key];
+      // Search is a temporary focused map. A saved manual arrangement belongs
+      // to the full grove and must not pull a lone hit away from its ancestry.
+      const nudge = searching ? undefined : nudges[key];
       const placed = nudge
         ? { x: position.x + nudge.x, y: position.y + nudge.y }
         : position;
@@ -187,7 +196,8 @@ function GroveCanvas({
         data: {
           workspace,
           selected: workspace.workspaceId === selectedWorkspaceId,
-          dimmed: needle.length > 0 && !matches(workspace, needle),
+          dimmed:
+            needle.length > 0 && !workspaceMatchesQuery(workspace, needle),
           menuOpen: menuPlotId === workspace.workspaceId,
           project,
           runtime: cardRuntimeState({ workspace, commands, processes }),
@@ -217,6 +227,7 @@ function GroveCanvas({
     processes,
     nudges,
     query,
+    searching,
     menuPlotId,
     selectedWorkspaceId,
     onSelect,
@@ -261,6 +272,9 @@ function GroveCanvas({
     () => () => {
       if (measurementFrame.current !== undefined) {
         window.cancelAnimationFrame(measurementFrame.current);
+      }
+      if (focusFrame.current !== undefined) {
+        window.cancelAnimationFrame(focusFrame.current);
       }
     },
     [],
@@ -335,6 +349,26 @@ function GroveCanvas({
       comeBack();
     }
   }, [computed, setNodes, store, setViewport, comeBack]);
+
+  const focusKey = `${project.id}\0${query.trim().toLowerCase()}`;
+  useEffect(() => {
+    if (focusFrame.current !== undefined) {
+      window.cancelAnimationFrame(focusFrame.current);
+    }
+    // React Flow receives the focused node set in the effect above. Fitting on
+    // the next frame keeps the camera bounds in lockstep with that committed
+    // set, both when entering search and when clearing it again.
+    focusFrame.current = window.requestAnimationFrame(() => {
+      focusFrame.current = undefined;
+      comeBack();
+    });
+    return () => {
+      if (focusFrame.current !== undefined) {
+        window.cancelAnimationFrame(focusFrame.current);
+        focusFrame.current = undefined;
+      }
+    };
+  }, [focusKey, comeBack]);
 
   const edges = useMemo<Edge[]>(
     () =>
@@ -555,22 +589,6 @@ function QuietNode({ data }: NodeProps<QuietFlowNode>) {
       <span className="quiet-action">Show them</span>
     </article>
   );
-}
-
-function matches(workspace: WorkspaceSnapshot, needle: string): boolean {
-  return [
-    workspace.name,
-    workspace.branch,
-    workspace.path,
-    workspace.purpose ?? "",
-    ...workspace.observations.flatMap((observation) => [
-      observation.label,
-      observation.detail ?? "",
-    ]),
-  ]
-    .join(" ")
-    .toLowerCase()
-    .includes(needle);
 }
 
 function readNudges(projectId: string): ProjectNudges {

@@ -43,30 +43,44 @@ export function stabilizePlacements(
   previous: ReadonlyMap<string, Point>,
   sizes: ReadonlyMap<string, NodeSize> = new Map(),
 ): Placement[] {
+  const retained = placements.reduce(
+    (count, placement) => count + (previous.has(placement.key) ? 1 : 0),
+    0,
+  );
+  // A fold, search, or large teardown is a different map rather than a small
+  // update to the old one. Reusing a sparse minority as immovable anchors
+  // leaves holes on every transition and makes the grove grow indefinitely.
+  const preservesPopulation =
+    previous.size > 0 &&
+    retained / placements.length >= 0.5 &&
+    retained / previous.size >= 0.5;
+  const anchors: ReadonlyMap<string, Point> = preservesPopulation
+    ? previous
+    : new Map();
   const result = new Map<string, Placement>();
   const columns = Map.groupBy(
     placements,
-    (placement) => (previous.get(placement.key) ?? placement.position).x,
+    (placement) => (anchors.get(placement.key) ?? placement.position).x,
   );
 
   for (const [, column] of columns) {
     const ordered = [...column].sort((left, right) => {
-      const leftPosition = previous.get(left.key) ?? left.position;
-      const rightPosition = previous.get(right.key) ?? right.position;
+      const leftPosition = anchors.get(left.key) ?? left.position;
+      const rightPosition = anchors.get(right.key) ?? right.position;
       return (
         leftPosition.y - rightPosition.y || left.key.localeCompare(right.key)
       );
     });
     const established = ordered.filter((placement) =>
-      previous.has(placement.key),
+      anchors.has(placement.key),
     );
     const newcomers = ordered.filter(
-      (placement) => !previous.has(placement.key),
+      (placement) => !anchors.has(placement.key),
     );
     const occupied: Array<{ y: number; height: number }> = [];
     let nextY = Number.NEGATIVE_INFINITY;
     for (const placement of established) {
-      const preferred = previous.get(placement.key) ?? placement.position;
+      const preferred = anchors.get(placement.key) ?? placement.position;
       const position = {
         x: preferred.x,
         y: Math.max(preferred.y, nextY),
@@ -156,6 +170,73 @@ export function recentActivityOrder(
     .filter((workspace) => latestSessionActivity(workspace) !== undefined)
     .toSorted(compareRecentActivity)
     .map((workspace) => workspace.workspaceId);
+}
+
+/** Match everything a reader can recognise as belonging to a plot. */
+export function workspaceMatchesQuery(
+  workspace: WorkspaceSnapshot,
+  query: string,
+): boolean {
+  const needle = query.trim().toLowerCase();
+  if (needle.length === 0) return true;
+  return [
+    workspace.name,
+    workspace.branch,
+    workspace.path,
+    workspace.purpose ?? "",
+    workspace.task?.title ?? "",
+    workspace.task?.description ?? "",
+    workspace.task?.issue?.title ?? "",
+    workspace.task?.issue?.body ?? "",
+    ...(workspace.task?.issue?.labels ?? []),
+    ...(workspace.task?.issue?.assignees ?? []),
+    ...workspace.observations.flatMap((observation) => [
+      observation.label,
+      observation.detail ?? "",
+    ]),
+  ]
+    .join(" ")
+    .toLowerCase()
+    .includes(needle);
+}
+
+/**
+ * Search lays out hits and their recorded ancestry, not every dimmed plot in
+ * the project. Keeping the ancestry makes the result legible without letting
+ * dozens of invisible non-matches determine the viewport bounds.
+ */
+export function projectForQuery(
+  project: ProjectSnapshot,
+  query: string,
+): ProjectSnapshot {
+  if (query.trim().length === 0) return project;
+  const byId = new Map(
+    project.workspaces.map((workspace) => [workspace.workspaceId, workspace]),
+  );
+  const primary =
+    project.workspaces.find((workspace) => workspace.isPrimary) ??
+    project.workspaces[0];
+  const included = new Set<string>();
+  if (primary) included.add(primary.workspaceId);
+
+  for (const workspace of project.workspaces) {
+    if (!workspaceMatchesQuery(workspace, query)) continue;
+    let current: WorkspaceSnapshot | undefined = workspace;
+    const seen = new Set<string>();
+    while (current && !seen.has(current.workspaceId)) {
+      seen.add(current.workspaceId);
+      included.add(current.workspaceId);
+      const parentId: string | undefined = current.lineage?.parentWorkspaceId;
+      current = parentId ? byId.get(parentId) : undefined;
+    }
+  }
+
+  return {
+    ...project,
+    workspaces: project.workspaces.filter((workspace) =>
+      included.has(workspace.workspaceId),
+    ),
+  };
 }
 
 /**
