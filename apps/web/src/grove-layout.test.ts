@@ -9,8 +9,12 @@ import type {
 import {
   NODE_HEIGHT,
   NODE_WIDTH,
+  RECENT_SESSION_WINDOW_MS,
   anyNodeInView,
+  latestSessionActivity,
   layout,
+  recentActivityOrder,
+  showsByDefault,
   stabilizePlacements,
   viewShift,
   type Point,
@@ -61,6 +65,19 @@ const deployment: ConnectorObservation = {
   state: "active",
   label: "brazen-labrador-831",
 };
+
+const now = 1_786_610_000_000;
+const session = (workspaceId: string, updatedAtMs: number) =>
+  ({
+    connectorId: "local-context",
+    workspaceId,
+    kind: "session",
+    state: "ready",
+    label: `Task in ${workspaceId}`,
+    metadata: { taskId: `task-${workspaceId}`, updatedAtMs },
+  }) satisfies ConnectorObservation;
+const recentlyActive = (name: string, ageMs = 0) =>
+  workspace(name, { observations: [session(name, now - ageMs)] });
 
 const trunk = workspace("main", { isPrimary: true, locationKind: "checkout" });
 const changed = (name: string) =>
@@ -211,27 +228,29 @@ describe("layout", () => {
     },
   );
 
-  it("folds quiet environments into one stack", () => {
-    const quiet = Array.from({ length: 5 }, (_, index) =>
-      workspace(`quiet-${index}`),
+  it("folds worktrees without recent Codex activity into one stack", () => {
+    const older = Array.from({ length: 5 }, (_, index) =>
+      workspace(`older-${index}`),
     );
     const { placements } = layout(
-      project([trunk, changed("busy"), ...quiet]),
+      project([trunk, recentlyActive("recent"), ...older]),
       false,
+      now,
     );
 
     const stack = placements.find((item) => item.key.startsWith("quiet:"));
-    expect(stack?.quietCount).toBe(5);
+    expect(stack?.hiddenCount).toBe(5);
     expect(placements.filter((item) => item.workspace)).toHaveLength(2);
   });
 
   it("shows every environment once folding is turned off", () => {
-    const quiet = Array.from({ length: 5 }, (_, index) =>
-      workspace(`quiet-${index}`),
+    const older = Array.from({ length: 5 }, (_, index) =>
+      workspace(`older-${index}`),
     );
     const { placements } = layout(
-      project([trunk, changed("busy"), ...quiet]),
+      project([trunk, recentlyActive("recent"), ...older]),
       true,
+      now,
     );
 
     expect(
@@ -240,9 +259,9 @@ describe("layout", () => {
     expect(placements.filter((item) => item.workspace)).toHaveLength(7);
   });
 
-  it("keeps visible plots still when a quiet stack automatically unfolds", () => {
+  it("keeps visible plots still when an older plot becomes urgent", () => {
     const loud = Array.from({ length: 8 }, (_, index) =>
-      changed(`loud-${index}`),
+      recentlyActive(`loud-${index}`, index * 1_000),
     );
     const quiet = Array.from({ length: 3 }, (_, index) =>
       workspace(`quiet-${index}`),
@@ -250,6 +269,7 @@ describe("layout", () => {
     const before = layout(
       project([trunk, ...loud, ...quiet]),
       false,
+      now,
     ).placements;
     const previous = new Map(
       before.map(({ key, position }) => [key, position] as const),
@@ -266,6 +286,7 @@ describe("layout", () => {
           ),
         ]),
         false,
+        now,
       ).placements,
       previous,
     );
@@ -277,19 +298,125 @@ describe("layout", () => {
         after.find((item) => item.key === placement.key)?.position,
       ).toEqual(placement.position);
     }
+    expect(
+      after.find((item) => item.key.startsWith("quiet:"))?.hiddenCount,
+    ).toBe(2);
+    expect(after.some((item) => item.key === "quiet-2")).toBe(true);
   });
 
   it("does not treat a shared deployment as activity worth showing", () => {
     const attached = Array.from({ length: 4 }, (_, index) =>
       workspace(`attached-${index}`, { observations: [deployment] }),
     );
-    const { placements } = layout(project([trunk, ...attached]), false);
+    const { placements } = layout(project([trunk, ...attached]), false, now);
 
     // All four are clean, so the shared Convex deployment must not keep them out
     // of the quiet stack.
     expect(
-      placements.find((item) => item.key.startsWith("quiet:"))?.quietCount,
+      placements.find((item) => item.key.startsWith("quiet:"))?.hiddenCount,
     ).toBe(4);
+  });
+
+  it("keeps three days of Codex activity and folds anything older", () => {
+    const atCutoff = recentlyActive("at-cutoff", RECENT_SESSION_WINDOW_MS);
+    const tooOld = [
+      recentlyActive("old-1", RECENT_SESSION_WINDOW_MS + 1),
+      workspace("old-2"),
+      changed("old-3"),
+    ];
+    const result = layout(project([trunk, atCutoff, ...tooOld]), false, now);
+
+    expect(showsByDefault(atCutoff, now)).toBe(true);
+    expect(latestSessionActivity(atCutoff)).toBe(
+      now - RECENT_SESSION_WINDOW_MS,
+    );
+    expect(result.placements.some((item) => item.key === "at-cutoff")).toBe(
+      true,
+    );
+    expect(
+      result.placements.find((item) => item.key.startsWith("quiet:"))
+        ?.hiddenCount,
+    ).toBe(3);
+  });
+
+  it("sorts visible worktrees by their latest session activity", () => {
+    const result = layout(
+      project([
+        trunk,
+        recentlyActive("oldest", 3_000),
+        recentlyActive("newest", 1_000),
+        recentlyActive("middle", 2_000),
+      ]),
+      false,
+      now,
+    );
+
+    expect(
+      result.placements
+        .filter((item) => item.workspace && !item.workspace.isPrimary)
+        .map((item) => item.key),
+    ).toEqual(["newest", "middle", "oldest"]);
+    expect(
+      recentActivityOrder([
+        recentlyActive("oldest", 3_000),
+        recentlyActive("newest", 1_000),
+        recentlyActive("middle", 2_000),
+        workspace("without-session"),
+      ]),
+    ).toEqual(["newest", "middle", "oldest"]);
+  });
+
+  it("keeps urgent operational states visible without a recent task", () => {
+    const conflicted = workspace("conflicted", {
+      git: { ...workspace("conflicted").git, conflicted: 1 },
+    });
+    const runtime = workspace("running", {
+      observations: [
+        {
+          connectorId: "local-context",
+          workspaceId: "running",
+          kind: "runtime",
+          state: "active",
+          label: "vite",
+        },
+      ],
+    });
+
+    expect(showsByDefault(conflicted, now)).toBe(true);
+    expect(showsByDefault(runtime, now)).toBe(true);
+  });
+
+  it("still shows a recent descendant when its older parent is folded", () => {
+    const olderParent: WorkspaceSnapshot = {
+      ...workspace("older-parent"),
+      lineage: { parentWorkspaceId: "main", evidence: "recorded" },
+    };
+    const recentChild: WorkspaceSnapshot = {
+      ...recentlyActive("recent-child"),
+      lineage: {
+        parentWorkspaceId: "older-parent",
+        evidence: "recorded",
+      },
+    };
+    const result = layout(
+      project([trunk, olderParent, recentChild]),
+      false,
+      now,
+    );
+
+    expect(result.placements.some((item) => item.key === "recent-child")).toBe(
+      true,
+    );
+    expect(result.placements.some((item) => item.key === "older-parent")).toBe(
+      false,
+    );
+    expect(
+      result.placements.find((item) => item.key.startsWith("quiet:"))
+        ?.hiddenCount,
+    ).toBe(1);
+    expect(result.links.find((link) => link.target === "recent-child")).toEqual(
+      expect.objectContaining({ source: "main", evidence: "unrecorded" }),
+    );
   });
 
   it("never places two nodes in the same cell", () => {

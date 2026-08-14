@@ -28,10 +28,9 @@ import type {
 
 import { substrate, type Appearance } from "./appearance";
 import {
-  QUIET_FOLD_MIN,
   anyNodeInView,
-  isQuiet,
   layout,
+  recentActivityOrder,
   stabilizePlacements,
   viewShift,
   type NodeSize,
@@ -98,15 +97,21 @@ function GroveCanvas({
     readNudges(project.id),
   );
   const [showLegend, setShowLegend] = useState(true);
-  const [showQuiet, setShowQuiet] = useState(false);
+  const [showInactive, setShowInactive] = useState(false);
   const [menuPlotId, setMenuPlotId] = useState<string>();
   const draggingId = useRef<string>(undefined);
   const shown = useRef(new Map<string, Point>());
   const spatial = useRef<{
     projectId: string;
+    activityOrder: string;
     positions: Map<string, Point>;
     sizes: Map<string, NodeSize>;
-  }>({ projectId: project.id, positions: new Map(), sizes: new Map() });
+  }>({
+    projectId: project.id,
+    activityOrder: "",
+    positions: new Map(),
+    sizes: new Map(),
+  });
   const [measurementRevision, setMeasurementRevision] = useState(0);
   const measurementFrame = useRef<number>(undefined);
   const { zoomIn, zoomOut, fitView, setViewport } = useReactFlow();
@@ -116,20 +121,30 @@ function GroveCanvas({
   const flowHeight = useStore((state) => state.height);
 
   useEffect(() => setNudges(readNudges(project.id)), [project.id]);
-  useEffect(() => setShowQuiet(false), [project.id]);
+  useEffect(() => setShowInactive(false), [project.id]);
 
   // Searching should reach folded environments, not hide them.
   const searching = query.trim().length > 0;
   const proposed = useMemo(
-    () => layout(project, showQuiet || searching),
-    [project, showQuiet, searching],
+    () => layout(project, showInactive || searching),
+    [project, showInactive, searching],
+  );
+  const activityOrder = useMemo(
+    () => recentActivityOrder(project.workspaces).join("\0"),
+    [project.workspaces],
   );
   if (spatial.current.projectId !== project.id) {
     spatial.current = {
       projectId: project.id,
+      activityOrder,
       positions: new Map(),
       sizes: new Map(),
     };
+  } else if (spatial.current.activityOrder !== activityOrder) {
+    // A task becoming the most recent is the one state change that is meant to
+    // move cards: the grove is explicitly ordered by last Codex activity.
+    spatial.current.activityOrder = activityOrder;
+    spatial.current.positions = new Map();
   }
   const tidy = useMemo(() => {
     const placements = stabilizePlacements(
@@ -146,7 +161,7 @@ function GroveCanvas({
 
   const computed = useMemo<GroveNode[]>(() => {
     const needle = query.trim().toLowerCase();
-    return tidy.placements.map(({ key, workspace, quietCount, position }) => {
+    return tidy.placements.map(({ key, workspace, hiddenCount, position }) => {
       const nudge = nudges[key];
       const placed = nudge
         ? { x: position.x + nudge.x, y: position.y + nudge.y }
@@ -157,7 +172,10 @@ function GroveCanvas({
           type: "quiet",
           position: placed,
           draggable: false,
-          data: { count: quietCount ?? 0, onExpand: () => setShowQuiet(true) },
+          data: {
+            count: hiddenCount ?? 0,
+            onExpand: () => setShowInactive(true),
+          },
         } satisfies QuietFlowNode;
       }
       return {
@@ -228,8 +246,11 @@ function GroveCanvas({
     spatial.current.sizes,
   );
 
-  const quietTotal = project.workspaces.filter(isQuiet).length;
-  const foldable = quietTotal >= QUIET_FOLD_MIN;
+  const hiddenTotal = tidy.placements.reduce(
+    (total, placement) => total + (placement.hiddenCount ?? 0),
+    0,
+  );
+  const foldable = hiddenTotal > 0 || showInactive;
 
   const [nodes, setNodes, onNodesChange] = useNodesState<GroveNode>([]);
   useEffect(
@@ -431,7 +452,7 @@ function GroveCanvas({
             <button
               type="button"
               className="tool-text"
-              onClick={() => setShowQuiet(!showQuiet)}
+              onClick={() => setShowInactive(!showInactive)}
               disabled={searching}
               title={
                 searching
@@ -439,7 +460,7 @@ function GroveCanvas({
                   : undefined
               }
             >
-              {showQuiet ? "Fold quiet" : `Show ${quietTotal} quiet`}
+              {showInactive ? "Fold older" : `Show ${hiddenTotal} older`}
             </button>
           </>
         )}
@@ -506,7 +527,7 @@ function nothingInSight(
   );
 }
 
-/** Clean, inactive environments collapse to one stack so the loud ones read. */
+/** Older environments collapse to one stack so recent work stays readable. */
 function QuietNode({ data }: NodeProps<QuietFlowNode>) {
   return (
     <article
@@ -522,9 +543,11 @@ function QuietNode({ data }: NodeProps<QuietFlowNode>) {
     >
       <Handle id="in-left" type="target" position={Position.Left} />
       <Handle id="in-right" type="target" position={Position.Right} />
-      <span className="micro">Quiet</span>
-      <h3>{data.count} plots</h3>
-      <p>Clean, no running work</p>
+      <span className="micro">Older</span>
+      <h3>
+        {data.count} {data.count === 1 ? "plot" : "plots"}
+      </h3>
+      <p>No Codex activity in 3 days</p>
       <span className="quiet-action">Show them</span>
     </article>
   );

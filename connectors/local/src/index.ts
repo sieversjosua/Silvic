@@ -18,10 +18,11 @@ interface Listener {
   url: string;
 }
 
-interface CodexTask {
+export interface CodexTask {
   id: string;
   cwd: string;
   title: string;
+  updatedAtMs: number;
 }
 
 interface Shelf<T> {
@@ -78,7 +79,7 @@ export function createLocalContextConnector(runner: CommandRunner): Connector {
           .map((listener) => runtimeObservation(target, listener)),
         ...context.tasks
           .filter((task) => normalize(task.cwd) === normalize(target.path))
-          .map((task) => taskObservation(target, task)),
+          .map((task) => codexTaskObservation(target, task)),
       ];
     },
   };
@@ -165,7 +166,11 @@ async function readCodexTasks(
   ].find(existsSync);
   if (!database) return [];
   const query = `
-    SELECT id, cwd, COALESCE(NULLIF(title, ''), 'Untitled') AS title
+    SELECT
+      id,
+      cwd,
+      COALESCE(NULLIF(title, ''), 'Untitled') AS title,
+      COALESCE(updated_at_ms, updated_at * 1000) AS updatedAtMs
     FROM threads
     WHERE archived = 0 AND cwd <> ''
     ORDER BY COALESCE(updated_at_ms, updated_at * 1000) DESC
@@ -177,23 +182,30 @@ async function readCodexTasks(
   });
   if (result.exitCode !== 0) return [];
   try {
-    const value: unknown = JSON.parse(result.stdout);
-    return Array.isArray(value)
-      ? value.filter(
-          (task): task is CodexTask =>
-            typeof task === "object" &&
-            task !== null &&
-            "id" in task &&
-            "cwd" in task &&
-            "title" in task &&
-            typeof task.id === "string" &&
-            typeof task.cwd === "string" &&
-            typeof task.title === "string",
-        )
-      : [];
+    return parseCodexTasks(result.stdout);
   } catch {
     return [];
   }
+}
+
+export function parseCodexTasks(output: string): readonly CodexTask[] {
+  const value: unknown = JSON.parse(output);
+  return Array.isArray(value)
+    ? value.filter(
+        (task): task is CodexTask =>
+          typeof task === "object" &&
+          task !== null &&
+          "id" in task &&
+          "cwd" in task &&
+          "title" in task &&
+          "updatedAtMs" in task &&
+          typeof task.id === "string" &&
+          typeof task.cwd === "string" &&
+          typeof task.title === "string" &&
+          typeof task.updatedAtMs === "number" &&
+          Number.isFinite(task.updatedAtMs),
+      )
+    : [];
 }
 
 function parseListenerSeeds(output: string): readonly Omit<Listener, "cwd">[] {
@@ -273,7 +285,7 @@ function processLineage(
   return lineage.length > 1 ? lineage : undefined;
 }
 
-function taskObservation(
+export function codexTaskObservation(
   target: WorkspaceTarget,
   task: CodexTask,
 ): ConnectorObservation {
@@ -284,6 +296,6 @@ function taskObservation(
     state: "ready",
     label: task.title,
     detail: "Codex task",
-    metadata: { taskId: task.id },
+    metadata: { taskId: task.id, updatedAtMs: task.updatedAtMs },
   };
 }

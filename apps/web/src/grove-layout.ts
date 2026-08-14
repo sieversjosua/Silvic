@@ -8,15 +8,15 @@ const COLUMN_GAP = 108;
 const ROW_GAP = 22;
 /** Roughly the proportions of the canvas area between rail and inspector. */
 const CANVAS_ASPECT = 1.2;
-/** Below this, quiet environments are cheaper to read than a stack. */
-export const QUIET_FOLD_MIN = 3;
+/** Keep worktrees whose Codex task was touched during the last three days. */
+export const RECENT_SESSION_WINDOW_MS = 3 * 24 * 60 * 60 * 1_000;
 
 export type LineageEvidence = "recorded" | "inferred" | "unrecorded";
 
 export interface Placement {
   key: string;
   workspace?: WorkspaceSnapshot;
-  quietCount?: number;
+  hiddenCount?: number;
   position: { x: number; y: number };
 }
 
@@ -104,15 +104,70 @@ export function isQuiet(workspace: WorkspaceSnapshot): boolean {
   return workspaceState(workspace).tone === "quiet";
 }
 
+/** Most recent Codex activity attached to this exact worktree. */
+export function latestSessionActivity(
+  workspace: WorkspaceSnapshot,
+): number | undefined {
+  let latest: number | undefined;
+  for (const observation of workspace.observations) {
+    if (observation.kind !== "session") continue;
+    const value = observation.metadata?.["updatedAtMs"];
+    if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+      continue;
+    }
+    latest = latest === undefined ? value : Math.max(latest, value);
+  }
+  return latest;
+}
+
+/**
+ * The default grove is a recent-work view. Operationally urgent plots stay in
+ * sight even without a recent Codex task, while ordinary old, changed and
+ * completed worktrees can fold away.
+ */
+export function showsByDefault(
+  workspace: WorkspaceSnapshot,
+  now = Date.now(),
+): boolean {
+  if (workspace.isPrimary) return true;
+  const tone = workspaceState(workspace).tone;
+  if (tone === "attention" || tone === "active" || tone === "waiting") {
+    return true;
+  }
+  const updatedAt = latestSessionActivity(workspace);
+  return updatedAt !== undefined && updatedAt >= now - RECENT_SESSION_WINDOW_MS;
+}
+
+function compareRecentActivity(
+  left: WorkspaceSnapshot,
+  right: WorkspaceSnapshot,
+): number {
+  const byActivity =
+    (latestSessionActivity(right) ?? Number.NEGATIVE_INFINITY) -
+    (latestSessionActivity(left) ?? Number.NEGATIVE_INFINITY);
+  return byActivity || left.workspaceId.localeCompare(right.workspaceId);
+}
+
+/** Stable rank signature; timestamps only matter when they change the order. */
+export function recentActivityOrder(
+  workspaces: readonly WorkspaceSnapshot[],
+): readonly string[] {
+  return workspaces
+    .filter((workspace) => latestSessionActivity(workspace) !== undefined)
+    .toSorted(compareRecentActivity)
+    .map((workspace) => workspace.workspaceId);
+}
+
 /**
  * Deterministic left-to-right layout. Depth still drives the column, but a
  * parent's children are laid out as a wrapped block instead of one tall column,
- * so a wide fan of parallel worktrees stays legible. Quiet environments collapse
- * into a single stack unless the user asks to see them.
+ * so a wide fan of parallel worktrees stays legible. Worktrees without recent
+ * Codex activity collapse into a single stack unless the user asks to see them.
  */
 export function layout(
   project: ProjectSnapshot,
-  showQuiet: boolean,
+  showInactive: boolean,
+  now = Date.now(),
 ): { placements: Placement[]; links: Link[] } {
   const byId = new Map(
     project.workspaces.map((workspace) => [workspace.workspaceId, workspace]),
@@ -122,7 +177,7 @@ export function layout(
     project.workspaces[0];
   if (!primary) return { placements: [], links: [] };
 
-  const children = new Map<string, string[]>();
+  const directParentOf = new Map<string, string>();
   const evidenceOf = new Map<string, LineageEvidence>();
   for (const workspace of project.workspaces) {
     if (workspace.workspaceId === primary.workspaceId) continue;
@@ -132,16 +187,47 @@ export function layout(
       recorded !== workspace.workspaceId &&
       byId.has(recorded);
     const parent = hasRecordedParent ? recorded : primary.workspaceId;
+    directParentOf.set(workspace.workspaceId, parent);
     evidenceOf.set(
       workspace.workspaceId,
       hasRecordedParent
         ? (workspace.lineage?.evidence ?? "inferred")
         : "unrecorded",
     );
-    children.set(parent, [
-      ...(children.get(parent) ?? []),
-      workspace.workspaceId,
-    ]);
+  }
+
+  const included = new Set(
+    project.workspaces
+      .filter((workspace) => showInactive || showsByDefault(workspace, now))
+      .map((workspace) => workspace.workspaceId),
+  );
+  included.add(primary.workspaceId);
+  const nearestIncludedParent = (workspaceId: string) => {
+    let candidate = directParentOf.get(workspaceId) ?? primary.workspaceId;
+    const seen = new Set([workspaceId]);
+    while (!included.has(candidate)) {
+      if (seen.has(candidate)) return primary.workspaceId;
+      seen.add(candidate);
+      candidate = directParentOf.get(candidate) ?? primary.workspaceId;
+    }
+    return candidate;
+  };
+  const children = new Map<string, string[]>();
+  const hiddenByParent = new Map<string, number>();
+  for (const workspace of project.workspaces) {
+    if (workspace.workspaceId === primary.workspaceId) continue;
+    const parent = nearestIncludedParent(workspace.workspaceId);
+    if (included.has(workspace.workspaceId)) {
+      children.set(parent, [
+        ...(children.get(parent) ?? []),
+        workspace.workspaceId,
+      ]);
+      if (parent !== directParentOf.get(workspace.workspaceId)) {
+        evidenceOf.set(workspace.workspaceId, "unrecorded");
+      }
+    } else {
+      hiddenByParent.set(parent, (hiddenByParent.get(parent) ?? 0) + 1);
+    }
   }
 
   const placements: Placement[] = [];
@@ -196,18 +282,12 @@ export function layout(
       .filter((id) => !visited.has(id))
       .map((id) => byId.get(id))
       .filter((workspace) => workspace !== undefined)
-      // Operational state changes continuously while work is running. It may
-      // change a card's emphasis, but it must never change the card's address
-      // on the canvas. Workspace identity is the stable spatial order.
-      .sort((left, right) => left.workspaceId.localeCompare(right.workspaceId));
-    if (kids.length === 0) continue;
+      .sort(compareRecentActivity);
+    const hiddenCount = hiddenByParent.get(parent.id) ?? 0;
+    if (kids.length === 0 && hiddenCount === 0) continue;
 
-    const loud = kids.filter((workspace) => !isQuiet(workspace));
-    const quiet = kids.filter(isQuiet);
-    const folded = !showQuiet && quiet.length >= QUIET_FOLD_MIN;
-    const entries: Array<WorkspaceSnapshot | undefined> = folded
-      ? [...loud, undefined]
-      : [...loud, ...quiet];
+    const entries: Array<WorkspaceSnapshot | undefined> =
+      hiddenCount > 0 ? [...kids, undefined] : kids;
 
     // The trunk splits its stably ordered children; the first half grows right,
     // which is the direction the eye already travels.
@@ -255,7 +335,7 @@ export function layout(
         const key = `quiet:${parent.id}`;
         placements.push({
           key,
-          quietCount: quiet.length,
+          hiddenCount,
           position: cell(column, row),
         });
         links.push({
@@ -302,9 +382,6 @@ export function layout(
       ),
     );
 
-    if (folded) {
-      for (const workspace of quiet) visited.add(workspace.workspaceId);
-    }
     // A parent that owns its column reads better centred on its block.
     if ((columnOccupants.get(parent.column) ?? 0) === 1) {
       parent.placement.position.y = cell(
@@ -316,7 +393,12 @@ export function layout(
 
   // Anything the walk could not reach (a lineage cycle) still gets a column.
   for (const workspace of project.workspaces) {
-    if (visited.has(workspace.workspaceId)) continue;
+    if (
+      !included.has(workspace.workspaceId) ||
+      visited.has(workspace.workspaceId)
+    ) {
+      continue;
+    }
     visited.add(workspace.workspaceId);
     occupy(1);
     placements.push({

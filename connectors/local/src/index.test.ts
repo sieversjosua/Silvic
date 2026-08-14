@@ -6,7 +6,11 @@ import type {
   CommandRunner,
 } from "@silvic/core";
 
-import { createLocalContextConnector } from "./index";
+import {
+  codexTaskObservation,
+  createLocalContextConnector,
+  parseCodexTasks,
+} from "./index";
 
 class FakeRunner implements CommandRunner {
   listening = true;
@@ -77,5 +81,42 @@ describe("createLocalContextConnector", () => {
     connector.invalidate?.();
 
     expect(await connector.observe(target)).toEqual([]);
+  });
+
+  it("keeps the Codex task activity timestamp used by the grove", () => {
+    const [task] = parseCodexTasks(
+      JSON.stringify([
+        {
+          id: "task-1",
+          cwd: "/plots/app",
+          title: "Make the grove readable",
+          updatedAtMs: 1_786_610_000_123,
+        },
+        {
+          id: "invalid",
+          cwd: "/plots/old",
+          title: "Missing timestamp",
+        },
+      ]),
+    );
+    expect(task).toEqual({
+      id: "task-1",
+      cwd: "/plots/app",
+      title: "Make the grove readable",
+      updatedAtMs: 1_786_610_000_123,
+    });
+    if (!task) throw new Error("the valid task should be parsed");
+    expect(
+      codexTaskObservation(
+        {
+          workspaceId: "workspace-1",
+          projectId: "project-1",
+          path: "/plots/app",
+          repositoryName: "app",
+          branch: "agent/grove",
+        },
+        task,
+      ).metadata,
+    ).toEqual({ taskId: "task-1", updatedAtMs: 1_786_610_000_123 });
   });
 });
