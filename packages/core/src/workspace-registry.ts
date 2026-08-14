@@ -25,6 +25,22 @@ export interface ReconciledWorkspaces {
   records: readonly WorkspaceRecord[];
 }
 
+/** Persist a human name without disturbing the Plot's identity or lineage. */
+export function renameWorkspaceRecord(
+  records: readonly WorkspaceRecord[],
+  workspaceId: string,
+  displayName: string,
+): WorkspaceRecord[] {
+  let found = false;
+  const renamed = records.map((record) => {
+    if (record.workspaceId !== workspaceId) return { ...record };
+    found = true;
+    return { ...record, displayName };
+  });
+  if (!found) throw new Error("Unknown plot");
+  return renamed;
+}
+
 export class WorkspaceRegistry {
   reconcile(
     snapshot: SilvicSnapshot,

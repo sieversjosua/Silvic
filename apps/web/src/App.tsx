@@ -406,6 +406,9 @@ export function App() {
               onEditRecipe={() => setRecipeProject(project)}
               defaultHarness={defaultHarness}
               onSetDefaultHarness={(id) => void setDefaultHarness(id)}
+              onRename={(workspaceId, name) =>
+                window.silvic.renamePlot({ workspaceId, name })
+              }
               onNewPlot={() => setShowEnvironment(true)}
               onTeardown={setTeardownPlot}
             />

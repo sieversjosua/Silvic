@@ -611,6 +611,14 @@ export const plotPreviewRequestSchema = z
   .strict();
 export type PlotPreviewRequest = z.infer<typeof plotPreviewRequestSchema>;
 
+export const plotRenameRequestSchema = z
+  .object({
+    workspaceId: z.string().min(1).max(200),
+    name: z.string().trim().min(1).max(120),
+  })
+  .strict();
+export type PlotRenameRequest = z.infer<typeof plotRenameRequestSchema>;
+
 /** What the next plot becomes, computed the same way creation computes it. */
 export interface PlotPreview {
   name: string;
@@ -935,6 +943,7 @@ export interface SilvicDesktopApi {
   getDefaultHarness(): Promise<HarnessId>;
   setDefaultHarness(id: HarnessId): Promise<HarnessId>;
   previewPlot(request: PlotPreviewRequest): Promise<PlotPreview>;
+  renamePlot(request: PlotRenameRequest): Promise<void>;
   /** Opens the explicit Terminal/admin flow for the persistent HTTPS proxy. */
   setupNamedRouting(): Promise<void>;
   testProvisionStep(request: TestStepRequest): Promise<ProvisionResult>;
@@ -978,6 +987,7 @@ export const ipcChannels = {
   defaultHarnessGet: "silvic:harness:default:get",
   defaultHarnessSet: "silvic:harness:default:set",
   plotPreview: "silvic:plot:preview",
+  plotRename: "silvic:plot:rename",
   namedRoutingSetup: "silvic:routing:setup",
   plotProgress: "silvic:plot:progress",
   plotProvision: "silvic:plot:provision",

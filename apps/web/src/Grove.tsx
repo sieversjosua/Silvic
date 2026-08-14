@@ -65,6 +65,7 @@ interface GroveProps {
   onNewPlot(): void;
   defaultHarness: HarnessId;
   onSetDefaultHarness(id: HarnessId): void;
+  onRename(id: string, name: string): Promise<void>;
   onTeardown(workspace: WorkspaceSnapshot): void;
 }
 
@@ -91,6 +92,7 @@ function GroveCanvas({
   onNewPlot,
   defaultHarness,
   onSetDefaultHarness,
+  onRename,
   onTeardown,
 }: GroveProps) {
   const [nudges, setNudges] = useState<ProjectNudges>(() =>
@@ -203,6 +205,7 @@ function GroveCanvas({
           onNewPlot,
           defaultHarness,
           onSetDefaultHarness,
+          onRename,
           onTeardown,
         },
       } satisfies WorkspaceFlowNode;
@@ -222,6 +225,7 @@ function GroveCanvas({
     onNewPlot,
     defaultHarness,
     onSetDefaultHarness,
+    onRename,
     onTeardown,
   ]);
 

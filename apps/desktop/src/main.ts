@@ -44,6 +44,7 @@ import {
   projectActivationRequestSchema,
   teardownRequestSchema,
   plotPreviewRequestSchema,
+  plotRenameRequestSchema,
   plotCommandRequestSchema,
   plotProvisionRequestSchema,
   testStepRequestSchema,
@@ -100,6 +101,7 @@ import {
   routeNameFor,
   runtimeStartResult,
   readRecipeSource,
+  renameWorkspaceRecord,
   writeRecipe,
   resolvedCommandPath,
   type SupervisedCommand,
@@ -527,6 +529,35 @@ function registerIpc(): void {
       ...(conflict ? { conflict } : {}),
       ...(routingIssue ? { advice: routingIssue } : {}),
     };
+  });
+  ipcMain.handle(ipcChannels.plotRename, (event, request: unknown) => {
+    assertTrustedSender(event);
+    const parsed = plotRenameRequestSchema.parse(request);
+    const workspace = latestSnapshot.projects
+      .flatMap((project) => project.workspaces)
+      .find((candidate) => candidate.workspaceId === parsed.workspaceId);
+    if (!workspace || workspace.isPrimary) throw new Error("Unknown plot");
+
+    settings.set(
+      "workspaceRecords",
+      renameWorkspaceRecord(
+        settings.get("workspaceRecords"),
+        parsed.workspaceId,
+        parsed.name,
+      ),
+    );
+    latestSnapshot = {
+      ...latestSnapshot,
+      projects: latestSnapshot.projects.map((project) => ({
+        ...project,
+        workspaces: project.workspaces.map((candidate) =>
+          candidate.workspaceId === parsed.workspaceId
+            ? { ...candidate, name: parsed.name }
+            : candidate,
+        ),
+      })),
+    };
+    mainWindow?.webContents.send(ipcChannels.snapshotChanged, latestSnapshot);
   });
   ipcMain.handle(ipcChannels.namedRoutingSetup, async (event) => {
     assertTrustedSender(event);

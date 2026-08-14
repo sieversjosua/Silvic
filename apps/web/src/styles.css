@@ -1257,6 +1257,61 @@ button.app-update[aria-disabled="true"] {
   overflow-wrap: anywhere;
 }
 
+.plot-rename {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-wrap: wrap;
+  gap: 3px;
+  align-items: center;
+}
+
+.plot-rename input {
+  width: auto;
+  min-width: 0;
+  flex: 1;
+  height: 24px;
+  padding: 3px 6px;
+  border: 1px solid var(--accent-edge);
+  border-radius: var(--r-sm);
+  background: var(--surface-raised);
+  color: var(--ink);
+  font-size: 12px;
+  outline: none;
+}
+
+.plot-rename input[data-invalid] {
+  border-color: var(--tone-attention);
+}
+
+.plot-rename button {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: var(--r-sm);
+  color: var(--ink-muted);
+  background: var(--surface-hover);
+}
+
+.plot-rename button:hover:not(:disabled),
+.plot-rename button:focus-visible {
+  color: var(--ink);
+}
+
+.plot-rename-error {
+  display: flex;
+  min-width: 0;
+  flex: 1 0 100%;
+  gap: 4px;
+  align-items: center;
+  color: var(--tone-attention);
+  font-size: 9.5px;
+  line-height: 1.25;
+}
+
 /* The branch lives in this glyph's tooltip rather than on a row of its own. */
 .plot-branch-hint {
   display: grid;

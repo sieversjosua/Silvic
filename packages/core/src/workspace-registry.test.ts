@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { SilvicSnapshot } from "@silvic/contracts";
 
-import { WorkspaceRegistry } from "./workspace-registry";
+import { WorkspaceRegistry, renameWorkspaceRecord } from "./workspace-registry";
 
 describe("WorkspaceRegistry", () => {
   it("keeps the Issue that explains why a Plot exists", () => {
@@ -79,6 +79,46 @@ describe("WorkspaceRegistry", () => {
       parentWorkspaceId: primary.workspaceId,
       evidence: "recorded",
     });
+  });
+
+  it("persists a renamed Plot without changing its identity or lineage", () => {
+    const registry = new WorkspaceRegistry();
+    const first = registry.reconcile(fixture("/projects/app-feature"), []);
+    const feature = first.snapshot.projects[0]?.workspaces.find(
+      (workspace) => !workspace.isPrimary,
+    );
+    if (!feature) throw new Error("Fixture has no feature Plot");
+
+    const records = renameWorkspaceRecord(
+      first.records,
+      feature.workspaceId,
+      "Image upload repair",
+    );
+    const refreshed = registry.reconcile(
+      fixture("/projects/app-feature"),
+      records,
+    );
+    const renamed = refreshed.snapshot.projects[0]?.workspaces.find(
+      (workspace) => workspace.workspaceId === feature.workspaceId,
+    );
+
+    expect(renamed?.name).toBe("Image upload repair");
+    expect(renamed?.workspaceId).toBe(feature.workspaceId);
+    expect(
+      records.find((record) => record.workspaceId === feature.workspaceId),
+    ).toEqual(
+      expect.objectContaining({
+        displayName: "Image upload repair",
+        path: feature.path,
+        branch: feature.branch,
+      }),
+    );
+  });
+
+  it("refuses to rename an unknown Plot record", () => {
+    expect(() => renameWorkspaceRecord([], "missing", "Name")).toThrow(
+      "Unknown plot",
+    );
   });
 });
 

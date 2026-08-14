@@ -3,6 +3,7 @@ import type { RefObject } from "react";
 import { createPortal } from "react-dom";
 import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
 import {
+  Check,
   Copy,
   FolderOpen,
   GitBranch,
@@ -10,6 +11,7 @@ import {
   Link2,
   MoreHorizontal,
   Monitor,
+  Pencil,
   Play,
   Plus,
   Radio,
@@ -18,6 +20,7 @@ import {
   Trash2,
   Terminal,
   TriangleAlert,
+  X,
 } from "lucide-react";
 
 import type {
@@ -60,6 +63,7 @@ export interface WorkspaceNodeData extends Record<string, unknown> {
   onNewPlot(): void;
   defaultHarness: HarnessId;
   onSetDefaultHarness(id: HarnessId): void;
+  onRename(id: string, name: string): Promise<void>;
   onTeardown(workspace: WorkspaceSnapshot): void;
 }
 
@@ -69,6 +73,10 @@ export function WorkspaceNode({ data }: NodeProps<WorkspaceFlowNode>) {
   const { workspace } = data;
   const [runtimeWorking, setRuntimeWorking] = useState<"start" | "stop">();
   const [runtimeFailure, setRuntimeFailure] = useState<string>();
+  const [renaming, setRenaming] = useState(false);
+  const [renameValue, setRenameValue] = useState("");
+  const [renameWorking, setRenameWorking] = useState(false);
+  const [renameFailure, setRenameFailure] = useState<string>();
   const runtime = data.runtime;
   const conclusion = plotConclusion(workspace);
   // Supervised runtimes speak once, in the head: the runtime label is the
@@ -101,6 +109,28 @@ export function WorkspaceNode({ data }: NodeProps<WorkspaceFlowNode>) {
   // Ready to be seen off: the pull request has concluded and nothing is
   // running or midway through stopping.
   const actions = plotCardActions({ conclusion, runtime });
+
+  const beginRename = () => {
+    setRenameValue(workspace.name);
+    setRenameFailure(undefined);
+    setRenaming(true);
+  };
+
+  const submitRename = () => {
+    const name = renameValue.trim();
+    if (!name || renameWorking) return;
+    if (name === workspace.name) {
+      setRenaming(false);
+      return;
+    }
+    setRenameWorking(true);
+    setRenameFailure(undefined);
+    void data
+      .onRename(workspace.workspaceId, name)
+      .then(() => setRenaming(false))
+      .catch((error: unknown) => setRenameFailure(failureMessage(error)))
+      .finally(() => setRenameWorking(false));
+  };
 
   const runRuntimes = (action: "start" | "stop", ids: readonly string[]) => {
     setRuntimeWorking(action);
@@ -160,12 +190,64 @@ export function WorkspaceNode({ data }: NodeProps<WorkspaceFlowNode>) {
       </header>
 
       <div className="plot-title">
-        <h3
-          className="plot-name"
-          title={workspace.isPrimary ? data.project.name : workspace.name}
-        >
-          {workspace.isPrimary ? data.project.name : workspace.name}
-        </h3>
+        {renaming ? (
+          <form
+            className="plot-rename"
+            title={renameFailure}
+            onClick={(event) => event.stopPropagation()}
+            onSubmit={(event) => {
+              event.preventDefault();
+              submitRename();
+            }}
+            onKeyDown={(event) => {
+              event.stopPropagation();
+              if (event.key !== "Escape") return;
+              event.preventDefault();
+              setRenaming(false);
+            }}
+          >
+            <input
+              aria-label="Plot name"
+              value={renameValue}
+              maxLength={120}
+              disabled={renameWorking}
+              autoFocus
+              data-invalid={renameFailure ? true : undefined}
+              aria-invalid={renameFailure ? true : undefined}
+              title={renameFailure}
+              onFocus={(event) => event.currentTarget.select()}
+              onChange={(event) => setRenameValue(event.target.value)}
+            />
+            <button
+              type="submit"
+              aria-label="Save plot name"
+              disabled={!renameValue.trim() || renameWorking}
+            >
+              <Check size={12} />
+            </button>
+            <button
+              type="button"
+              aria-label="Cancel renaming"
+              disabled={renameWorking}
+              onClick={() => setRenaming(false)}
+            >
+              <X size={12} />
+            </button>
+            {renameFailure && (
+              <span className="plot-rename-error" role="alert">
+                <TriangleAlert size={10} />
+                {renameFailure}
+              </span>
+            )}
+          </form>
+        ) : (
+          <h3
+            className="plot-name"
+            title={workspace.isPrimary ? data.project.name : workspace.name}
+          >
+            {workspace.isPrimary ? data.project.name : workspace.name}
+          </h3>
+        )}
         {/* The branch spells itself out on hover instead of taking a row of
             its own — a plot is usually named after it anyway. */}
         <span
@@ -352,6 +434,7 @@ export function WorkspaceNode({ data }: NodeProps<WorkspaceFlowNode>) {
           onOpen={data.onOpen}
           onSetDefaultHarness={data.onSetDefaultHarness}
           onEditRecipe={data.onEditRecipe}
+          onRename={beginRename}
           onTeardown={data.onTeardown}
         />
       )}
@@ -404,6 +487,7 @@ function PlotMenu({
   onOpen,
   onSetDefaultHarness,
   onEditRecipe,
+  onRename,
   onTeardown,
 }: {
   anchor: HTMLElement | null;
@@ -414,6 +498,7 @@ function PlotMenu({
   onOpen(path: string, target: HarnessDefinition["id"]): void;
   onSetDefaultHarness(id: HarnessId): void;
   onEditRecipe(): void;
+  onRename(): void;
   onTeardown(workspace: WorkspaceSnapshot): void;
 }) {
   useKeyLayer({ dismiss: onClose });
@@ -472,15 +557,22 @@ function PlotMenu({
             Recipe…
           </button>
         ) : (
-          <button
-            type="button"
-            role="menuitem"
-            className="danger"
-            onClick={run(() => onTeardown(workspace))}
-          >
-            <Trash2 size={14} />
-            Tear down…
-          </button>
+          <>
+            <button type="button" role="menuitem" onClick={run(onRename)}>
+              <Pencil size={14} />
+              Rename…
+            </button>
+            <div className="menu-rule" />
+            <button
+              type="button"
+              role="menuitem"
+              className="danger"
+              onClick={run(() => onTeardown(workspace))}
+            >
+              <Trash2 size={14} />
+              Tear down…
+            </button>
+          </>
         )}
       </div>
     </>,

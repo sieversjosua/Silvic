@@ -13,6 +13,7 @@ import {
   type ProjectActivationRequest,
   type RecipeSaveRequest,
   type PlotPreviewRequest,
+  type PlotRenameRequest,
   type PlotCommandRequest,
   type PlotProcess,
   type PlotProgress,
@@ -98,6 +99,8 @@ const api: SilvicDesktopApi = {
     ipcRenderer.invoke(ipcChannels.defaultHarnessSet, id),
   previewPlot: (request: PlotPreviewRequest) =>
     ipcRenderer.invoke(ipcChannels.plotPreview, request),
+  renamePlot: (request: PlotRenameRequest) =>
+    ipcRenderer.invoke(ipcChannels.plotRename, request),
   setupNamedRouting: () => ipcRenderer.invoke(ipcChannels.namedRoutingSetup),
   testProvisionStep: (request: TestStepRequest) =>
     ipcRenderer.invoke(ipcChannels.stepTest, request),
