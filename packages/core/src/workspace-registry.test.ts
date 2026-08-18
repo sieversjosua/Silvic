@@ -115,6 +115,78 @@ describe("WorkspaceRegistry", () => {
     );
   });
 
+  it("holds a session-derived name through a poll that observes nothing", () => {
+    const registry = new WorkspaceRegistry();
+    // An opaque harness worktree: only the thread title says what it is.
+    const detached = "/Users/me/.codex/worktrees/70b0/app";
+    const withSessions = (
+      sessions: readonly { label: string; updatedAtMs: number }[],
+    ) => {
+      const snapshot = fixture(detached);
+      const feature = snapshot.projects[0]?.workspaces[1];
+      if (!feature) throw new Error("Fixture has no feature Plot");
+      return {
+        ...snapshot,
+        projects: [
+          {
+            ...snapshot.projects[0]!,
+            workspaces: [
+              snapshot.projects[0]!.workspaces[0]!,
+              {
+                ...feature,
+                branch: "(detached)",
+                name: "app",
+                git: { ...feature.git, branch: "(detached)" },
+                observations: sessions.map((session) => ({
+                  connectorId: "local-context",
+                  workspaceId: feature.workspaceId,
+                  kind: "session" as const,
+                  state: "ready" as const,
+                  label: session.label,
+                  metadata: { updatedAtMs: session.updatedAtMs },
+                })),
+              },
+            ],
+          },
+        ],
+      };
+    };
+    const nameOf = (result: ReturnType<WorkspaceRegistry["reconcile"]>) =>
+      result.snapshot.projects[0]?.workspaces.find(
+        (workspace) => !workspace.isPrimary,
+      )?.name;
+
+    // Order of arrival says nothing about which session is current.
+    const first = registry.reconcile(
+      withSessions([
+        { label: "Older thread", updatedAtMs: 10 },
+        { label: "Fix owner onboarding", updatedAtMs: 20 },
+      ]),
+      [],
+    );
+    expect(nameOf(first)).toBe("Fix owner onboarding");
+
+    // A poll where the harness read failed must not rename the plot back to
+    // its opaque directory evidence.
+    expect(nameOf(registry.reconcile(withSessions([]), first.records))).toBe(
+      "Fix owner onboarding",
+    );
+
+    // Nor may a newer thread rename it, and nor may a restart: the answer
+    // travels with the records, so the Git-only paint that comes first after
+    // launch already knows it.
+    const later = registry.reconcile(
+      withSessions([{ label: "Something else entirely", updatedAtMs: 99 }]),
+      first.records,
+    );
+    expect(nameOf(later)).toBe("Fix owner onboarding");
+    expect(
+      nameOf(
+        new WorkspaceRegistry().reconcile(withSessions([]), later.records),
+      ),
+    ).toBe("Fix owner onboarding");
+  });
+
   it("refuses to rename an unknown Plot record", () => {
     expect(() => renameWorkspaceRecord([], "missing", "Name")).toThrow(
       "Unknown plot",

@@ -31,6 +31,18 @@ describe("resolveDisplayName", () => {
     ).toBe("Fix owner onboarding");
   });
 
+  it("keeps the branch when a session title would only flicker past it", () => {
+    // The newest thread changes several times an hour; the branch is what the
+    // plot is. A name that follows the thread reads as a different plot.
+    expect(
+      resolveDisplayName({
+        path: "/Users/me/.codex/worktrees/2466/SynTwin",
+        sessionName: "Fix owner onboarding",
+        gitName: "cicd",
+      }),
+    ).toBe("cicd");
+  });
+
   it("distinguishes T3 worktrees by their final identifier", () => {
     expect(
       resolveDisplayName({

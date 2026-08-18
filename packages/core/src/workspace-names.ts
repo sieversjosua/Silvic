@@ -9,8 +9,11 @@ export function resolveDisplayName(options: {
 }): string {
   const { path, recorded, sessionName, gitName } = options;
   if (tellsApart(recorded, path)) return recorded;
-  if (sessionName) return sessionName;
+  // A branch outlives the thread that happens to be open in the plot right
+  // now. Letting a session title outrank it made a card's name change every
+  // time the newest thread did, which reads as the plot losing its identity.
   if (tellsApart(gitName, path)) return gitName;
+  if (sessionName) return sessionName;
   return pathQualifier(path) ?? gitName;
 }
 

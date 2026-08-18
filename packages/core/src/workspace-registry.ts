@@ -16,6 +16,14 @@ export interface WorkspaceRecord {
   branch: string;
   parentWorkspaceId?: string;
   displayName?: string;
+  /**
+   * The session title this plot was first named after, kept because a name
+   * may not depend on data that arrives late. Silvic paints from Git first
+   * and enriches with connector observations a moment later; without a
+   * remembered answer, every such paint renamed an opaque harness worktree
+   * back to `codex-70b0` and the enrichment renamed it again.
+   */
+  observedName?: string;
   purpose?: string;
   task?: TaskContext;
 }
@@ -101,6 +109,29 @@ export class WorkspaceRegistry {
   }
 }
 
+/**
+ * The most recent session speaks for the plot. Taking whichever observation
+ * came first instead let the answer depend on the order the connectors were
+ * read in, so the name changed without anything about the plot changing.
+ */
+function newestSessionLabel(workspace: WorkspaceSnapshot): string | undefined {
+  let best: { label: string; updatedAtMs: number } | undefined;
+  for (const observation of workspace.observations) {
+    if (observation.kind !== "session" || !observation.label) continue;
+    const value = observation.metadata?.["updatedAtMs"];
+    const updatedAtMs =
+      typeof value === "number" && Number.isFinite(value) ? value : 0;
+    if (
+      !best ||
+      updatedAtMs > best.updatedAtMs ||
+      (updatedAtMs === best.updatedAtMs && observation.label < best.label)
+    ) {
+      best = { label: observation.label, updatedAtMs };
+    }
+  }
+  return best?.label;
+}
+
 function uniqueRecordForBranch(
   records: readonly WorkspaceRecord[],
   claimed: ReadonlySet<string>,
@@ -125,11 +156,13 @@ function stableWorkspace(
   const stableId = record.workspaceId;
   const parentWorkspaceId =
     record.parentWorkspaceId ?? (!workspace.isPrimary ? primaryId : undefined);
-  const sessionName = !workspace.isPrimary
-    ? workspace.observations.find(
-        (observation) => observation.kind === "session",
-      )?.label
-    : undefined;
+  // Written once and then left alone: a plot that has been called something
+  // keeps being called that, however many threads are opened in it later.
+  if (!workspace.isPrimary && record.observedName === undefined) {
+    const observed = newestSessionLabel(workspace);
+    if (observed) record.observedName = observed;
+  }
+  const sessionName = workspace.isPrimary ? undefined : record.observedName;
   return {
     ...workspace,
     workspaceId: stableId,
