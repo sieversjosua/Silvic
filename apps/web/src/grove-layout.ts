@@ -8,7 +8,7 @@ const COLUMN_GAP = 108;
 const ROW_GAP = 22;
 /** Roughly the proportions of the canvas area between rail and inspector. */
 const CANVAS_ASPECT = 1.2;
-/** Keep worktrees whose Codex task was touched during the last three days. */
+/** Keep worktrees whose agent session was touched during the last three days. */
 export const RECENT_SESSION_WINDOW_MS = 3 * 24 * 60 * 60 * 1_000;
 
 export type LineageEvidence = "recorded" | "inferred" | "unrecorded";
@@ -118,7 +118,7 @@ export function isQuiet(workspace: WorkspaceSnapshot): boolean {
   return workspaceState(workspace).tone === "quiet";
 }
 
-/** Most recent Codex activity attached to this exact worktree. */
+/** Most recent agent-session activity attached to this exact worktree. */
 export function latestSessionActivity(
   workspace: WorkspaceSnapshot,
 ): number | undefined {
@@ -136,7 +136,7 @@ export function latestSessionActivity(
 
 /**
  * The default grove is a recent-work view. Operationally urgent plots stay in
- * sight even without a recent Codex task, while ordinary old, changed and
+ * sight even without a recent agent session, while ordinary old, changed and
  * completed worktrees can fold away.
  */
 export function showsByDefault(
