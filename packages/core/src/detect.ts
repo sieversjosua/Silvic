@@ -40,7 +40,12 @@ export async function inspectRepository(
 
   const packageMetadata = await readPackageMetadata(join(root, "package.json"));
   const scripts = packageMetadata?.scripts;
-  const devScript = ["dev", "develop", "start"].find((name) => scripts?.[name]);
+  // Prefer a repository's explicit browser process over its umbrella runner.
+  // The latter often starts the browser app and its sidecars together, even
+  // though Silvic supervises those sidecars as separate commands.
+  const devScript = ["dev:web", "web:dev", "dev", "develop", "start"].find(
+    (name) => scripts?.[name],
+  );
   if (devScript) findings.devScript = devScript;
   if (scripts) findings.scripts = scripts;
   if (findings.packageManager === undefined && scripts) {

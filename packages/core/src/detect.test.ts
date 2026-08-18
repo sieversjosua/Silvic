@@ -105,6 +105,26 @@ describe("inspectRepository", () => {
     });
   });
 
+  it("uses a dedicated web script instead of a multi-service dev runner", async () => {
+    const root = await repository({
+      "package.json": JSON.stringify({
+        scripts: {
+          dev: "bun scripts/dev.ts",
+          "dev:web": "astro dev",
+          "dev:convex": "convex dev",
+        },
+      }),
+      "bun.lock": "",
+    });
+
+    const findings = await inspectRepository(root);
+
+    expect(findings.devScript).toBe("dev:web");
+    expect(suggestRecipe(findings).commands?.["web"]?.run).toBe(
+      "bun run dev:web",
+    );
+  });
+
   it("assumes npm when there is a package.json but no lockfile", async () => {
     const root = await repository({
       "package.json": JSON.stringify({ scripts: { start: "node ." } }),

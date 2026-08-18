@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { CommandSupervisor, needsProxy } from "./command-supervisor";
+import { CommandSupervisor } from "./command-supervisor";
 import type { NamedRoutePublisher } from "./named-route";
 
 const temporaryDirectories: string[] = [];
@@ -16,20 +16,6 @@ afterEach(async () => {
       .splice(0)
       .map((directory) => rm(directory, { recursive: true, force: true })),
   );
-});
-
-describe("needsProxy", () => {
-  it("recognises the non-interactive macOS privilege failure", () => {
-    expect(
-      needsProxy(
-        [
-          "Starting proxy...",
-          "Port 443 requires elevated privileges. Requesting sudo...",
-          "sudo: a password is required",
-        ].join("\n"),
-      ),
-    ).toBe(true);
-  });
 });
 
 describe("CommandSupervisor", () => {
@@ -266,7 +252,7 @@ describe("CommandSupervisor", () => {
       id: "web",
       status: "failed",
       exitCode: 1,
-      advice: expect.stringMatching(/portless service install/),
+      advice: expect.stringMatching(/one-time HTTPS setup/),
     });
   });
 

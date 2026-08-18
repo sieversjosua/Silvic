@@ -1,33 +1,65 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { execFile, execFileSync } from "node:child_process";
 import { createServer } from "node:http";
+import { request as httpRequest } from "node:http";
+import { request as httpsRequest } from "node:https";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { promisify } from "node:util";
 
-import { afterAll, expect, it } from "vitest";
+import { afterAll, beforeAll, expect, it } from "vitest";
+
+import {
+  GateClient,
+  controlSocketPath,
+  startGate,
+  type Gate,
+} from "@silvic/gate";
 
 import {
   CommandSupervisor,
   type SupervisedCommand,
 } from "./command-supervisor";
-import { PortlessRoutePublisher } from "./named-route";
+import {
+  GateRoutePublisher,
+  type GateRouteLink,
+  type NamedRoutePublisher,
+  type RouteProbe,
+} from "./named-route";
 
 const directories: string[] = [];
-const namedRoutes: string[] = [];
 const extraPorts: number[] = [];
 const execFileAsync = promisify(execFile);
 
-function directPortlessEnvironment(): NodeJS.ProcessEnv {
-  const environment = { ...process.env };
-  delete environment.npm_command;
-  delete environment.PNPM_SCRIPT_SRC_DIR;
-  return environment;
-}
+let gate: Gate;
+let gateState: string;
+let client: GateClient;
+let link: GateRouteLink;
+let rootCertificate: string;
+
+beforeAll(async () => {
+  gateState = await mkdtemp(join(tmpdir(), "silvic-gate-live-"));
+  directories.push(gateState);
+  gate = await startGate({
+    stateDirectory: gateState,
+    httpsPort: 0,
+    httpPort: 0,
+    version: "live-test",
+    launchApp: () => undefined,
+  });
+  client = new GateClient({ socketPath: controlSocketPath(gateState) });
+  link = {
+    set: (route) => client.routeSet(route),
+    suspend: (name) => client.routeSuspend(name),
+  };
+  rootCertificate = await readFile(join(gateState, "ca", "ca.pem"), "utf8");
+}, 60_000);
 
 afterAll(async () => {
-  // Whatever this test started is detached, so it outlives the runner unless
-  // it is ended here.
+  client.close();
+  await gate.close();
+  // Whatever these tests started is detached, so it outlives the runner
+  // unless it is ended here.
   try {
     for (const cleanupPort of [port, ...extraPorts]) {
       execFileSync(
@@ -39,16 +71,6 @@ afterAll(async () => {
   } catch {
     // Nothing was listening, which is the state being asked for.
   }
-  for (const routeName of namedRoutes) {
-    try {
-      execFileSync("portless", ["alias", "--remove", routeName], {
-        stdio: "ignore",
-        env: directPortlessEnvironment(),
-      });
-    } catch {
-      // A successfully stopped supervisor has already removed it.
-    }
-  }
   await Promise.all(
     directories
       .splice(0)
@@ -56,12 +78,71 @@ afterAll(async () => {
   );
 });
 
+/**
+ * The production probe reaches named URLs on 443 through the pf redirect.
+ * These tests run without root, so named hosts are dialled straight at the
+ * gate's ephemeral port while keeping SNI and Host intact.
+ */
+function probeViaGate(url: string): Promise<RouteProbe | undefined> {
+  const target = new URL(url);
+  const named = target.hostname.endsWith(".localhost");
+  return new Promise((resolve) => {
+    const send = target.protocol === "https:" ? httpsRequest : httpRequest;
+    const request = send(
+      {
+        host: named ? "127.0.0.1" : target.hostname.replace(/^\[|\]$/g, ""),
+        ...(named
+          ? {
+              port: gate.httpsPort,
+              servername: target.hostname,
+              ca: rootCertificate,
+              headers: { host: target.hostname, connection: "close" },
+            }
+          : {
+              ...(target.port ? { port: target.port } : {}),
+              headers: { connection: "close" },
+            }),
+        path: `${target.pathname}${target.search}`,
+        method: "GET",
+      },
+      (response) => {
+        response.resume();
+        const contentType = response.headers["content-type"];
+        resolve({
+          status: response.statusCode ?? 0,
+          ...(typeof contentType === "string" ? { contentType } : {}),
+        });
+      },
+    );
+    request.setTimeout(2_000, () => request.destroy());
+    request.once("error", () => resolve(undefined));
+    request.end();
+  });
+}
+
+const curlNamed = async (routeName: string, path = "/", headersOut = false) =>
+  execFileAsync("curl", [
+    "-sS",
+    ...(headersOut ? ["-D", "-", "-o", "/dev/null"] : []),
+    "--cacert",
+    join(gateState, "ca", "ca.pem"),
+    "--connect-to",
+    `${routeName}.localhost:443:127.0.0.1:${gate.httpsPort}`,
+    `https://${routeName}.localhost${path}`,
+  ]);
+
+const unroutedPublisher: NamedRoutePublisher = {
+  publish: () => Promise.reject(new Error("This test routes nothing")),
+  healthy: () => Promise.resolve(false),
+  remove: () => Promise.resolve(),
+};
+
 const settle = (ms: number) => new Promise((done) => setTimeout(done, ms));
 // A fresh port each run, so a leaked server from a previous one cannot make
 // this look like a failure of the thing being tested.
 const port = 4600 + Math.floor(Math.random() * 300);
 
-it("publishes a web server with its public origin through Portless", async () => {
+it("publishes an IPv6 web server with its public origin through the gate", async () => {
   const webServer = createServer((request, response) => {
     if (request.url === "/app") {
       response.writeHead(302, {
@@ -82,8 +163,9 @@ it("publishes a web server with its public origin through Portless", async () =>
     throw new Error("The IPv6 test server did not expose a TCP port.");
   }
   const routeName = `silvic-ipv6-${process.pid}-${address.port}`;
-  namedRoutes.push(routeName);
-  const publisher = new PortlessRoutePublisher({
+  const publisher = new GateRoutePublisher({
+    link,
+    probe: probeViaGate,
     inspect: async () => [{ processId: process.pid, port: address.port }],
   });
 
@@ -93,31 +175,22 @@ it("publishes a web server with its public origin through Portless", async () =>
       processId: process.pid,
       expectedPort: address.port + 1,
       output: () => `Local: http://localhost:${address.port}`,
-      timeoutMs: 2_000,
+      timeoutMs: 5_000,
     });
 
     expect(published.port).toBe(address.port);
-    const served = await execFileAsync("curl", [
-      "-ksS",
-      `https://${routeName}.localhost/`,
-    ]);
+    const served = await curlNamed(routeName);
     expect(served.stdout.trim()).toBe("<h1>IPv6 Silvic route is live</h1>");
-    const redirected = await execFileAsync("curl", [
-      "-ksS",
-      "-D",
-      "-",
-      "-o",
-      "/dev/null",
-      `https://${routeName}.localhost/app`,
-    ]);
+    const redirected = await curlNamed(routeName, "/app", true);
     expect(redirected.stdout).toMatch(
       new RegExp(`location: https://${routeName}\\.localhost/app/login`, "i"),
     );
   } finally {
     await publisher.remove(routeName);
+    await client.routeRemove(routeName);
     await new Promise<void>((resolve) => webServer.close(() => resolve()));
   }
-}, 10_000);
+}, 30_000);
 
 it("starts a real command, stops its whole group, and is taken back", async () => {
   const plot = await mkdtemp(join(tmpdir(), "silvic-live-"));
@@ -131,6 +204,7 @@ it("starts a real command, stops its whole group, and is taken back", async () =
     onChange: (processes) => {
       announced = processes;
     },
+    routePublisher: unroutedPublisher,
   });
 
   await supervisor.start({
@@ -189,6 +263,7 @@ it("starts a real command, stops its whole group, and is taken back", async () =
     onChange: (processes) => {
       adoptedAnnounce = processes;
     },
+    routePublisher: unroutedPublisher,
   });
   await reopened.adopt(supervisor.list());
   expect(reopened.list()[0]?.status).toBe("running");
@@ -198,6 +273,7 @@ it("starts a real command, stops its whole group, and is taken back", async () =
   const stale = new CommandSupervisor({
     logDirectory: logs,
     onChange: () => {},
+    routePublisher: unroutedPublisher,
   });
   await stale.adopt([
     {
@@ -231,11 +307,11 @@ it("publishes the real web listener when a monorepo sidecar claims PORT", async 
   const offeredPort = actualPort + 1_000;
   extraPorts.push(actualPort, offeredPort);
   const routeName = `silvic-solid-${process.pid}-${actualPort}`;
-  namedRoutes.push(routeName);
   const supervisor = new CommandSupervisor({
     logDirectory: logs,
     onChange: () => undefined,
     routeHealthIntervalMs: 60_000,
+    routePublisher: new GateRoutePublisher({ link, probe: probeViaGate }),
   });
 
   await supervisor.start({
@@ -277,37 +353,28 @@ it("publishes the real web listener when a monorepo sidecar claims PORT", async 
     url: `https://${routeName}.localhost`,
   });
 
-  const served = await execFileAsync("curl", [
-    "-ksS",
-    `https://${routeName}.localhost/`,
-  ]);
+  const served = await curlNamed(routeName);
   expect(served.stdout.trim()).toBe("<h1>Silvic route is live</h1>");
 
   // Reproduce an older Silvic persisting the responding but wrong sidecar as
   // the route target. Both direct and named probes say `OK`, so checking only
-  // that the persisted alias is reachable cannot discover the mistake.
-  execFileSync(
-    "portless",
-    ["alias", routeName, String(offeredPort), "--force"],
-    { stdio: "ignore", env: directPortlessEnvironment() },
-  );
+  // that the persisted route is reachable cannot discover the mistake.
+  await client.routeSet({
+    name: routeName,
+    host: "127.0.0.1",
+    port: offeredPort,
+  });
   for (let attempt = 0; attempt < 20; attempt += 1) {
-    const body = (
-      await execFileAsync("curl", ["-ksS", `https://${routeName}.localhost/`])
-    ).stdout.trim();
-    if (body === "OK") break;
+    if ((await curlNamed(routeName)).stdout.trim() === "OK") break;
     await settle(50);
   }
-  expect(
-    (
-      await execFileAsync("curl", ["-ksS", `https://${routeName}.localhost/`])
-    ).stdout.trim(),
-  ).toBe("OK");
+  expect((await curlNamed(routeName)).stdout.trim()).toBe("OK");
 
   const reopened = new CommandSupervisor({
     logDirectory: logs,
     onChange: () => undefined,
     routeHealthIntervalMs: 500,
+    routePublisher: new GateRoutePublisher({ link, probe: probeViaGate }),
   });
   await reopened.adopt([
     {
@@ -323,11 +390,9 @@ it("publishes the real web listener when a monorepo sidecar claims PORT", async 
     status: "running",
     targetPort: actualPort,
   });
-  expect(
-    (
-      await execFileAsync("curl", ["-ksS", `https://${routeName}.localhost/`])
-    ).stdout.trim(),
-  ).toBe("<h1>Silvic route is live</h1>");
+  expect((await curlNamed(routeName)).stdout.trim()).toBe(
+    "<h1>Silvic route is live</h1>",
+  );
 
   reopened.stop(plot, "web");
   for (let attempt = 0; attempt < 50; attempt += 1) {
@@ -335,10 +400,11 @@ it("publishes the real web listener when a monorepo sidecar claims PORT", async 
     await settle(100);
   }
   expect(supervisor.list()).toEqual([]);
-  expect(
-    execFileSync("portless", ["list"], {
-      encoding: "utf8",
-      env: directPortlessEnvironment(),
-    }),
-  ).not.toContain(routeName);
+  // Stopping suspends the route: its identity survives so the URL can wake
+  // the plot later, but no upstream is registered any more.
+  const status = await client.status();
+  const suspended = status?.routes.find((route) => route.name === routeName);
+  expect(suspended).toBeDefined();
+  expect(suspended?.port).toBeUndefined();
+  await client.routeRemove(routeName);
 }, 60_000);

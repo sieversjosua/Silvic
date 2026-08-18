@@ -1,12 +1,6 @@
 import { execFile } from "node:child_process";
-import {
-  createServer as createHttpServer,
-  request as httpRequest,
-  type IncomingHttpHeaders,
-  type Server as HttpServer,
-} from "node:http";
+import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
-import { connect as connectTcp, type Socket } from "node:net";
 
 import { resolvedCommandPath } from "./command-runner";
 
@@ -33,6 +27,9 @@ export interface PublishNamedRouteRequest {
   /** Recent command output helps distinguish the app from monorepo sidecars. */
   output(): string;
   timeoutMs?: number;
+  /** Who owns the route, so the gate can wake it from a URL visit. */
+  plotPath?: string;
+  commandId?: string;
 }
 
 export interface PublishedNamedRoute {
@@ -51,24 +48,26 @@ interface ListenerSelection {
   response: RouteProbe;
 }
 
-interface LoopbackBridge {
-  hostname: "127.0.0.1" | "::1";
-  targetPort: number;
-  port: number;
-  close(): Promise<void>;
+/**
+ * The gate's control socket, as the publisher needs it. `set` points a named
+ * host at a live upstream; `suspend` drops the upstream while keeping the
+ * route's identity so a later visit to the URL can wake the plot.
+ */
+export interface GateRouteLink {
+  set(route: {
+    name: string;
+    host: "127.0.0.1" | "::1";
+    port: number;
+    plotPath?: string;
+    commandId?: string;
+  }): Promise<void>;
+  suspend(name: string): Promise<void>;
 }
 
 interface RoutePublisherOptions {
-  execute?(
-    executable: string,
-    arguments_: readonly string[],
-  ): Promise<CommandResult>;
+  link: GateRouteLink;
   inspect?(rootProcessId: number): Promise<readonly ProcessListener[]>;
   probe?(url: string): Promise<RouteProbe | undefined>;
-  bridge?(
-    routeName: string,
-    selected: ListenerSelection,
-  ): Promise<LoopbackBridge>;
   wait?(milliseconds: number): Promise<void>;
   now?(): number;
 }
@@ -80,25 +79,24 @@ const pause = (milliseconds: number) =>
  * Publishes the listener that actually came out of a supervised command.
  *
  * A monorepo's root `dev` script often ignores PORT and starts several
- * services. Wrapping that script in portless therefore registers a healthy
- * wrapper against an empty port. Silvic instead owns the two lifecycles
- * separately: it supervises the command tree, finds its responding HTTP
- * listener, and points a Portless alias at that concrete port.
+ * services. Publishing that script's port blindly would register a healthy
+ * name against an empty or wrong listener. Silvic instead owns the two
+ * lifecycles separately: it supervises the command tree, finds its responding
+ * HTTP listener, and tells the gate daemon which concrete port serves it.
  */
-export class PortlessRoutePublisher implements NamedRoutePublisher {
-  private readonly execute: NonNullable<RoutePublisherOptions["execute"]>;
+export class GateRoutePublisher implements NamedRoutePublisher {
+  private readonly link: GateRouteLink;
   private readonly inspect: NonNullable<RoutePublisherOptions["inspect"]>;
   private readonly probe: NonNullable<RoutePublisherOptions["probe"]>;
-  private readonly bridge: NonNullable<RoutePublisherOptions["bridge"]>;
   private readonly wait: NonNullable<RoutePublisherOptions["wait"]>;
   private readonly now: NonNullable<RoutePublisherOptions["now"]>;
-  private readonly bridges = new Map<string, LoopbackBridge>();
+  /** Which loopback family each route's upstream answered on. */
+  private readonly families = new Map<string, "127.0.0.1" | "::1">();
 
-  constructor(options: RoutePublisherOptions = {}) {
-    this.execute = options.execute ?? executeCommand;
+  constructor(options: RoutePublisherOptions) {
+    this.link = options.link;
     this.inspect = options.inspect ?? inspectProcessListeners;
     this.probe = options.probe ?? probeUrl;
-    this.bridge = options.bridge ?? createPreviewBridge;
     this.wait = options.wait ?? pause;
     this.now = options.now ?? Date.now;
   }
@@ -106,7 +104,11 @@ export class PortlessRoutePublisher implements NamedRoutePublisher {
   async publish(
     request: PublishNamedRouteRequest,
   ): Promise<PublishedNamedRoute> {
-    const deadline = this.now() + (request.timeoutMs ?? 45_000);
+    // Generous by design: a first-ever dev server on a fresh machine spends
+    // a long time compiling before it serves HTML, and the named URL shows
+    // the gate's holding page in the meantime. Killing the process early
+    // made slow starts look like brokenness.
+    const deadline = this.now() + (request.timeoutMs ?? 120_000);
     let latest =
       "No browser-facing HTML listener appeared in the runtime output or process tree.";
 
@@ -119,65 +121,35 @@ export class PortlessRoutePublisher implements NamedRoutePublisher {
         probe: this.probe,
       });
       if (selected) {
-        const targetPort = await this.targetPort(request.routeName, selected);
-        const result = await this.execute("portless", [
-          "alias",
-          request.routeName,
-          String(targetPort),
-          "--force",
-        ]);
-        if (result.exitCode !== 0) {
-          await this.closeBridge(request.routeName);
-          throw new Error(
-            cleanFailure(result) ||
-              "Portless could not publish the preview route.",
-          );
-        }
+        const targetPort = selected.listener.port;
+        await this.link.set({
+          name: request.routeName,
+          host: selected.hostname,
+          port: targetPort,
+          ...(request.plotPath ? { plotPath: request.plotPath } : {}),
+          ...(request.commandId ? { commandId: request.commandId } : {}),
+        });
+        this.families.set(request.routeName, selected.hostname);
 
         while (this.now() < deadline) {
           if (
             await this.healthy({
               routeName: request.routeName,
-              port: selected.listener.port,
+              port: targetPort,
             })
           ) {
-            return { port: selected.listener.port };
+            return { port: targetPort };
           }
-          latest = `Portless registered ${request.routeName}.localhost, but it did not reach localhost:${targetPort}.`;
+          latest = `The Silvic gate registered ${request.routeName}.localhost, but it did not reach localhost:${targetPort}.`;
           await this.wait(Math.min(150, Math.max(0, deadline - this.now())));
         }
       }
 
       if (this.now() >= deadline) {
-        await this.closeBridge(request.routeName);
         throw new Error(latest);
       }
       await this.wait(Math.min(250, Math.max(0, deadline - this.now())));
     }
-  }
-
-  private async targetPort(
-    routeName: string,
-    selected: ListenerSelection,
-  ): Promise<number> {
-    const existing = this.bridges.get(routeName);
-    if (
-      existing?.hostname === selected.hostname &&
-      existing.targetPort === selected.listener.port
-    ) {
-      return existing.port;
-    }
-    await this.closeBridge(routeName);
-    const bridge = await this.bridge(routeName, selected);
-    this.bridges.set(routeName, bridge);
-    return bridge.port;
-  }
-
-  private async closeBridge(routeName: string): Promise<void> {
-    const bridge = this.bridges.get(routeName);
-    if (!bridge) return;
-    this.bridges.delete(routeName);
-    await bridge.close();
   }
 
   async healthy({
@@ -187,31 +159,30 @@ export class PortlessRoutePublisher implements NamedRoutePublisher {
     routeName: string;
     port: number;
   }): Promise<boolean> {
-    const directPort = this.bridges.get(routeName)?.port ?? port;
+    const family = this.families.get(routeName) ?? "127.0.0.1";
+    const directHost = family === "::1" ? "[::1]" : family;
     const [direct, named] = await Promise.all([
-      this.probe(`http://127.0.0.1:${directPort}/`),
+      this.probe(`http://${directHost}:${port}/`),
       this.probe(`https://${routeName}.localhost/`),
     ]);
     if (!direct || !named) return false;
     if (!browserFacing(direct) || !browserFacing(named)) return false;
-    // Portless preserves the upstream content type. A different type means the
-    // alias reached another listener even when both listeners answered 200 —
+    // The gate preserves the upstream content type. A different type means
+    // the name reached another listener even when both answered 200 —
     // commonly a monorepo health sidecar whose entire response is `OK`.
     if (mediaType(direct.contentType) !== mediaType(named.contentType)) {
       return false;
     }
-    // Portless preserves the upstream status. Exact agreement lets a real
-    // browser error overlay through while rejecting Portless's own 404/502.
+    // The gate preserves the upstream status. Exact agreement lets a real
+    // browser error overlay through while rejecting the gate's own 404/503.
     if (direct.status !== named.status) return false;
     return true;
   }
 
+  /** Stopping suspends rather than deletes: the URL keeps waking the plot. */
   async remove(routeName: string): Promise<void> {
-    try {
-      await this.execute("portless", ["alias", "--remove", routeName]);
-    } finally {
-      await this.closeBridge(routeName);
-    }
+    this.families.delete(routeName);
+    await this.link.suspend(routeName);
   }
 }
 
@@ -236,9 +207,9 @@ async function selectListener({
       .filter((port) => port > 0 && port <= 65_535),
   );
   // A dev server may report that another instance already owns its port and
-  // then exit. That existing server is no longer a descendant of the newly
-  // supervised command, but its explicit localhost URL is still the strongest
-  // available signal that it is the browser app this command intended to run.
+  // then exit. Keep explicit localhost URLs as fallback candidates, but mark
+  // them as synthetic: a browser listener that actually belongs to the newly
+  // supervised process tree is stronger evidence than retained console text.
   const listenersByPort = new Map(
     listeners.map((listener) => [listener.port, listener]),
   );
@@ -286,6 +257,7 @@ async function selectListener({
           (candidate.response.contentType?.toLowerCase().includes("text/html")
             ? 10_000
             : 0) +
+          (candidate.listener.processId !== 0 ? 2_000 : 0) +
           (announced.has(candidate.listener.port) ? 1_000 : 0) +
           (candidate.listener.port === expectedPort ? 100 : 0) +
           (candidate.response.status >= 200 && candidate.response.status < 400
@@ -308,141 +280,6 @@ function browserFacing(response: RouteProbe): boolean {
     type === "application/xhtml+xml" ||
     (response.status >= 300 && response.status < 400)
   );
-}
-
-function createPreviewBridge(
-  routeName: string,
-  selected: ListenerSelection,
-): Promise<LoopbackBridge> {
-  const hostname = selected.hostname;
-  const targetPort = selected.listener.port;
-  const publicHost = `${routeName}.localhost`;
-  return new Promise((resolve, reject) => {
-    const sockets = new Set<Socket>();
-    const server = createHttpServer((request, response) => {
-      const upstream = httpRequest(
-        {
-          host: hostname,
-          port: targetPort,
-          method: request.method,
-          path: request.url,
-          headers: previewHeaders(request.headers, publicHost),
-        },
-        (upstreamResponse) => {
-          response.writeHead(
-            upstreamResponse.statusCode ?? 502,
-            upstreamResponse.statusMessage,
-            rewriteLocation(upstreamResponse.headers, publicHost, targetPort),
-          );
-          upstreamResponse.pipe(response);
-        },
-      );
-      upstream.on("socket", (socket) => trackSocket(sockets, socket));
-      upstream.once("error", () => {
-        if (!response.headersSent) {
-          response.writeHead(502, { "content-type": "text/plain" });
-        }
-        response.end("Preview server unavailable");
-      });
-      request.once("aborted", () => upstream.destroy());
-      request.pipe(upstream);
-    });
-    server.on("connection", (socket) => trackSocket(sockets, socket));
-    server.on("upgrade", (request, client, head) => {
-      const upstream = connectTcp({ host: hostname, port: targetPort });
-      trackSocket(sockets, upstream);
-      client.once("error", () => upstream.destroy());
-      upstream.once("error", () => client.destroy());
-      upstream.once("connect", () => {
-        const headers = previewHeaders(request.headers, publicHost);
-        const lines = Object.entries(headers).flatMap(([name, value]) =>
-          Array.isArray(value)
-            ? value.map((entry) => `${name}: ${entry}`)
-            : value === undefined
-              ? []
-              : [`${name}: ${value}`],
-        );
-        upstream.write(
-          `${request.method ?? "GET"} ${request.url ?? "/"} HTTP/${request.httpVersion}\r\n${lines.join("\r\n")}\r\n\r\n`,
-        );
-        if (head.length > 0) upstream.write(head);
-        client.pipe(upstream).pipe(client);
-      });
-    });
-    const failed = (error: Error) => {
-      server.close();
-      reject(error);
-    };
-    server.once("error", failed);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", failed);
-      // A bridge failure makes the route health check fail and triggers normal
-      // rediscovery. It must not crash the Electron main process.
-      server.on("error", () => undefined);
-      server.unref();
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        server.close();
-        reject(new Error("Silvic could not allocate an IPv4 preview bridge."));
-        return;
-      }
-      resolve({
-        hostname,
-        targetPort,
-        port: address.port,
-        close: () => closePreviewBridge(server, sockets),
-      });
-    });
-  });
-}
-
-function previewHeaders(
-  headers: IncomingHttpHeaders,
-  publicHost: string,
-): IncomingHttpHeaders {
-  return {
-    ...headers,
-    host: publicHost,
-    "x-forwarded-host": publicHost,
-    "x-forwarded-port": "443",
-    "x-forwarded-proto": "https",
-  };
-}
-
-function rewriteLocation(
-  headers: IncomingHttpHeaders,
-  publicHost: string,
-  targetPort: number,
-): IncomingHttpHeaders {
-  const location = headers.location;
-  if (!location) return headers;
-  try {
-    const target = new URL(location);
-    if (
-      (target.hostname === "127.0.0.1" || target.hostname === "[::1]") &&
-      Number(target.port) === targetPort
-    ) {
-      target.protocol = "https:";
-      target.host = publicHost;
-      return { ...headers, location: target.toString() };
-    }
-  } catch {
-    // Relative and malformed locations pass through untouched.
-  }
-  return headers;
-}
-
-function trackSocket(sockets: Set<Socket>, socket: Socket): void {
-  sockets.add(socket);
-  socket.once("close", () => sockets.delete(socket));
-}
-
-function closePreviewBridge(
-  server: HttpServer,
-  sockets: ReadonlySet<Socket>,
-): Promise<void> {
-  for (const socket of sockets) socket.destroy();
-  return new Promise((resolve) => server.close(() => resolve()));
 }
 
 function mediaType(contentType: string | undefined): string {
@@ -548,17 +385,6 @@ function executeCommand(
   arguments_: readonly string[],
 ): Promise<CommandResult> {
   return new Promise((resolve) => {
-    const environment: NodeJS.ProcessEnv = {
-      ...process.env,
-      PATH: resolvedCommandPath(),
-    };
-    if (executable === "portless") {
-      // Silvic invokes the resolved CLI directly. Inheriting these markers
-      // from a pnpm-started parent makes Portless mistake that direct call for
-      // `pnpm dlx` / `npx` and refuse even a globally installed binary.
-      delete environment.npm_command;
-      delete environment.PNPM_SCRIPT_SRC_DIR;
-    }
     execFile(
       executable,
       [...arguments_],
@@ -566,7 +392,7 @@ function executeCommand(
         encoding: "utf8",
         timeout: 4_000,
         maxBuffer: 1_000_000,
-        env: environment,
+        env: { ...process.env, PATH: resolvedCommandPath() },
       },
       (error, stdout, stderr) => {
         const exitCode =
@@ -579,13 +405,4 @@ function executeCommand(
       },
     );
   });
-}
-
-function cleanFailure(result: CommandResult): string {
-  const lines = `${result.stderr}\n${result.stdout}`
-    .trim()
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-  return lines.find((line) => /^error\b/i.test(line)) ?? lines.at(-1) ?? "";
 }

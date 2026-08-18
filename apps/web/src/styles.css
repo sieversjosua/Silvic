@@ -3509,6 +3509,22 @@ button.app-update[aria-disabled="true"] {
   flex: 0 0 auto;
 }
 
+.plot-advice {
+  margin-top: 8px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--ink-muted);
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.plot-advice[data-tone="attention"] {
+  color: var(--tone-attention);
+}
+
 .step-output summary {
   margin-top: 9px;
   color: var(--ink-faint);

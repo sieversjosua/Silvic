@@ -1,0 +1,338 @@
+import { X509Certificate } from "node:crypto";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  createServer as createHttpServer,
+  request as httpRequest,
+  type IncomingHttpHeaders,
+  type Server as HttpServer,
+} from "node:http";
+import { request as httpsRequest } from "node:https";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+
+import { CertificateAuthority } from "./certificates";
+import { GateClient } from "./client";
+import { parseControlRequest } from "./control-protocol";
+import { startGate, type Gate } from "./daemon";
+import { RouteStore } from "./route-store";
+import { adminSetupScript, launchAgentPlist, pfAnchorRules } from "./setup";
+import { controlSocketPath } from "./state-dir";
+
+const temporary = () => mkdtempSync(join(tmpdir(), "silvic-gate-test-"));
+
+describe("RouteStore", () => {
+  it("persists routes across instances and tolerates garbage", () => {
+    const directory = temporary();
+    try {
+      const store = new RouteStore(directory);
+      store.set({ name: "web-checkout-shop", host: "127.0.0.1", port: 4321 });
+      store.set({ name: "web-other-shop", port: 5000, plotPath: "/tmp/x" });
+      store.clearUpstream("web-other-shop");
+      store.remove("never-there");
+
+      const reloaded = new RouteStore(directory);
+      expect(reloaded.find("web-checkout-shop")?.port).toBe(4321);
+      const suspended = reloaded.find("web-other-shop");
+      expect(suspended?.port).toBeUndefined();
+      expect(suspended?.plotPath).toBe("/tmp/x");
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("drops entries that are not routes", () => {
+    const directory = temporary();
+    try {
+      const store = new RouteStore(directory);
+      store.set({ name: "good-route", port: 3000 });
+      const file = join(directory, "routes.json");
+      const routes: unknown[] = JSON.parse(readFileSync(file, "utf8"));
+      routes.push({ name: "UPPER CASE", port: "nope" });
+      writeFileSync(file, JSON.stringify(routes));
+      expect(
+        new RouteStore(directory).list().map((route) => route.name),
+      ).toEqual(["good-route"]);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("control protocol", () => {
+  it("accepts well-formed requests and rejects the rest", () => {
+    expect(
+      parseControlRequest(
+        JSON.stringify({
+          id: 1,
+          type: "route-set",
+          name: "web-a-b",
+          host: "127.0.0.1",
+          port: 4321,
+        }),
+      ),
+    ).toMatchObject({ type: "route-set", port: 4321 });
+    expect(
+      parseControlRequest(
+        JSON.stringify({ id: 2, type: "route-set", name: "Bad Name", port: 1 }),
+      ),
+    ).toBeUndefined();
+    expect(parseControlRequest("not json")).toBeUndefined();
+    expect(
+      parseControlRequest(
+        JSON.stringify({ id: 3, type: "route-remove", name: "a" }),
+      ),
+    ).toMatchObject({ type: "route-remove" });
+  });
+});
+
+describe("setup artefacts", () => {
+  it("redirects only loopback 443 and 80", () => {
+    const rules = pfAnchorRules();
+    expect(rules).toContain("on lo0");
+    expect(rules).not.toContain("en0");
+    expect(rules).toContain("port 443 -> 127.0.0.1");
+  });
+
+  it("runs the gate as plain Node from the app binary", () => {
+    const contents = launchAgentPlist({
+      nodeExecutable: "/Applications/Silvic.app/Contents/MacOS/Silvic",
+      gateScript: "/Applications/Silvic.app/…/gate.js",
+      stateDirectory: "/tmp/state",
+    });
+    expect(contents).toContain("ELECTRON_RUN_AS_NODE");
+    expect(contents).toContain("<key>KeepAlive</key>");
+  });
+
+  it("trusts the CA inside the single admin script", () => {
+    const script = adminSetupScript("/tmp/ca.pem");
+    expect(script).toContain("add-trusted-cert");
+    expect(script).toContain("pfctl");
+    expect(script).toContain("launchctl bootstrap system");
+  });
+});
+
+describe("CertificateAuthority", () => {
+  it("issues a leaf for a host, signed by its root, with the right SAN", async () => {
+    const directory = temporary();
+    try {
+      const authority = new CertificateAuthority(directory);
+      const issued = await authority.certificateFor("web-a-b.localhost");
+      const leaf = new X509Certificate(issued.cert);
+      expect(leaf.subjectAltName).toContain("web-a-b.localhost");
+      const root = new X509Certificate(
+        readFileSync(authority.rootCertificatePath),
+      );
+      expect(leaf.verify(root.publicKey)).toBe(true);
+      // Cached and re-read instances agree.
+      const again = await new CertificateAuthority(directory).certificateFor(
+        "web-a-b.localhost",
+      );
+      expect(new X509Certificate(again.cert).fingerprint256).toBe(
+        leaf.fingerprint256,
+      );
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }, 30_000);
+});
+
+describe("gate daemon", () => {
+  let directory: string;
+  let gate: Gate;
+  let upstream: HttpServer;
+  let upstreamPort: number;
+  let seenByUpstream: IncomingHttpHeaders | undefined;
+  let rootCertificate: string;
+  const launchApp = vi.fn();
+
+  beforeAll(async () => {
+    directory = temporary();
+    upstream = createHttpServer((request, response) => {
+      seenByUpstream = request.headers;
+      if (request.url === "/redirect") {
+        response.writeHead(302, {
+          location: `http://127.0.0.1:${upstreamPort}/after`,
+        });
+        response.end();
+        return;
+      }
+      response.writeHead(200, { "content-type": "text/html" });
+      response.end("<h1>plot</h1>");
+    });
+    await new Promise<void>((resolve) =>
+      upstream.listen(0, "127.0.0.1", resolve),
+    );
+    const address = upstream.address();
+    if (!address || typeof address === "string") throw new Error("no port");
+    upstreamPort = address.port;
+
+    gate = await startGate({
+      stateDirectory: directory,
+      httpsPort: 0,
+      httpPort: 0,
+      version: "test",
+      launchApp,
+    });
+    rootCertificate = readFileSync(join(directory, "ca", "ca.pem"), "utf8");
+  }, 60_000);
+
+  afterAll(async () => {
+    await gate.close();
+    await new Promise<void>((resolve) => upstream.close(() => resolve()));
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  const get = (host: string, path = "/", port = gate.httpsPort) =>
+    new Promise<{ status: number; headers: IncomingHttpHeaders; body: string }>(
+      (resolve, reject) => {
+        const request = httpsRequest(
+          {
+            host: "127.0.0.1",
+            port,
+            path,
+            servername: host,
+            headers: { host },
+            ca: rootCertificate,
+          },
+          (response) => {
+            let body = "";
+            response.setEncoding("utf8");
+            response.on("data", (chunk: string) => (body += chunk));
+            response.on("end", () =>
+              resolve({
+                status: response.statusCode ?? 0,
+                headers: response.headers,
+                body,
+              }),
+            );
+          },
+        );
+        request.once("error", reject);
+        request.end();
+      },
+    );
+
+  it("proxies a registered route with forwarding headers", async () => {
+    const client = new GateClient({
+      socketPath: controlSocketPath(directory),
+    });
+    await client.routeSet({
+      name: "web-live-shop",
+      host: "127.0.0.1",
+      port: upstreamPort,
+      plotPath: "/tmp/plot",
+      commandId: "web",
+    });
+    const reply = await get("web-live-shop.localhost");
+    expect(reply.status).toBe(200);
+    expect(reply.body).toContain("plot");
+    expect(seenByUpstream?.["x-forwarded-proto"]).toBe("https");
+    expect(seenByUpstream?.["x-forwarded-host"]).toBe(
+      "web-live-shop.localhost",
+    );
+    expect(seenByUpstream?.host).toBe("web-live-shop.localhost");
+    client.close();
+  }, 30_000);
+
+  it("rewrites upstream Location headers to the public origin", async () => {
+    const reply = await get("web-live-shop.localhost", "/redirect");
+    expect(reply.status).toBe(302);
+    expect(reply.headers.location).toBe(
+      "https://web-live-shop.localhost/after",
+    );
+  });
+
+  it("answers its own host with gate health", async () => {
+    const reply = await get("silvic-gate.localhost");
+    expect(reply.status).toBe(200);
+    expect(JSON.parse(reply.body)).toMatchObject({ gate: "silvic" });
+  });
+
+  it("wakes a connected app instead of launching one", async () => {
+    const woken = vi.fn();
+    const listener = new GateClient({
+      socketPath: controlSocketPath(directory),
+      onWake: woken,
+    });
+    await listener.routeSet({
+      name: "web-sleepy-shop",
+      host: "127.0.0.1",
+      port: 1,
+      plotPath: "/tmp/sleepy",
+      commandId: "web",
+    });
+    const reply = await get("web-sleepy-shop.localhost");
+    expect(reply.status).toBe(503);
+    expect(reply.body).toContain("Waking");
+    await vi.waitFor(() =>
+      expect(woken).toHaveBeenCalledWith(
+        expect.objectContaining({ route: "web-sleepy-shop" }),
+      ),
+    );
+    expect(launchApp).not.toHaveBeenCalled();
+    listener.close();
+  }, 30_000);
+
+  it("launches the app when nothing is connected", async () => {
+    const client = new GateClient({
+      socketPath: controlSocketPath(directory),
+    });
+    await client.routeSet({
+      name: "web-alone-shop",
+      host: "127.0.0.1",
+      port: 1,
+    });
+    client.close();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const reply = await get("web-alone-shop.localhost");
+    expect(reply.status).toBe(503);
+    await vi.waitFor(() =>
+      expect(launchApp).toHaveBeenCalledWith("web-alone-shop"),
+    );
+  }, 30_000);
+
+  it("reports upstream readiness for the holding page", async () => {
+    const ready = await get(
+      "web-live-shop.localhost",
+      "/__silvic/route-status",
+    );
+    expect(JSON.parse(ready.body)).toEqual({ ready: true });
+    const asleep = await get(
+      "web-sleepy-shop.localhost",
+      "/__silvic/route-status",
+    );
+    expect(JSON.parse(asleep.body)).toEqual({ ready: false });
+  });
+
+  it("redirects plain http to the named https origin", async () => {
+    const reply = await new Promise<{ status: number; location?: string }>(
+      (resolve, reject) => {
+        const request = httpRequest(
+          {
+            host: "127.0.0.1",
+            port: gate.httpPort,
+            path: "/somewhere?x=1",
+            headers: { host: "web-live-shop.localhost" },
+          },
+          (response) => {
+            response.resume();
+            resolve({
+              status: response.statusCode ?? 0,
+              ...(response.headers.location
+                ? { location: response.headers.location }
+                : {}),
+            });
+          },
+        );
+        request.once("error", reject);
+        request.end();
+      },
+    );
+    expect(reply.status).toBe(308);
+    expect(reply.location).toBe(
+      "https://web-live-shop.localhost/somewhere?x=1",
+    );
+  });
+});

@@ -1,0 +1,295 @@
+import { execFile } from "node:child_process";
+import { chmod, mkdir, writeFile } from "node:fs/promises";
+import { homedir, userInfo } from "node:os";
+import { join } from "node:path";
+import { promisify } from "node:util";
+
+import {
+  GATE_HOST,
+  GATE_HTTP_PORT,
+  GATE_HTTPS_PORT,
+  LAUNCH_AGENT_LABEL,
+  PF_ANCHOR,
+  PF_ANCHOR_FILE,
+  PF_DAEMON_LABEL,
+} from "./constants";
+import { gateStateDirectory } from "./state-dir";
+
+const run = promisify(execFile);
+
+/** Only loopback traffic is touched; nothing routed to the network changes. */
+export function pfAnchorRules(): string {
+  return [
+    `rdr pass on lo0 inet proto tcp from any to any port 443 -> 127.0.0.1 port ${GATE_HTTPS_PORT}`,
+    `rdr pass on lo0 inet6 proto tcp from any to any port 443 -> ::1 port ${GATE_HTTPS_PORT}`,
+    `rdr pass on lo0 inet proto tcp from any to any port 80 -> 127.0.0.1 port ${GATE_HTTP_PORT}`,
+    `rdr pass on lo0 inet6 proto tcp from any to any port 80 -> ::1 port ${GATE_HTTP_PORT}`,
+    "",
+  ].join("\n");
+}
+
+/** Reloads the anchor at boot; pf itself holds the rules after that. */
+export function pfDaemonPlist(): string {
+  return plist(PF_DAEMON_LABEL, {
+    programArguments: [
+      "/bin/sh",
+      "-c",
+      `/sbin/pfctl -a '${PF_ANCHOR}' -f '${PF_ANCHOR_FILE}' && /sbin/pfctl -E`,
+    ],
+    runAtLoad: true,
+    keepAlive: false,
+  });
+}
+
+/**
+ * The daemon is the installed Silvic app running as plain Node. The path is
+ * stable across updates, so launchd is configured exactly once; KeepAlive
+ * restarts the gate whenever an update replaces the script under it.
+ */
+export function launchAgentPlist({
+  nodeExecutable,
+  gateScript,
+  stateDirectory,
+}: {
+  nodeExecutable: string;
+  gateScript: string;
+  stateDirectory: string;
+}): string {
+  return plist(LAUNCH_AGENT_LABEL, {
+    programArguments: [nodeExecutable, gateScript],
+    environment: { ELECTRON_RUN_AS_NODE: "1" },
+    runAtLoad: true,
+    keepAlive: true,
+    standardOutPath: join(stateDirectory, "gate.log"),
+    standardErrorPath: join(stateDirectory, "gate.log"),
+  });
+}
+
+/**
+ * Everything that needs root, in one reviewable script run behind macOS's
+ * native administrator prompt: the pf redirect, its boot loader, and trust
+ * for the gate's CA. Silvic never sees the password.
+ */
+export function adminSetupScript(caCertificatePath: string): string {
+  return [
+    "#!/bin/sh",
+    "set -eu",
+    "mkdir -p /etc/pf.anchors",
+    `cat > '${PF_ANCHOR_FILE}' <<'RULES'`,
+    pfAnchorRules().trimEnd(),
+    "RULES",
+    `chmod 644 '${PF_ANCHOR_FILE}'`,
+    `cat > '/Library/LaunchDaemons/${PF_DAEMON_LABEL}.plist' <<'PLIST'`,
+    pfDaemonPlist().trimEnd(),
+    "PLIST",
+    `chown root:wheel '/Library/LaunchDaemons/${PF_DAEMON_LABEL}.plist'`,
+    `chmod 644 '/Library/LaunchDaemons/${PF_DAEMON_LABEL}.plist'`,
+    `launchctl bootout 'system/${PF_DAEMON_LABEL}' 2>/dev/null || true`,
+    `launchctl bootstrap system '/Library/LaunchDaemons/${PF_DAEMON_LABEL}.plist'`,
+    `/sbin/pfctl -a '${PF_ANCHOR}' -f '${PF_ANCHOR_FILE}'`,
+    "/sbin/pfctl -E 2>/dev/null || true",
+    `security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain '${caCertificatePath}'`,
+    "",
+  ].join("\n");
+}
+
+export interface GateSetupContext {
+  /** The Electron binary that runs gate.js as Node. */
+  nodeExecutable: string;
+  /** Absolute path to the bundled, asar-unpacked gate script. */
+  gateScript: string;
+  execute?(
+    executable: string,
+    arguments_: readonly string[],
+  ): Promise<{ stdout: string; stderr: string }>;
+}
+
+/** The unprivileged half: put the LaunchAgent in place and (re)start it. */
+export async function installLaunchAgent(
+  context: GateSetupContext,
+): Promise<void> {
+  const execute = context.execute ?? runQuietly;
+  const stateDirectory = gateStateDirectory();
+  const agents = join(homedir(), "Library", "LaunchAgents");
+  await mkdir(agents, { recursive: true });
+  const plistPath = join(agents, `${LAUNCH_AGENT_LABEL}.plist`);
+  await writeFile(
+    plistPath,
+    launchAgentPlist({
+      nodeExecutable: context.nodeExecutable,
+      gateScript: context.gateScript,
+      stateDirectory,
+    }),
+  );
+  const domain = `gui/${userInfo().uid}`;
+  await execute("launchctl", ["bootout", `${domain}/${LAUNCH_AGENT_LABEL}`]);
+  await execute("launchctl", ["bootstrap", domain, plistPath]);
+  await execute("launchctl", [
+    "kickstart",
+    "-k",
+    `${domain}/${LAUNCH_AGENT_LABEL}`,
+  ]);
+}
+
+/**
+ * The privileged half, behind the native administrator dialog. The script is
+ * staged in the gate's own state directory rather than a world-writable tmp.
+ */
+export async function installPrivileged(
+  context: Pick<GateSetupContext, "execute"> = {},
+): Promise<void> {
+  const execute = context.execute ?? run;
+  const stateDirectory = gateStateDirectory();
+  const caCertificate = join(stateDirectory, "ca", "ca.pem");
+  const script = join(stateDirectory, "setup-admin.sh");
+  await writeFile(script, adminSetupScript(caCertificate));
+  await chmod(script, 0o755);
+  await execute("osascript", [
+    "-e",
+    `do shell script "/bin/sh ${script.replaceAll('"', '\\"')}" with administrator privileges`,
+  ]);
+}
+
+export type GateCheck = "control-socket" | "proxy-443" | "certificate-trusted";
+
+export interface GateDiagnosis {
+  healthy: boolean;
+  failures: readonly { check: GateCheck; advice: string }[];
+}
+
+/**
+ * Every prerequisite, verified rather than assumed — including certificate
+ * trust, which the portless era famously skipped.
+ */
+export async function diagnoseGate({
+  socketStatus,
+  execute,
+  probe,
+}: {
+  /** Whether the control socket answers a status request. */
+  socketStatus(): Promise<boolean>;
+  execute?(
+    executable: string,
+    arguments_: readonly string[],
+  ): Promise<{ stdout: string; stderr: string }>;
+  /** GETs a URL, verifying TLS against the gate CA; resolves ok=false offline. */
+  probe(url: string): Promise<boolean>;
+}): Promise<GateDiagnosis> {
+  const attempt = execute ?? runQuietlyFailing;
+  const failures: { check: GateCheck; advice: string }[] = [];
+
+  if (!(await socketStatus())) {
+    failures.push({
+      check: "control-socket",
+      advice:
+        "The Silvic gate is not running. Set up local HTTPS from the plot dialog, or reinstall the gate service.",
+    });
+  }
+  if (!(await probe(`https://${GATE_HOST}/`))) {
+    failures.push({
+      check: "proxy-443",
+      advice:
+        "Port 443 does not reach the Silvic gate. The one-time HTTPS setup installs a loopback firewall redirect; run it again if another proxy took the port.",
+    });
+  }
+  const leaf = join(gateStateDirectory(), "certs", `${GATE_HOST}.pem`);
+  try {
+    await attempt("security", ["verify-cert", "-c", leaf]);
+  } catch {
+    failures.push({
+      check: "certificate-trusted",
+      advice:
+        "The gate's HTTPS certificate is not trusted yet, so browsers and logins will refuse the preview. Run the one-time HTTPS setup to trust it.",
+    });
+  }
+  return { healthy: failures.length === 0, failures };
+}
+
+async function runQuietly(
+  executable: string,
+  arguments_: readonly string[],
+): Promise<{ stdout: string; stderr: string }> {
+  try {
+    return await run(executable, [...arguments_], { timeout: 10_000 });
+  } catch {
+    return { stdout: "", stderr: "" };
+  }
+}
+
+async function runQuietlyFailing(
+  executable: string,
+  arguments_: readonly string[],
+): Promise<{ stdout: string; stderr: string }> {
+  return await run(executable, [...arguments_], { timeout: 10_000 });
+}
+
+function plist(
+  label: string,
+  {
+    programArguments,
+    environment,
+    runAtLoad,
+    keepAlive,
+    standardOutPath,
+    standardErrorPath,
+  }: {
+    programArguments: readonly string[];
+    environment?: Readonly<Record<string, string>>;
+    runAtLoad: boolean;
+    keepAlive: boolean;
+    standardOutPath?: string;
+    standardErrorPath?: string;
+  },
+): string {
+  const lines = [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
+    '<plist version="1.0">',
+    "<dict>",
+    "  <key>Label</key>",
+    `  <string>${escapeXml(label)}</string>`,
+    "  <key>ProgramArguments</key>",
+    "  <array>",
+    ...programArguments.map(
+      (argument) => `    <string>${escapeXml(argument)}</string>`,
+    ),
+    "  </array>",
+  ];
+  if (environment && Object.keys(environment).length > 0) {
+    lines.push("  <key>EnvironmentVariables</key>", "  <dict>");
+    for (const [name, value] of Object.entries(environment)) {
+      lines.push(
+        `    <key>${escapeXml(name)}</key>`,
+        `    <string>${escapeXml(value)}</string>`,
+      );
+    }
+    lines.push("  </dict>");
+  }
+  lines.push(
+    "  <key>RunAtLoad</key>",
+    `  <${runAtLoad}/>`,
+    "  <key>KeepAlive</key>",
+    `  <${keepAlive}/>`,
+  );
+  if (standardOutPath) {
+    lines.push(
+      "  <key>StandardOutPath</key>",
+      `  <string>${escapeXml(standardOutPath)}</string>`,
+    );
+  }
+  if (standardErrorPath) {
+    lines.push(
+      "  <key>StandardErrorPath</key>",
+      `  <string>${escapeXml(standardErrorPath)}</string>`,
+    );
+  }
+  lines.push("</dict>", "</plist>", "");
+  return lines.join("\n");
+}
+
+function escapeXml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}

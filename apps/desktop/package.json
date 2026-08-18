@@ -20,6 +20,7 @@
     "@silvic/connector-local": "workspace:*",
     "@silvic/contracts": "workspace:*",
     "@silvic/core": "workspace:*",
+    "@silvic/gate": "workspace:*",
     "electron-store": "^11.0.2",
     "electron-updater": "^6.8.9"
   },
@@ -35,6 +36,10 @@
     "productName": "Silvic",
     "artifactName": "${productName}-${version}-${arch}.${ext}",
     "asar": true,
+    "asarUnpack": [
+      "out/main/gate.mjs",
+      "out/main/chunks/*.mjs"
+    ],
     "directories": {
       "output": "../../release"
     },

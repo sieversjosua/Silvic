@@ -87,7 +87,6 @@ import {
   WorkspaceRegistry,
   plotPort,
   resolvePlotAddress,
-  proxyAdvice,
   provisionEnvironment,
   primeResolvedCommandPath,
   provisionCompleted,
@@ -99,6 +98,7 @@ import {
   withoutWorkspace,
   workspaceRecordsEqual,
   routeNameFor,
+  routes,
   runtimeStartResult,
   readRecipeSource,
   renameWorkspaceRecord,
@@ -110,6 +110,7 @@ import {
   type WorkspaceRecord,
 } from "@silvic/core";
 
+import { GateManager, type GateWake } from "./gate-manager";
 import { PlotProgressReporter } from "./plot-progress";
 import {
   updateMenuPresentations,
@@ -166,7 +167,9 @@ const workspaceRegistry = new WorkspaceRegistry();
 let runtimeObservationRefreshTimer: NodeJS.Timeout | undefined;
 let lastSupervisedPaths = new Set<string>();
 const pendingRuntimeObservationPaths = new Set<string>();
+const gate = new GateManager((wake) => void wakePlotFromGate(wake));
 const supervisor = new CommandSupervisor({
+  routePublisher: gate.publisher,
   logDirectory: join(app.getPath("userData"), "command-logs"),
   onChange: (processes) => {
     // Written down as it changes, so a window that closes does not take the
@@ -222,7 +225,8 @@ if (process.platform === "darwin" && !app.isPackaged) {
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
-  app.on("second-instance", () => {
+  app.on("second-instance", (_event, argv) => {
+    handleWakeArguments(argv);
     if (!mainWindow) return;
     if (mainWindow.isMinimized()) mainWindow.restore();
     mainWindow.show();
@@ -237,7 +241,8 @@ if (!app.requestSingleInstanceLock()) {
     nativeTheme.on("updated", () => {
       mainWindow?.setBackgroundColor(currentWindowBackground());
     });
-    await supervisor.adopt(settings.get("runningCommands"));
+    const leftRunning = settings.get("runningCommands");
+    await supervisor.adopt(leftRunning);
     const hasUpdateChannel =
       app.isPackaged &&
       process.env.SILVIC_DISABLE_UPDATES !== "1" &&
@@ -261,6 +266,8 @@ if (!app.requestSingleInstanceLock()) {
     scheduleAutomaticUpdateChecks();
     await paintFromGit(settings.get("roots"), "replace");
     void refreshConnectorObservations();
+    handleWakeArguments(process.argv);
+    void revivePlotCommands(leftRunning);
 
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -561,10 +568,10 @@ function registerIpc(): void {
   });
   ipcMain.handle(ipcChannels.namedRoutingSetup, async (event) => {
     assertTrustedSender(event);
-    // The command deliberately runs in Terminal: installing the launch service
-    // changes a system network setting and macOS must ask the person at the
-    // keyboard for administrator approval. Silvic never handles that password.
-    await openTerminalCommand("portless", ["service", "install"]);
+    // Installs Silvic's own gate: a user launch agent, then the loopback 443
+    // redirect and certificate trust behind macOS's native administrator
+    // dialog. Silvic never handles the password itself.
+    await gate.setup();
   });
   ipcMain.handle(ipcChannels.stepTest, async (event, request: unknown) => {
     assertTrustedSender(event);
@@ -629,6 +636,9 @@ function registerIpc(): void {
       (step) => step.id === "worktree" && step.status === "done",
     );
     if (removed) {
+      // The plot is gone for good, so its named routes must not keep waking
+      // it; this is the one moment a route identity is truly deleted.
+      void forgetPlotRoutes(project.rootPath, workspace.path);
       publishSnapshot(
         withoutWorkspace(latestSnapshot, workspace.path),
         "replace",
@@ -1219,6 +1229,102 @@ async function provisionPlot(
   }
 }
 
+/**
+ * Commands that should have outlived the last quit but did not — an update
+ * restarted the machine's processes, or something crashed the group — are
+ * started again instead of sitting as ghosts. Running until Stop is the
+ * promise keepCommandsRunning makes; reviving is what keeps it after the
+ * process is gone.
+ */
+async function revivePlotCommands(
+  previous: readonly SupervisedCommand[],
+): Promise<void> {
+  if (!settings.get("keepCommandsRunning")) return;
+  const alive = new Set(
+    supervisor
+      .list()
+      .map((entry) => `${normalize(entry.plotPath)}::${entry.id}`),
+  );
+  for (const entry of previous) {
+    if (entry.status !== "running" && entry.status !== "starting") continue;
+    if (alive.has(`${normalize(entry.plotPath)}::${entry.id}`)) continue;
+    try {
+      await startPlotCommand(entry.plotPath, entry.id);
+    } catch {
+      // A plot that no longer exists has nothing to revive.
+    }
+  }
+}
+
+/**
+ * Someone visited a sleeping plot's URL. The gate names the owner; Silvic
+ * answers by starting what the plot declares, exactly as Start would.
+ * Right after launch the snapshot may still be loading, so an unknown plot
+ * is retried briefly rather than dropped.
+ */
+async function wakePlotFromGate(wake: GateWake): Promise<void> {
+  const plotPath =
+    wake.plotPath ??
+    (await gate.client.status())?.routes.find(
+      (route) => route.name === wake.route,
+    )?.plotPath;
+  if (!plotPath) return;
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    try {
+      const workspace = knownWorkspace(plotPath);
+      const project = latestSnapshot.projects.find((candidate) =>
+        candidate.workspaces.some(
+          (entry) => entry.workspaceId === workspace.workspaceId,
+        ),
+      );
+      if (!project) throw new Error("The plot's project is not loaded yet");
+      const recipe = await readRecipe(project.rootPath);
+      await startAutoCommands(workspace.path, recipe.commands);
+      return;
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+    }
+  }
+}
+
+/** `open -b dev.silvic.app --args --silvic-wake=<route>`, from the gate. */
+function handleWakeArguments(argv: readonly string[]): void {
+  for (const argument of argv) {
+    if (argument.startsWith("--silvic-wake=")) {
+      void wakePlotFromGate({
+        route: argument.slice("--silvic-wake=".length),
+      });
+    }
+  }
+}
+
+/** Deletes the named routes a torn-down plot registered with the gate. */
+async function forgetPlotRoutes(
+  projectRoot: string,
+  plotPath: string,
+): Promise<void> {
+  try {
+    const recipe = await readRecipe(projectRoot);
+    const plot = plotNameIn(plotPath, recipe.project);
+    for (const [id, command] of Object.entries(recipe.commands)) {
+      if (!routes(command)) continue;
+      await gate.removeRoute(
+        routeNameFor(
+          {
+            id,
+            ...(command.routeName ? { routeName: command.routeName } : {}),
+          },
+          plot,
+          recipe.project,
+        ),
+      );
+    }
+  } catch {
+    // A stale route only costs a wake attempt against a missing plot.
+  }
+}
+
 async function startAutoCommands(
   plotPath: string,
   commands: Readonly<Record<string, PlotCommand>>,
@@ -1539,7 +1645,7 @@ async function startPlotCommand(path: string, id: string): Promise<void> {
       // Ignored by a routed command: portless hands out its own.
       PORT: String(port),
     },
-    canRoute: await portlessAvailable(),
+    canRoute: await gate.available(),
     detached: settings.get("keepCommandsRunning"),
   });
 }
@@ -1572,38 +1678,13 @@ function addressFor(
 async function namedRoutingIssue(
   address: PlotAddress,
 ): Promise<string | undefined> {
-  return address.named && !(await portlessAvailable())
-    ? proxyAdvice
-    : undefined;
+  if (!address.named) return undefined;
+  return gate.issue();
 }
 
 async function requireNamedRouting(address: PlotAddress): Promise<void> {
   const issue = await namedRoutingIssue(address);
   if (issue) throw new Error(issue);
-}
-
-/** Short-lived because the one-time proxy setup may finish while Silvic is open. */
-let portlessCheck: { checkedAt: number; result: Promise<boolean> } | undefined;
-function portlessAvailable(): Promise<boolean> {
-  if (portlessCheck && Date.now() - portlessCheck.checkedAt < 1_500) {
-    return portlessCheck.result;
-  }
-  const result = runner
-    .run({ executable: "which", arguments: ["portless"] })
-    .then(async (installed) => {
-      if (installed.exitCode !== 0) return false;
-      const status = await runner.run({
-        executable: "portless",
-        arguments: ["service", "status"],
-      });
-      return (
-        status.exitCode === 0 &&
-        /Proxy on 443:\s*responding/i.test(`${status.stdout}${status.stderr}`)
-      );
-    })
-    .catch(() => false);
-  portlessCheck = { checkedAt: Date.now(), result };
-  return result;
 }
 
 /** Plots are directories named `<project>-<plot>`; older ones are `<plot>`. */

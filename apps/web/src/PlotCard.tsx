@@ -302,6 +302,14 @@ export function WorkspaceNode({ data }: NodeProps<WorkspaceFlowNode>) {
         </p>
       )}
 
+      {/* What went wrong (or what Silvic is doing about it), readable on the
+          card itself — a tooltip is where explanations go to be missed. */}
+      {(runtime?.advice ?? runtimeFailure) && (
+        <p className="plot-advice" data-tone={state.tone}>
+          <span>{runtime?.advice ?? runtimeFailure}</span>
+        </p>
+      )}
+
       {(previewSignal || runtimeFailure || signals.length > 0) && (
         <div className="plot-signals">
           {runtimeFailure && (

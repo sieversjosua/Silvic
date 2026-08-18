@@ -136,7 +136,8 @@ and process supervision where a command is attached.
 A Plot's address has to satisfy two audiences: a person reading it, and an
 identity provider validating it.
 
-Serving commands are published through portless by default:
+Serving commands are published through the Silvic gate by default (see
+`docs/GATE.md`):
 
 ```
 https://web-my-plot-my-project.localhost
@@ -152,23 +153,30 @@ own named origin consistently.
 Silvic writes that address into the Plot's local and Convex environments before
 schema/functions are pushed. The runtime and route deliberately have separate
 lifecycles: Silvic starts the declared command, discovers the responding HTTP
-listener inside that exact process tree, and publishes a Portless alias to it.
+listener inside that exact process tree, and registers the route with the gate.
 This matters for monorepo scripts that ignore `PORT` or start several sidecars;
 the stable URL follows the actual HTML listener instead of pointing at an empty
 port. A routed runtime remains `STARTING` until both its direct listener and the
-named address answer. Silvic then monitors both and republishes the alias if a
+named address answer. Silvic then monitors both and re-registers the route if a
 dev server comes back on a different port.
 
-portless requires the one-time `portless service install` setup on the machine.
-Silvic can open that explicit Terminal/admin flow from the Plot dialog and
-rechecks the service while it completes. Before creating the worktree or
-changing a provider, Silvic verifies that the proxy really answers on port 443;
-if the named route cannot be kept, creation stops instead of writing an auth
-origin that the runtime will not serve. A recipe can explicitly choose the
-deterministic `http://localhost:<port>` alternative with `"portless": false`.
+The gate needs Silvic's one-time local HTTPS setup on the machine: a user
+launch agent for the gate daemon, plus a loopback firewall redirect and
+certificate trust behind a single administrator prompt, both run from the
+Plot dialog. Silvic verifies all of it — including that browsers actually
+trust the certificate — and rechecks while setup completes. Before creating
+the worktree or changing a provider, Silvic verifies that port 443 really
+reaches the gate; if the named route cannot be kept, creation stops instead
+of writing an auth origin that the runtime will not serve. A recipe can
+explicitly choose the deterministic `http://localhost:<port>` alternative
+with `"portless": false` (the field keeps its historical name).
+
+Stopping a plot suspends its route rather than deleting it: visiting the URL
+later shows a holding page while the gate wakes Silvic, which starts the
+plot's commands again. Routes are deleted only when the plot is torn down.
 
 For Next.js, keep the serving command at the repository's normal dev script
-(for example, `bun run dev`). portless supplies `PORT` itself. Do not add
+(for example, `bun run dev`). Silvic supplies `PORT` itself. Do not add
 `--hostname "$HOST"`: middleware can otherwise turn an internal rewrite into
 HTTPS while the Next.js development port itself still speaks plain HTTP.
 

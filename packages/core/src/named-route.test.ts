@@ -1,19 +1,23 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { PortlessRoutePublisher, descendantListenerPorts } from "./named-route";
+import {
+  GateRoutePublisher,
+  descendantListenerPorts,
+  type GateRouteLink,
+} from "./named-route";
 
-const directBridge = async (
-  _routeName: string,
-  selected: {
-    listener: { port: number };
-    hostname: "127.0.0.1" | "::1";
-  },
-) => ({
-  hostname: selected.hostname,
-  targetPort: selected.listener.port,
-  port: selected.listener.port,
-  close: async () => undefined,
-});
+const recordingLink = () => {
+  const routes = new Map<string, { host: string; port: number }>();
+  const link: GateRouteLink = {
+    set: vi.fn(async (route) => {
+      routes.set(route.name, { host: route.host, port: route.port });
+    }),
+    suspend: vi.fn(async (name: string) => {
+      routes.delete(name);
+    }),
+  };
+  return { link, routes };
+};
 
 describe("descendantListenerPorts", () => {
   it("keeps listeners owned by the supervised process tree", () => {
@@ -35,13 +39,9 @@ describe("descendantListenerPorts", () => {
   });
 });
 
-describe("PortlessRoutePublisher", () => {
+describe("GateRoutePublisher", () => {
   it("publishes the announced HTML listener when a monorepo ignores PORT", async () => {
-    const execute = vi.fn().mockResolvedValue({
-      exitCode: 0,
-      stdout: "Alias registered",
-      stderr: "",
-    });
+    const { link } = recordingLink();
     const probe = vi.fn(async (url: string) => {
       if (url === "http://127.0.0.1:4321/") {
         return { status: 200, contentType: "text/html; charset=utf-8" };
@@ -54,10 +54,9 @@ describe("PortlessRoutePublisher", () => {
       }
       return undefined;
     });
-    const publisher = new PortlessRoutePublisher({
-      execute,
+    const publisher = new GateRoutePublisher({
+      link,
       probe,
-      bridge: directBridge,
       inspect: async () => [
         { processId: 201, port: 55341 },
         { processId: 202, port: 4321 },
@@ -71,47 +70,37 @@ describe("PortlessRoutePublisher", () => {
       expectedPort: 8691,
       output: () => "Local: http://localhost:4321",
       timeoutMs: 10,
+      plotPath: "/plots/mono-cmd-k-menu",
+      commandId: "web",
     });
 
     expect(published).toEqual({ port: 4321 });
-    expect(execute).toHaveBeenCalledWith("portless", [
-      "alias",
-      "web-cmd-k-menu-mono",
-      "4321",
-      "--force",
-    ]);
+    expect(link.set).toHaveBeenCalledWith({
+      name: "web-cmd-k-menu-mono",
+      host: "127.0.0.1",
+      port: 4321,
+      plotPath: "/plots/mono-cmd-k-menu",
+      commandId: "web",
+    });
   });
 
   it("does not publish a plain-text sidecar that happens to claim PORT", async () => {
-    const execute = vi.fn().mockResolvedValue({
-      exitCode: 0,
-      stdout: "Alias registered",
-      stderr: "",
-    });
+    const { link } = recordingLink();
     const probe = vi.fn(async (url: string) => {
       if (url === "http://127.0.0.1:8691/") {
-        return { status: 200, contentType: "text/plain", body: "OK" };
+        return { status: 200, contentType: "text/plain" };
       }
       if (url === "http://127.0.0.1:4321/") {
-        return {
-          status: 200,
-          contentType: "text/html; charset=utf-8",
-          body: "<!doctype html><title>Web app</title>",
-        };
+        return { status: 200, contentType: "text/html; charset=utf-8" };
       }
       if (url === "https://web-cmd-k-menu-mono.localhost/") {
-        return {
-          status: 200,
-          contentType: "text/html; charset=utf-8",
-          body: "<!doctype html><title>Web app</title>",
-        };
+        return { status: 200, contentType: "text/html; charset=utf-8" };
       }
       return undefined;
     });
-    const publisher = new PortlessRoutePublisher({
-      execute,
+    const publisher = new GateRoutePublisher({
+      link,
       probe,
-      bridge: directBridge,
       inspect: async () => [
         { processId: 201, port: 8691 },
         { processId: 202, port: 4321 },
@@ -128,54 +117,30 @@ describe("PortlessRoutePublisher", () => {
     });
 
     expect(published).toEqual({ port: 4321 });
-    expect(execute).toHaveBeenCalledWith("portless", [
-      "alias",
-      "web-cmd-k-menu-mono",
-      "4321",
-      "--force",
-    ]);
+    expect(link.set).toHaveBeenCalledWith(
+      expect.objectContaining({ port: 4321 }),
+    );
   });
 
   it("adopts an announced existing web server instead of a descendant health check", async () => {
-    let aliasedPort: number | undefined;
-    const execute = vi
-      .fn()
-      .mockImplementation(
-        async (_executable: string, arguments_: readonly string[]) => {
-          aliasedPort = Number(arguments_[2]);
-          return {
-            exitCode: 0,
-            stdout: "Alias registered",
-            stderr: "",
-          };
-        },
-      );
+    const { link, routes } = recordingLink();
     const probe = vi.fn(async (url: string) => {
       if (url === "http://127.0.0.1:49731/") {
-        return { status: 200, body: "OK" };
+        return { status: 200 };
       }
       if (url === "http://127.0.0.1:4060/") {
-        return {
-          status: 200,
-          contentType: "text/html; charset=utf-8",
-          body: "<!doctype html><title>SynTwin</title>",
-        };
+        return { status: 200, contentType: "text/html; charset=utf-8" };
       }
       if (url === "https://web-cmd-k-menu-mono.localhost/") {
-        return aliasedPort === 4060
-          ? {
-              status: 200,
-              contentType: "text/html; charset=utf-8",
-              body: "<!doctype html><title>SynTwin</title>",
-            }
-          : { status: 200, body: "OK" };
+        return routes.get("web-cmd-k-menu-mono")?.port === 4060
+          ? { status: 200, contentType: "text/html; charset=utf-8" }
+          : { status: 200 };
       }
       return undefined;
     });
-    const publisher = new PortlessRoutePublisher({
-      execute,
+    const publisher = new GateRoutePublisher({
+      link,
       probe,
-      bridge: directBridge,
       // The existing Astro server is outside the newly started command tree;
       // only LiveKit's health listener is a descendant.
       inspect: async () => [{ processId: 38304, port: 49731 }],
@@ -196,28 +161,59 @@ describe("PortlessRoutePublisher", () => {
     });
 
     expect(published).toEqual({ port: 4060 });
-    expect(execute).toHaveBeenCalledWith("portless", [
-      "alias",
-      "web-cmd-k-menu-mono",
-      "4060",
-      "--force",
-    ]);
+    expect(link.set).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "web-cmd-k-menu-mono", port: 4060 }),
+    );
+  });
+
+  it("prefers a descendant web server to a stale announced server", async () => {
+    const { link, routes } = recordingLink();
+    const probe = vi.fn(async (url: string) => {
+      if (
+        url === "http://127.0.0.1:4321/" ||
+        url === "http://127.0.0.1:4322/"
+      ) {
+        return { status: 200, contentType: "text/html; charset=utf-8" };
+      }
+      if (url === "https://web-color-scheme-mono.localhost/") {
+        return routes.has("web-color-scheme-mono")
+          ? { status: 200, contentType: "text/html; charset=utf-8" }
+          : undefined;
+      }
+      return undefined;
+    });
+    const publisher = new GateRoutePublisher({
+      link,
+      probe,
+      // Only 4322 belongs to the command Silvic just started. Port 4321 is an
+      // old Astro URL retained in the multi-service runner's recent output.
+      inspect: async () => [{ processId: 52002, port: 4322 }],
+      wait: async () => undefined,
+    });
+
+    const published = await publisher.publish({
+      routeName: "web-color-scheme-mono",
+      processId: 52000,
+      expectedPort: 8691,
+      output: () => "[astro] Previous URL: http://localhost:4321/",
+      timeoutMs: 10,
+    });
+
+    expect(published).toEqual({ port: 4322 });
+    expect(link.set).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "web-color-scheme-mono", port: 4322 }),
+    );
   });
 
   it("refuses to publish a health endpoint when no web server appears", async () => {
     let elapsed = 0;
-    const execute = vi.fn().mockResolvedValue({
-      exitCode: 0,
-      stdout: "Alias registered",
-      stderr: "",
-    });
-    const publisher = new PortlessRoutePublisher({
-      execute,
+    const { link } = recordingLink();
+    const publisher = new GateRoutePublisher({
+      link,
       inspect: async () => [{ processId: 38304, port: 49731 }],
       probe: async () => ({
         status: 200,
         contentType: "text/plain; charset=utf-8",
-        body: "OK",
       }),
       now: () => elapsed,
       wait: async (milliseconds) => {
@@ -234,28 +230,19 @@ describe("PortlessRoutePublisher", () => {
         timeoutMs: 10,
       }),
     ).rejects.toThrow(/browser-facing HTML listener/i);
-    expect(execute).not.toHaveBeenCalled();
+    expect(link.set).not.toHaveBeenCalled();
   });
 
   it("publishes an HTML error page from the real web server", async () => {
     let elapsed = 0;
-    const execute = vi.fn().mockResolvedValue({
-      exitCode: 0,
-      stdout: "Alias registered",
-      stderr: "",
-    });
-    const publisher = new PortlessRoutePublisher({
-      execute,
-      bridge: directBridge,
+    const { link } = recordingLink();
+    const publisher = new GateRoutePublisher({
+      link,
       inspect: async () => [{ processId: 36926, port: 4321 }],
       probe: async (url) =>
         url.includes(":4321/") ||
         url === "https://web-mcp-upgrades-mono.localhost/"
-          ? {
-              status: 500,
-              contentType: "text/html; charset=utf-8",
-              body: "<title>Error</title>",
-            }
+          ? { status: 500, contentType: "text/html; charset=utf-8" }
           : undefined,
       now: () => elapsed,
       wait: async (milliseconds) => {
@@ -274,10 +261,23 @@ describe("PortlessRoutePublisher", () => {
     ).resolves.toEqual({ port: 4321 });
   });
 
-  it("does not call a Portless 502 or missing route healthy", async () => {
-    const namedStatus = { current: 502 };
-    const publisher = new PortlessRoutePublisher({
-      execute: vi.fn(),
+  it("suspends rather than deletes a route when a command stops", async () => {
+    const { link } = recordingLink();
+    const publisher = new GateRoutePublisher({
+      link,
+      inspect: async () => [],
+      probe: async () => undefined,
+      wait: async () => undefined,
+    });
+    await publisher.remove("web-cmd-k-menu-mono");
+    expect(link.suspend).toHaveBeenCalledWith("web-cmd-k-menu-mono");
+  });
+
+  it("does not call a gate 503 or missing route healthy", async () => {
+    const namedStatus = { current: 503 };
+    const { link } = recordingLink();
+    const publisher = new GateRoutePublisher({
+      link,
       inspect: async () => [],
       probe: async (url) =>
         url.startsWith("http://127.0.0.1")
@@ -302,17 +302,14 @@ describe("PortlessRoutePublisher", () => {
   });
 
   it("does not call a named route healthy when it serves OK instead of the app", async () => {
-    const publisher = new PortlessRoutePublisher({
-      execute: vi.fn(),
+    const { link } = recordingLink();
+    const publisher = new GateRoutePublisher({
+      link,
       inspect: async () => [],
       probe: async (url) =>
         url.startsWith("http://127.0.0.1")
-          ? {
-              status: 200,
-              contentType: "text/html; charset=utf-8",
-              body: "<!doctype html><title>Web app</title>",
-            }
-          : { status: 200, contentType: "text/plain", body: "OK" },
+          ? { status: 200, contentType: "text/html; charset=utf-8" }
+          : { status: 200, contentType: "text/plain" },
       wait: async () => undefined,
     });
 
@@ -325,8 +322,9 @@ describe("PortlessRoutePublisher", () => {
   });
 
   it("does not call matching empty 404 endpoints a healthy web preview", async () => {
-    const publisher = new PortlessRoutePublisher({
-      execute: vi.fn(),
+    const { link } = recordingLink();
+    const publisher = new GateRoutePublisher({
+      link,
       inspect: async () => [],
       probe: async () => ({ status: 404 }),
       wait: async () => undefined,

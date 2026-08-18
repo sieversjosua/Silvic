@@ -114,8 +114,9 @@ Requirements:
 - Node.js 22 or newer
 - pnpm 11
 - Git
-- `portless` for named HTTPS routes (`npm install -g portless`), followed once
-  by `portless service install` (Silvic can open this setup in Terminal)
+- Named HTTPS routes need Silvic's one-time local HTTPS setup (run from the
+  plot dialog; it asks once for an administrator password). Nothing else has
+  to be installed — the Silvic gate ships inside the app.
 
 ```bash
 pnpm install

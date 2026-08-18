@@ -8,10 +8,7 @@ import { promisify } from "node:util";
 import type { PlotCommand } from "@silvic/contracts";
 
 import { resolvedCommandPath } from "./command-runner";
-import {
-  PortlessRoutePublisher,
-  type NamedRoutePublisher,
-} from "./named-route";
+import { type NamedRoutePublisher } from "./named-route";
 import { routes } from "./plot-address";
 
 const executeFile = promisify(execFile);
@@ -77,8 +74,16 @@ export class CommandSupervisor {
       routeHealthIntervalMs?: number;
     },
   ) {
-    this.routePublisher =
-      options.routePublisher ?? new PortlessRoutePublisher();
+    // Routing without a publisher is a wiring mistake, not a runtime state:
+    // fail the route loudly instead of pretending portless-era defaults.
+    this.routePublisher = options.routePublisher ?? {
+      publish: () =>
+        Promise.reject(
+          new Error("No route publisher is wired to this supervisor."),
+        ),
+      healthy: () => Promise.resolve(false),
+      remove: () => Promise.resolve(),
+    };
   }
 
   list(): readonly SupervisedCommand[] {
@@ -162,7 +167,14 @@ export class CommandSupervisor {
       ...process.env,
       PATH: resolvedCommandPath(),
       ...request.environment,
-      ...(routed ? { HOST: "127.0.0.1", PORTLESS_URL: namedUrl } : {}),
+      // PORTLESS_URL stays for recipes written against the portless era.
+      ...(routed
+        ? {
+            HOST: "127.0.0.1",
+            SILVIC_GATE_URL: namedUrl,
+            PORTLESS_URL: namedUrl,
+          }
+        : {}),
       ...request.command.env,
     };
     const child = spawn("sh", ["-lc", request.command.run], {
@@ -246,12 +258,14 @@ export class CommandSupervisor {
     timeoutMs?: number;
   }): Promise<void> {
     try {
+      const owner = this.running.get(key);
       const published = await this.routePublisher.publish({
         routeName,
         processId,
         expectedPort,
         output,
         ...(timeoutMs === undefined ? {} : { timeoutMs }),
+        ...(owner ? { plotPath: owner.plotPath, commandId: owner.id } : {}),
       });
       const entry = this.running.get(key);
       if (
@@ -555,14 +569,7 @@ export class CommandSupervisor {
 }
 
 export const proxyAdvice =
-  "The named HTTPS URL needs portless and its proxy on port 443. Install portless, then run `portless service install` once and try again. Or disable Named HTTPS URL in the recipe to use the stable localhost port.";
-
-/** portless says this, in these words, when it has no proxy to publish to. */
-export function needsProxy(output: string): boolean {
-  return /proxy is not running|port 443 requires elevated privileges|sudo: (?:a password|a terminal) is required/i.test(
-    output,
-  );
-}
+  "The named HTTPS URL needs Silvic's local gate. Run the one-time HTTPS setup, then try again. Or disable Named HTTPS URL in the recipe to use the stable localhost port.";
 
 function keyFor(plotPath: string, id: string): string {
   return `${plotPath}::${id}`;

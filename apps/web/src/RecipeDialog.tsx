@@ -605,7 +605,7 @@ export function RecipeDialog({
                     />
                     <label
                       className="recipe-command-routing"
-                      title="Publish the stable wildcard-compatible HTTPS address through portless"
+                      title="Publish the stable wildcard-compatible HTTPS address through the Silvic gate"
                     >
                       <input
                         type="checkbox"
@@ -648,7 +648,7 @@ export function RecipeDialog({
                 <p className="recipe-hint">
                   Serving commands get a named HTTPS URL by default. Disable it
                   to keep only the stable localhost port. Named routing needs
-                  portless and its one-time HTTPS proxy setup.
+                  Silvic&apos;s one-time local HTTPS setup.
                 </p>
               )}
             </section>

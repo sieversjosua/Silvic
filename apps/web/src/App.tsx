@@ -1625,7 +1625,7 @@ function NewPlotDialog({
         setSettingUpRouting(false);
         if (result === "timed-out") {
           setFailure(
-            "HTTPS setup is not ready yet. Check Terminal, then try again.",
+            "HTTPS setup is not ready yet. Approve the administrator prompt, then try again.",
           );
         }
       })

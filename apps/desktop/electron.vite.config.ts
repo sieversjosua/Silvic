@@ -13,6 +13,7 @@ export default defineConfig({
         exclude: [
           "@silvic/contracts",
           "@silvic/core",
+          "@silvic/gate",
           "@silvic/connector-convex",
           "@silvic/connector-github",
           "@silvic/connector-harnesses",
@@ -23,7 +24,19 @@ export default defineConfig({
     build: {
       rollupOptions: {
         external: ["electron"],
-        input: resolve(directory, "src/main.ts"),
+        input: {
+          main: resolve(directory, "src/main.ts"),
+          gate: resolve(directory, "src/gate.ts"),
+        },
+        output: {
+          format: "es",
+          // The gate runs under launchd as plain Node, outside the asar and
+          // without a neighbouring package.json; .mjs keeps it and the
+          // chunks it shares with main ESM there.
+          entryFileNames: (chunk) =>
+            chunk.name === "gate" ? "[name].mjs" : "[name].js",
+          chunkFileNames: "chunks/[name]-[hash].mjs",
+        },
       },
     },
   },
