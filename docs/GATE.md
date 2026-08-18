@@ -44,9 +44,9 @@ browser ──443──▶ pf rdr (lo0 only) ──▶ gate :42443 (HTTPS, SNI p
 - **TLS.** The gate maintains its own local CA in the state directory and
   issues per-hostname leaf certificates on demand in the SNI callback, using
   the system `/usr/bin/openssl` (LibreSSL). Leafs live 397 days and are
-  reissued when < 30 days remain. The CA root is added to the System keychain
-  during setup; Silvic verifies trust with `security verify-cert` instead of
-  assuming it.
+  reissued when < 30 days remain. The CA root is trusted in the user's trust
+  settings during setup; Silvic verifies trust with `security verify-cert`
+  instead of assuming it.
 - **Route table.** `routes.json` maps route name → upstream port plus the plot
   path and command id that own it. It is persisted on every change, so routes
   survive reboots. The upstream port is ephemeral (dev servers move); the
@@ -87,12 +87,17 @@ exactly as before.
 
 ## Setup
 
-One-time, from Silvic's UI (or `gate.js setup`):
+One-time, run automatically the first time a plot needs a named URL:
 
-1. **Admin step** (single native password prompt via osascript): write the pf
-   anchor + boot LaunchDaemon, load the anchor, add the gate CA to the System
-   keychain.
-2. **User step** (no prompt): write and bootstrap the user LaunchAgent.
+1. **Agent step** (no prompt): write and bootstrap the user LaunchAgent; if
+   launchd refuses (managed Macs), the gate is spawned directly instead.
+2. **Admin step** (native password prompt via osascript): write the pf anchor
+   and its boot LaunchDaemon, then load the anchor.
+3. **Trust step** (its own macOS dialog, as the user): add the gate CA to the
+   user's trust settings. This is deliberately not part of the root script —
+   admin-domain trust settings refuse non-interactive authorization (-60005)
+   even for root, while the user domain may ask the person directly. Browsers
+   honour user-domain roots the same way.
 
 Every step is idempotent; `gate.js doctor` re-checks each piece (agent
 running, 443 answering, cert trusted, control socket reachable) and reports

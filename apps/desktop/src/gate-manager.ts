@@ -13,6 +13,8 @@ import {
   gateStateDirectory,
   installLaunchAgent,
   installPrivileged,
+  installUserTrust,
+  type GateDiagnosis,
   type GateWake,
 } from "@silvic/gate";
 
@@ -35,26 +37,29 @@ export class GateManager {
   }
 
   /** Short-lived because the one-time setup may finish while Silvic is open. */
-  private check: { checkedAt: number; result: Promise<string | undefined> } = {
-    checkedAt: 0,
-    result: Promise.resolve(undefined),
-  };
+  private check:
+    { checkedAt: number; result: Promise<GateDiagnosis> } | undefined;
 
   async available(): Promise<boolean> {
     return (await this.issue()) === undefined;
   }
 
   /** What still stands between this machine and working named HTTPS URLs. */
-  issue(): Promise<string | undefined> {
-    if (Date.now() - this.check.checkedAt < 1_500) return this.check.result;
+  async issue(): Promise<string | undefined> {
+    const diagnosis = await this.diagnose();
+    return diagnosis.healthy
+      ? undefined
+      : diagnosis.failures.map((failure) => failure.advice).join(" ");
+  }
+
+  private diagnose(): Promise<GateDiagnosis> {
+    if (this.check && Date.now() - this.check.checkedAt < 1_500) {
+      return this.check.result;
+    }
     const result = diagnoseGate({
       socketStatus: async () => (await this.client.status()) !== undefined,
       probe: (url) => this.probeThroughGate(url),
-    }).then((diagnosis) =>
-      diagnosis.healthy
-        ? undefined
-        : diagnosis.failures.map((failure) => failure.advice).join(" "),
-    );
+    });
     this.check = { checkedAt: Date.now(), result };
     return result;
   }
@@ -68,7 +73,9 @@ export class GateManager {
   async setup(): Promise<void> {
     await this.ensureAgent();
     this.privilegedAttempted = true;
+    this.trustAttempted = true;
     await installPrivileged();
+    await installUserTrust();
     this.forget();
   }
 
@@ -117,6 +124,7 @@ export class GateManager {
   }
 
   private privilegedAttempted = false;
+  private trustAttempted = false;
   private fallbackSpawned = false;
   private ensureInFlight: Promise<void> | undefined;
 
@@ -132,7 +140,10 @@ export class GateManager {
   ensureReady({
     reprompt = false,
   }: { reprompt?: boolean } = {}): Promise<void> {
-    if (reprompt) this.privilegedAttempted = false;
+    if (reprompt) {
+      this.privilegedAttempted = false;
+      this.trustAttempted = false;
+    }
     this.ensureInFlight ??= this.escalate().finally(() => {
       this.ensureInFlight = undefined;
     });
@@ -140,26 +151,46 @@ export class GateManager {
   }
 
   private async escalate(): Promise<void> {
-    if ((await this.issue()) === undefined) return;
+    if ((await this.diagnose()).healthy) return;
     await this.ensureAgent();
-    if ((await this.issue()) === undefined) return;
-    if (this.privilegedAttempted) return;
-    this.privilegedAttempted = true;
-    this.note("requesting the one-time administrator setup");
-    try {
-      await installPrivileged();
-    } catch (error) {
-      this.note(`administrator setup failed: ${describe(error)}`);
-      throw new Error(
-        `The one-time HTTPS setup was not completed: ${describe(error)}. Press Start to try again.`,
-      );
+    const diagnosis = await this.diagnose();
+    if (diagnosis.healthy) return;
+    const failing = new Set(diagnosis.failures.map((failure) => failure.check));
+    // Only the dialogs the diagnosis actually calls for: the administrator
+    // prompt when 443 does not reach the gate, the trust prompt when the
+    // certificate is not accepted yet.
+    if (failing.has("proxy-443") && !this.privilegedAttempted) {
+      this.privilegedAttempted = true;
+      this.note("requesting the one-time administrator setup");
+      try {
+        await installPrivileged();
+      } catch (error) {
+        this.note(`administrator setup failed: ${describe(error)}`);
+        throw new Error(
+          `The one-time HTTPS setup was not completed: ${describe(error)}. Press Start to try again.`,
+        );
+      }
+      this.note("administrator setup completed");
+      this.forget();
     }
-    this.note("administrator setup completed");
-    this.forget();
+    if (failing.has("certificate-trusted") && !this.trustAttempted) {
+      this.trustAttempted = true;
+      this.note("requesting certificate trust");
+      try {
+        await installUserTrust();
+      } catch (error) {
+        this.note(`certificate trust failed: ${describe(error)}`);
+        throw new Error(
+          `The HTTPS certificate was not trusted: ${describe(error)}. Press Start to try again.`,
+        );
+      }
+      this.note("certificate trusted");
+      this.forget();
+    }
   }
 
   private forget(): void {
-    this.check = { checkedAt: 0, result: Promise.resolve(undefined) };
+    this.check = undefined;
   }
 
   async removeRoute(name: string): Promise<void> {

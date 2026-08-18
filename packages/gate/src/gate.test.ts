@@ -17,7 +17,13 @@ import { GateClient } from "./client";
 import { parseControlRequest } from "./control-protocol";
 import { startGate, type Gate } from "./daemon";
 import { RouteStore } from "./route-store";
-import { adminSetupScript, launchAgentPlist, pfAnchorRules } from "./setup";
+import {
+  adminSetupScript,
+  installPrivileged,
+  installUserTrust,
+  launchAgentPlist,
+  pfAnchorRules,
+} from "./setup";
 import { controlSocketPath } from "./state-dir";
 
 const temporary = () => mkdtempSync(join(tmpdir(), "silvic-gate-test-"));
@@ -105,11 +111,53 @@ describe("setup artefacts", () => {
     expect(contents).toContain("<key>KeepAlive</key>");
   });
 
-  it("trusts the CA inside the single admin script", () => {
-    const script = adminSetupScript("/tmp/ca.pem");
-    expect(script).toContain("add-trusted-cert");
+  it("keeps trust out of the admin script — root cannot grant it there", () => {
+    const script = adminSetupScript();
+    expect(script).not.toContain("add-trusted-cert");
     expect(script).toContain("pfctl");
     expect(script).toContain("launchctl bootstrap system");
+  });
+
+  it("grants certificate trust in the user domain", async () => {
+    const calls: string[][] = [];
+    await installUserTrust({
+      execute: async (executable, arguments_) => {
+        calls.push([executable, ...arguments_]);
+        return { stdout: "", stderr: "" };
+      },
+    });
+    expect(calls[0]?.slice(0, 4)).toEqual([
+      "security",
+      "add-trusted-cert",
+      "-r",
+      "trustRoot",
+    ]);
+    expect(calls[0]).not.toContain("-d");
+  });
+
+  it("shell-quotes the admin script path for osascript", async () => {
+    // The state directory lives under "Application Support"; an unquoted
+    // space here once broke setup right after the password was typed.
+    const directory = mkdtempSync(join(tmpdir(), "silvic gate spaced "));
+    const previous = process.env["SILVIC_GATE_STATE_DIR"];
+    process.env["SILVIC_GATE_STATE_DIR"] = directory;
+    const calls: string[][] = [];
+    try {
+      await installPrivileged({
+        execute: async (executable, arguments_) => {
+          calls.push([executable, ...arguments_]);
+          return { stdout: "", stderr: "" };
+        },
+      });
+    } finally {
+      if (previous === undefined) delete process.env["SILVIC_GATE_STATE_DIR"];
+      else process.env["SILVIC_GATE_STATE_DIR"] = previous;
+      rmSync(directory, { recursive: true, force: true });
+    }
+    const [call] = calls;
+    expect(call?.[0]).toBe("osascript");
+    expect(call?.[2]).toContain('quoted form of "');
+    expect(call?.[2]).toContain("silvic gate spaced");
   });
 });
 

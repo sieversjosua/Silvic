@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, normalize, relative } from "node:path";
 
@@ -160,10 +160,16 @@ function parseProcessGroups(output: string): ReadonlyMap<number, number> {
 async function readCodexTasks(
   runner: CommandRunner,
 ): Promise<readonly CodexTask[]> {
+  // Codex has kept state in both of these homes over time, and a stale copy
+  // of the abandoned one lingers. Preferring a fixed path once served a
+  // months-old snapshot — every plot looked idle. Read the file Codex
+  // actually writes: the newest.
   const database = [
     join(homedir(), ".codex", "state_5.sqlite"),
     join(homedir(), ".codex", "sqlite", "state_5.sqlite"),
-  ].find(existsSync);
+  ]
+    .filter(existsSync)
+    .toSorted((left, right) => modifiedAt(right) - modifiedAt(left))[0];
   if (!database) return [];
   const query = `
     SELECT
@@ -196,6 +202,14 @@ async function readCodexTasks(
  */
 export function codexTaskMatches(targetPath: string, task: CodexTask): boolean {
   return containsPath(targetPath, task.cwd);
+}
+
+function modifiedAt(path: string): number {
+  try {
+    return statSync(path).mtimeMs;
+  } catch {
+    return 0;
+  }
 }
 
 export function parseCodexTasks(output: string): readonly CodexTask[] {

@@ -67,10 +67,13 @@ export function launchAgentPlist({
 
 /**
  * Everything that needs root, in one reviewable script run behind macOS's
- * native administrator prompt: the pf redirect, its boot loader, and trust
- * for the gate's CA. Silvic never sees the password.
+ * native administrator prompt: the pf redirect and its boot loader. Silvic
+ * never sees the password. Certificate trust deliberately is NOT here: even
+ * root cannot change admin trust settings without an interactive
+ * authorization that the osascript context cannot show (-60005), so trust
+ * is granted in the user domain instead — see installUserTrust.
  */
-export function adminSetupScript(caCertificatePath: string): string {
+export function adminSetupScript(): string {
   return [
     "#!/bin/sh",
     "set -eu",
@@ -86,9 +89,8 @@ export function adminSetupScript(caCertificatePath: string): string {
     `chmod 644 '/Library/LaunchDaemons/${PF_DAEMON_LABEL}.plist'`,
     `launchctl bootout 'system/${PF_DAEMON_LABEL}' 2>/dev/null || true`,
     `launchctl bootstrap system '/Library/LaunchDaemons/${PF_DAEMON_LABEL}.plist'`,
-    `/sbin/pfctl -a '${PF_ANCHOR}' -f '${PF_ANCHOR_FILE}'`,
+    `/sbin/pfctl -a '${PF_ANCHOR}' -f '${PF_ANCHOR_FILE}' 2>/dev/null`,
     "/sbin/pfctl -E 2>/dev/null || true",
-    `security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain '${caCertificatePath}'`,
     "",
   ].join("\n");
 }
@@ -140,13 +142,39 @@ export async function installPrivileged(
 ): Promise<void> {
   const execute = context.execute ?? run;
   const stateDirectory = gateStateDirectory();
-  const caCertificate = join(stateDirectory, "ca", "ca.pem");
   const script = join(stateDirectory, "setup-admin.sh");
-  await writeFile(script, adminSetupScript(caCertificate));
+  await writeFile(script, adminSetupScript());
   await chmod(script, 0o755);
+  // `quoted form of` shell-quotes the path — it lives under "Application
+  // Support", and an unquoted space there once broke the whole setup right
+  // after the person had typed their password.
   await execute("osascript", [
     "-e",
-    `do shell script "/bin/sh ${script.replaceAll('"', '\\"')}" with administrator privileges`,
+    `do shell script "/bin/sh " & quoted form of "${appleScriptString(script)}" with administrator privileges`,
+  ]);
+}
+
+function appleScriptString(value: string): string {
+  return value.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
+}
+
+/**
+ * Trusts the gate's CA in the user domain, where macOS is willing to ask the
+ * person directly (its own password dialog) instead of refusing outright as
+ * it does for admin trust settings from a script. Browsers honour user-domain
+ * roots just the same, and `security verify-cert` — the doctor's check —
+ * evaluates them too.
+ */
+export async function installUserTrust(
+  context: Pick<GateSetupContext, "execute"> = {},
+): Promise<void> {
+  const execute = context.execute ?? run;
+  const caCertificate = join(gateStateDirectory(), "ca", "ca.pem");
+  await execute("security", [
+    "add-trusted-cert",
+    "-r",
+    "trustRoot",
+    caCertificate,
   ]);
 }
 
