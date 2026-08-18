@@ -62,11 +62,57 @@ export class GateManager {
    * Both halves of the install, in the order that needs the fewest prompts:
    * the LaunchAgent first (no privileges; the daemon mints its CA on first
    * start), then the pf redirect and CA trust behind one admin dialog.
+   * Explicitly requested, so it always prompts again.
    */
   async setup(): Promise<void> {
+    await this.ensureAgent();
+    this.privilegedAttempted = true;
+    await installPrivileged();
+    this.forget();
+  }
+
+  /**
+   * The silent half only: put the LaunchAgent in place and wait for the
+   * daemon. Safe to run at every app start — no dialogs, idempotent, and it
+   * mints the CA the privileged half will later trust.
+   */
+  async ensureAgent(): Promise<void> {
+    if (await this.client.status()) return;
     await installLaunchAgent(gateRuntime());
     await this.awaitDaemon(15_000);
+    this.forget();
+  }
+
+  private privilegedAttempted = false;
+  private ensureInFlight: Promise<void> | undefined;
+
+  /**
+   * Makes the gate ready without being asked, escalating only as far as
+   * needed: the silent agent install first, the administrator dialog only
+   * when 443 or certificate trust is still missing. Called from
+   * user-initiated paths (Start, plot creation, a URL wake), so a password
+   * prompt appearing here is the person's own action. A declined prompt is
+   * not repeated automatically — the card's advice and the manual Set up
+   * HTTPS button take over from there.
+   */
+  ensureReady(): Promise<void> {
+    this.ensureInFlight ??= this.escalate().finally(() => {
+      this.ensureInFlight = undefined;
+    });
+    return this.ensureInFlight;
+  }
+
+  private async escalate(): Promise<void> {
+    if ((await this.issue()) === undefined) return;
+    await this.ensureAgent();
+    if ((await this.issue()) === undefined) return;
+    if (this.privilegedAttempted) return;
+    this.privilegedAttempted = true;
     await installPrivileged();
+    this.forget();
+  }
+
+  private forget(): void {
     this.check = { checkedAt: 0, result: Promise.resolve(undefined) };
   }
 

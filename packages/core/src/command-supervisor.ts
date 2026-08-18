@@ -569,7 +569,7 @@ export class CommandSupervisor {
 }
 
 export const proxyAdvice =
-  "The named HTTPS URL needs Silvic's local gate. Run the one-time HTTPS setup, then try again. Or disable Named HTTPS URL in the recipe to use the stable localhost port.";
+  "The named HTTPS URL needs Silvic's local gate. Approve the one-time HTTPS setup prompt when it appears, then press Start again. Or disable Named HTTPS URL in the recipe to use the stable localhost port.";
 
 function keyFor(plotPath: string, id: string): string {
   return `${plotPath}::${id}`;

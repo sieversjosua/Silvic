@@ -241,6 +241,9 @@ if (!app.requestSingleInstanceLock()) {
     nativeTheme.on("updated", () => {
       mainWindow?.setBackgroundColor(currentWindowBackground());
     });
+    // The silent half of gate setup self-heals at every start, so a fresh
+    // machine only ever owes the one administrator prompt.
+    void gate.ensureAgent().catch(() => undefined);
     const leftRunning = settings.get("runningCommands");
     await supervisor.adopt(leftRunning);
     const hasUpdateChannel =
@@ -1619,6 +1622,11 @@ async function startPlotCommand(path: string, id: string): Promise<void> {
     storedPlotPort(workspace.path) ??
     plotPort(recipe.project, plot, takenPlotPorts());
   const address = addressFor(recipe, plot, port);
+  if (address.named) {
+    // Starting a named runtime is the moment the gate must exist: set it up
+    // automatically rather than failing with advice to do so by hand.
+    await gate.ensureReady().catch(() => undefined);
+  }
 
   await supervisor.start({
     plotPath: workspace.path,
@@ -1683,6 +1691,7 @@ async function namedRoutingIssue(
 }
 
 async function requireNamedRouting(address: PlotAddress): Promise<void> {
+  if (address.named) await gate.ensureReady().catch(() => undefined);
   const issue = await namedRoutingIssue(address);
   if (issue) throw new Error(issue);
 }
