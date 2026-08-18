@@ -1,0 +1,177 @@
+import { describe, expect, it } from "vitest";
+
+import type { WorkspaceSnapshot } from "@silvic/contracts";
+
+import { activityLabel, plotListRows } from "./plot-list";
+
+function plot(overrides: Partial<WorkspaceSnapshot>): WorkspaceSnapshot {
+  const name = overrides.name ?? "plot";
+  return {
+    workspaceId: name,
+    projectId: "project-1",
+    path: `/plots/${name}`,
+    repositoryName: "app",
+    branch: name,
+    name,
+    locationKind: "worktree",
+    isPrimary: false,
+    git: {
+      branch: name,
+      ahead: 0,
+      behind: 0,
+      staged: 0,
+      unstaged: 0,
+      untracked: 0,
+      conflicted: 0,
+    },
+    observations: [],
+    ...overrides,
+  };
+}
+
+function session(
+  workspaceId: string,
+  state: "active" | "quiet",
+  updatedAtMs: number,
+) {
+  return {
+    connectorId: "codex",
+    workspaceId,
+    kind: "session",
+    state,
+    label: `${workspaceId} session`,
+    metadata: { updatedAtMs },
+  } as const;
+}
+
+const empty = { commands: [], processes: [], declared: {}, query: "" };
+
+describe("plotListRows", () => {
+  it("keeps the primary checkout first and ranks the rest by urgency", () => {
+    const rows = plotListRows({
+      ...empty,
+      workspaces: [
+        plot({ name: "quiet-one" }),
+        plot({
+          name: "conflicted",
+          git: {
+            branch: "conflicted",
+            ahead: 0,
+            behind: 0,
+            staged: 0,
+            unstaged: 0,
+            untracked: 0,
+            conflicted: 2,
+          },
+        }),
+        plot({
+          name: "working",
+          observations: [session("working", "active", 5)],
+        }),
+        plot({ name: "trunk", isPrimary: true }),
+      ],
+    });
+    expect(rows.map((row) => row.workspace.name)).toEqual([
+      "trunk",
+      "conflicted",
+      "working",
+      "quiet-one",
+    ]);
+  });
+
+  it("lets a running supervised command lift a quiet plot", () => {
+    const rows = plotListRows({
+      ...empty,
+      commands: [["web", { run: "bun run dev", url: true }]],
+      processes: [{ plotPath: "/plots/running", id: "web", status: "running" }],
+      workspaces: [plot({ name: "idle" }), plot({ name: "running" })],
+    });
+    expect(rows.map((row) => row.workspace.name)).toEqual(["running", "idle"]);
+    expect(rows[0]?.runtime?.label).toBe("Running");
+  });
+
+  it("orders equally urgent plots by most recent session activity", () => {
+    const rows = plotListRows({
+      ...empty,
+      workspaces: [
+        plot({ name: "older", observations: [session("older", "quiet", 10)] }),
+        plot({ name: "newer", observations: [session("newer", "quiet", 20)] }),
+      ],
+    });
+    expect(rows.map((row) => row.workspace.name)).toEqual(["newer", "older"]);
+  });
+
+  it("filters by the same query the canvas answers to", () => {
+    const rows = plotListRows({
+      ...empty,
+      query: "auth",
+      workspaces: [plot({ name: "auth-callback" }), plot({ name: "billing" })],
+    });
+    expect(rows.map((row) => row.workspace.name)).toEqual(["auth-callback"]);
+  });
+
+  it("surfaces Convex deployments and counts active sessions", () => {
+    const rows = plotListRows({
+      ...empty,
+      workspaces: [
+        plot({
+          name: "backend",
+          observations: [
+            {
+              connectorId: "convex",
+              workspaceId: "backend",
+              kind: "deployment",
+              state: "active",
+              label: "hearty-lemur-123",
+              detail: "dev",
+              url: "https://dashboard.convex.dev/d/hearty-lemur-123",
+            },
+            session("backend", "active", 30),
+          ],
+        }),
+      ],
+    });
+    const row = rows[0];
+    expect(row?.convex.map((resource) => resource.label)).toEqual([
+      "hearty-lemur-123",
+    ]);
+    expect(row?.convex[0]?.state).toBe("active");
+    expect(row?.convex[0]?.dashboardUrl).toBe(
+      "https://dashboard.convex.dev/d/hearty-lemur-123",
+    );
+    expect(row?.activeSessions).toBe(1);
+  });
+
+  it("shows a supervised convex dev command only while it does something", () => {
+    const commands = [["convex", { run: "bunx convex dev" }]] as const;
+    const running = plotListRows({
+      ...empty,
+      commands,
+      processes: [
+        { plotPath: "/plots/backend", id: "convex", status: "running" },
+      ],
+      workspaces: [plot({ name: "backend" })],
+    });
+    expect(running[0]?.convex.map((resource) => resource.state)).toEqual([
+      "active",
+    ]);
+
+    const stopped = plotListRows({
+      ...empty,
+      commands,
+      workspaces: [plot({ name: "backend" })],
+    });
+    expect(stopped[0]?.convex).toEqual([]);
+  });
+});
+
+describe("activityLabel", () => {
+  it("stays coarse across the useful range", () => {
+    const now = 100 * 24 * 60 * 60_000;
+    expect(activityLabel(undefined, now)).toBeUndefined();
+    expect(activityLabel(now - 30_000, now)).toBe("just now");
+    expect(activityLabel(now - 5 * 60_000, now)).toBe("5m ago");
+    expect(activityLabel(now - 3 * 60 * 60_000, now)).toBe("3h ago");
+    expect(activityLabel(now - 49 * 60 * 60_000, now)).toBe("2d ago");
+  });
+});

@@ -14,10 +14,12 @@ import {
   Monitor,
   Moon,
   MoreHorizontal,
+  Network,
   PackageCheck,
   Play,
   Plus,
   RefreshCw,
+  Rows3,
   Search,
   Settings,
   SlidersHorizontal,
@@ -74,6 +76,7 @@ import {
 import { concernsBranch, failureMessage } from "./errors";
 import { namedRoutingReady, pollNamedRouting } from "./named-routing";
 import { plotResources } from "./plot-resources";
+import { PlotList } from "./PlotList";
 import { useAccelerator, useKeyLayer } from "./shortcuts";
 import { useSilvic } from "./store";
 import {
@@ -82,6 +85,20 @@ import {
   branchForPlotName,
   branchIsTaken,
 } from "./task";
+
+type StageView = "canvas" | "list";
+
+const stageViewKey = "silvic.stage.view.v1";
+
+function readStageView(): StageView {
+  try {
+    return window.localStorage.getItem(stageViewKey) === "list"
+      ? "list"
+      : "canvas";
+  } catch {
+    return "canvas";
+  }
+}
 
 /**
  * Each row can be made the default for the Open button. The control sits on the
@@ -131,6 +148,15 @@ export function App() {
   );
   const { appearance, preference, setPreference } = useAppearance();
   const [query, setQuery] = useState("");
+  const [stageView, setStageViewState] = useState<StageView>(readStageView);
+  const setStageView = (view: StageView) => {
+    setStageViewState(view);
+    try {
+      window.localStorage.setItem(stageViewKey, view);
+    } catch {
+      // A full or unavailable store only costs remembering the choice.
+    }
+  };
   const [menuProjectId, setMenuProjectId] = useState<string>();
   const [recipeProject, setRecipeProject] = useState<ProjectSnapshot>();
   const [teardownPlot, setTeardownPlot] = useState<WorkspaceSnapshot>();
@@ -351,6 +377,7 @@ export function App() {
                 </p>
               </div>
               <div className="stage-actions">
+                <StageViewToggle value={stageView} onChange={setStageView} />
                 <label className="search">
                   <Search size={13} />
                   <input
@@ -394,24 +421,36 @@ export function App() {
               </div>
             </header>
 
-            <Grove
-              project={project}
-              commands={commands}
-              processes={processes}
-              query={query}
-              appearance={appearance}
-              selectedWorkspaceId={workspace?.workspaceId}
-              onSelect={selectWorkspace}
-              onOpen={openWorkspace}
-              onEditRecipe={() => setRecipeProject(project)}
-              defaultHarness={defaultHarness}
-              onSetDefaultHarness={(id) => void setDefaultHarness(id)}
-              onRename={(workspaceId, name) =>
-                window.silvic.renamePlot({ workspaceId, name })
-              }
-              onNewPlot={() => setShowEnvironment(true)}
-              onTeardown={setTeardownPlot}
-            />
+            {stageView === "canvas" ? (
+              <Grove
+                project={project}
+                commands={commands}
+                processes={processes}
+                query={query}
+                appearance={appearance}
+                selectedWorkspaceId={workspace?.workspaceId}
+                onSelect={selectWorkspace}
+                onOpen={openWorkspace}
+                onEditRecipe={() => setRecipeProject(project)}
+                defaultHarness={defaultHarness}
+                onSetDefaultHarness={(id) => void setDefaultHarness(id)}
+                onRename={(workspaceId, name) =>
+                  window.silvic.renamePlot({ workspaceId, name })
+                }
+                onNewPlot={() => setShowEnvironment(true)}
+                onTeardown={setTeardownPlot}
+              />
+            ) : (
+              <PlotList
+                project={project}
+                commands={commands}
+                declaredResources={declaredResources}
+                processes={processes}
+                query={query}
+                selectedWorkspaceId={workspace?.workspaceId}
+                onSelect={selectWorkspace}
+              />
+            )}
           </>
         ) : (
           <EmptyState onAdd={() => void addRoot()} loading={loading} />
@@ -766,6 +805,41 @@ function KeepRunningToggle() {
       />
       Keep commands running when Silvic quits
     </label>
+  );
+}
+
+/**
+ * The canvas shows how the plots relate; the list shows what they are doing.
+ * Both read the same snapshot and drive the same selection, so switching is
+ * free of state loss and the preference is worth remembering across launches.
+ */
+function StageViewToggle({
+  value,
+  onChange,
+}: {
+  value: StageView;
+  onChange(next: StageView): void;
+}) {
+  const options = [
+    ["canvas", "Canvas", <Network size={12} key="c" />],
+    ["list", "List", <Rows3 size={12} key="l" />],
+  ] as const;
+  return (
+    <div className="segmented" role="group" aria-label="View">
+      {options.map(([id, label, icon]) => (
+        <button
+          key={id}
+          type="button"
+          title={label}
+          aria-label={`${label} view`}
+          aria-pressed={value === id}
+          data-active={value === id || undefined}
+          onClick={() => onChange(id)}
+        >
+          {icon}
+        </button>
+      ))}
+    </div>
   );
 }
 
