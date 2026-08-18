@@ -641,7 +641,7 @@ function registerIpc(): void {
     if (removed) {
       // The plot is gone for good, so its named routes must not keep waking
       // it; this is the one moment a route identity is truly deleted.
-      void forgetPlotRoutes(project.rootPath, workspace.path);
+      void forgetPlotRoutes(project.rootPath, workspace.path, workspace.branch);
       publishSnapshot(
         withoutWorkspace(latestSnapshot, workspace.path),
         "replace",
@@ -1111,7 +1111,11 @@ async function provisionPlot(
     recipe.packageManager ??
     (await inspectRepository(workspace.path)).packageManager;
   const remedy = request.remedy;
-  const plot = plotNameIn(workspace.path, recipe.project);
+  const plot = plotNameIn(
+    workspace.path,
+    recipe.project,
+    workspace.isPrimary ? undefined : workspace.git.branch,
+  );
   const port =
     storedPlotPort(workspace.path) ??
     plotPort(recipe.project, plot, takenPlotPorts());
@@ -1307,10 +1311,11 @@ function handleWakeArguments(argv: readonly string[]): void {
 async function forgetPlotRoutes(
   projectRoot: string,
   plotPath: string,
+  branch?: string,
 ): Promise<void> {
   try {
     const recipe = await readRecipe(projectRoot);
-    const plot = plotNameIn(plotPath, recipe.project);
+    const plot = plotNameIn(plotPath, recipe.project, branch);
     for (const [id, command] of Object.entries(recipe.commands)) {
       if (!routes(command)) continue;
       await gate.removeRoute(
@@ -1623,7 +1628,11 @@ async function startPlotCommand(
   if (!command) {
     throw new Error(`This repository declares no command called ${id}`);
   }
-  const plot = plotNameIn(workspace.path, recipe.project);
+  const plot = plotNameIn(
+    workspace.path,
+    recipe.project,
+    workspace.isPrimary ? undefined : workspace.git.branch,
+  );
   const port =
     storedPlotPort(workspace.path) ??
     plotPort(recipe.project, plot, takenPlotPorts());
@@ -1712,12 +1721,20 @@ async function requireNamedRouting(address: PlotAddress): Promise<void> {
   if (issue) throw new Error(issue);
 }
 
-/** Plots are directories named `<project>-<plot>`; older ones are `<plot>`. */
-function plotNameIn(path: string, project: string): string {
+/**
+ * Plots are directories named `<project>-<plot>`; older ones are `<plot>`.
+ * Worktrees made by other tools are often named after the repository itself
+ * (Codex: `~/.codex/worktrees/<id>/mono`) — that folder says nothing and
+ * would collide with the primary checkout's route, so the branch is the
+ * speaking identity such a plot falls back to.
+ */
+function plotNameIn(path: string, project: string, branch?: string): string {
   const folder = basename(path);
-  return folder.startsWith(`${project}-`)
+  const stripped = folder.startsWith(`${project}-`)
     ? folder.slice(project.length + 1)
     : folder;
+  if ((stripped === project || stripped.length === 0) && branch) return branch;
+  return stripped;
 }
 
 /** The address a plot was already given, so a repair cannot move it. */

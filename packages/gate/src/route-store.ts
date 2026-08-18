@@ -43,6 +43,20 @@ export class RouteStore {
   }
 
   set(route: Omit<GateRoute, "updatedAt">): GateRoute {
+    // One route per plot command: when a plot's name derivation improves,
+    // the freshly published name replaces the stale one instead of leaving
+    // a second URL that fights over the same upstream.
+    if (route.plotPath && route.commandId) {
+      for (const existing of this.routes.values()) {
+        if (
+          existing.name !== route.name &&
+          existing.plotPath === route.plotPath &&
+          existing.commandId === route.commandId
+        ) {
+          this.routes.delete(existing.name);
+        }
+      }
+    }
     const previous = this.routes.get(route.name);
     const next: GateRoute = {
       ...previous,

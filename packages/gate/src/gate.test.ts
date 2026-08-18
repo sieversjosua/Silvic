@@ -48,6 +48,30 @@ describe("RouteStore", () => {
     }
   });
 
+  it("replaces a plot command's stale route name on re-publish", () => {
+    const directory = temporary();
+    try {
+      const store = new RouteStore(directory);
+      store.set({
+        name: "web-mono-mono",
+        port: 4322,
+        plotPath: "/w/65e0/mono",
+        commandId: "web",
+      });
+      store.set({
+        name: "web-feature-billing-foundation-mono",
+        port: 4322,
+        plotPath: "/w/65e0/mono",
+        commandId: "web",
+      });
+      expect(store.list().map((route) => route.name)).toEqual([
+        "web-feature-billing-foundation-mono",
+      ]);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it("drops entries that are not routes", () => {
     const directory = temporary();
     try {
