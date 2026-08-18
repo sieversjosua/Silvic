@@ -1252,7 +1252,8 @@ async function revivePlotCommands(
     if (entry.status !== "running" && entry.status !== "starting") continue;
     if (alive.has(`${normalize(entry.plotPath)}::${entry.id}`)) continue;
     try {
-      await startPlotCommand(entry.plotPath, entry.id);
+      // Not interactive: nobody asked just now, so no surprise admin dialog.
+      await startPlotCommand(entry.plotPath, entry.id, false);
     } catch {
       // A plot that no longer exists has nothing to revive.
     }
@@ -1603,7 +1604,12 @@ async function commitsHeldOnlyHere(
  * get the plot's stable localhost port. A recipe can additionally opt into a
  * named address through portless.
  */
-async function startPlotCommand(path: string, id: string): Promise<void> {
+async function startPlotCommand(
+  path: string,
+  id: string,
+  /** Whether a person just asked, which may show the admin dialog again. */
+  interactive = true,
+): Promise<void> {
   const workspace = knownWorkspace(path);
   const project = latestSnapshot.projects.find((candidate) =>
     candidate.workspaces.some(
@@ -1622,10 +1628,16 @@ async function startPlotCommand(path: string, id: string): Promise<void> {
     storedPlotPort(workspace.path) ??
     plotPort(recipe.project, plot, takenPlotPorts());
   const address = addressFor(recipe, plot, port);
+  let routeAdvice: string | undefined;
   if (address.named) {
     // Starting a named runtime is the moment the gate must exist: set it up
-    // automatically rather than failing with advice to do so by hand.
-    await gate.ensureReady().catch(() => undefined);
+    // automatically rather than failing with advice to do so by hand. When
+    // that fails, the reason goes onto the card instead of a generic hint.
+    try {
+      await gate.ensureReady({ reprompt: interactive });
+    } catch (error) {
+      routeAdvice = error instanceof Error ? error.message : String(error);
+    }
   }
 
   await supervisor.start({
@@ -1654,6 +1666,7 @@ async function startPlotCommand(path: string, id: string): Promise<void> {
       PORT: String(port),
     },
     canRoute: await gate.available(),
+    ...(routeAdvice ? { routeAdvice } : {}),
     detached: settings.get("keepCommandsRunning"),
   });
 }
@@ -1691,7 +1704,10 @@ async function namedRoutingIssue(
 }
 
 async function requireNamedRouting(address: PlotAddress): Promise<void> {
-  if (address.named) await gate.ensureReady().catch(() => undefined);
+  if (!address.named) return;
+  // Creation is explicit, so the setup dialog may appear again — and when
+  // setup fails, its concrete reason beats the generic diagnosis.
+  await gate.ensureReady({ reprompt: true });
   const issue = await namedRoutingIssue(address);
   if (issue) throw new Error(issue);
 }

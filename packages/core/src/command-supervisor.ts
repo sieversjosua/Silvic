@@ -41,8 +41,10 @@ export interface StartRequest {
   /** `{command}-{plot}-{project}`, the name a routed command is published as. */
   routeName: string;
   environment: Record<string, string>;
-  /** Whether portless is on PATH when the recipe opted into publishing. */
+  /** Whether the gate is ready when the recipe opted into publishing. */
   canRoute: boolean;
+  /** Why it is not, in place of the generic advice. */
+  routeAdvice?: string;
   /** Left running when Silvic quits, rather than ending with it. */
   detached: boolean;
 }
@@ -148,7 +150,7 @@ export class CommandSupervisor {
     }
     const named = routes(request.command);
     if (named && !request.canRoute) {
-      this.refuse(request, proxyAdvice);
+      this.refuse(request, request.routeAdvice ?? proxyAdvice);
       return;
     }
     await this.spawn(request, named);

@@ -1,5 +1,6 @@
+import { spawn } from "node:child_process";
+import { appendFileSync, readFileSync } from "node:fs";
 import { request as httpsRequest } from "node:https";
-import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { app } from "electron";
@@ -72,18 +73,51 @@ export class GateManager {
   }
 
   /**
-   * The silent half only: put the LaunchAgent in place and wait for the
-   * daemon. Safe to run at every app start — no dialogs, idempotent, and it
-   * mints the CA the privileged half will later trust.
+   * The silent half only: get a daemon running, whatever it takes. The
+   * LaunchAgent is the preferred home (it survives logouts), but macOS can
+   * quietly refuse to start new background items on managed machines — so
+   * when launchd does not deliver, the gate is spawned directly from this
+   * app instead of becoming a hard dependency. Every step is written to
+   * gate-setup.log, because a silent failure here once cost a day.
    */
   async ensureAgent(): Promise<void> {
     if (await this.client.status()) return;
-    await installLaunchAgent(gateRuntime());
-    await this.awaitDaemon(15_000);
-    this.forget();
+    this.note("gate unreachable; installing the launch agent");
+    try {
+      await installLaunchAgent(gateRuntime());
+    } catch (error) {
+      this.note(`launch agent install failed: ${describe(error)}`);
+    }
+    if (await this.pollDaemon(5_000)) {
+      this.note("gate came up via the launch agent");
+      this.forget();
+      return;
+    }
+    if (!this.fallbackSpawned) {
+      this.fallbackSpawned = true;
+      this.note("launch agent did not come up; spawning the gate directly");
+      const runtime = gateRuntime();
+      const child = spawn(runtime.nodeExecutable, [runtime.gateScript], {
+        env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+        detached: true,
+        stdio: "ignore",
+      });
+      child.once("error", () => undefined);
+      child.unref();
+    }
+    if (await this.pollDaemon(10_000)) {
+      this.note("gate came up via direct spawn");
+      this.forget();
+      return;
+    }
+    this.note("gate did not come up at all");
+    throw new Error(
+      `The Silvic gate service did not start. macOS may be blocking Silvic's background item — check System Settings → General → Login Items & Extensions, then press Start again.${this.gateLogTail()}`,
+    );
   }
 
   private privilegedAttempted = false;
+  private fallbackSpawned = false;
   private ensureInFlight: Promise<void> | undefined;
 
   /**
@@ -91,11 +125,14 @@ export class GateManager {
    * needed: the silent agent install first, the administrator dialog only
    * when 443 or certificate trust is still missing. Called from
    * user-initiated paths (Start, plot creation, a URL wake), so a password
-   * prompt appearing here is the person's own action. A declined prompt is
-   * not repeated automatically — the card's advice and the manual Set up
-   * HTTPS button take over from there.
+   * prompt appearing here is the person's own action. `reprompt` marks an
+   * explicit click, which may show the dialog again; background paths ask
+   * at most once per app run.
    */
-  ensureReady(): Promise<void> {
+  ensureReady({
+    reprompt = false,
+  }: { reprompt?: boolean } = {}): Promise<void> {
+    if (reprompt) this.privilegedAttempted = false;
     this.ensureInFlight ??= this.escalate().finally(() => {
       this.ensureInFlight = undefined;
     });
@@ -108,7 +145,16 @@ export class GateManager {
     if ((await this.issue()) === undefined) return;
     if (this.privilegedAttempted) return;
     this.privilegedAttempted = true;
-    await installPrivileged();
+    this.note("requesting the one-time administrator setup");
+    try {
+      await installPrivileged();
+    } catch (error) {
+      this.note(`administrator setup failed: ${describe(error)}`);
+      throw new Error(
+        `The one-time HTTPS setup was not completed: ${describe(error)}. Press Start to try again.`,
+      );
+    }
+    this.note("administrator setup completed");
     this.forget();
   }
 
@@ -124,15 +170,38 @@ export class GateManager {
     }
   }
 
-  private async awaitDaemon(timeoutMs: number): Promise<void> {
+  private async pollDaemon(timeoutMs: number): Promise<boolean> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
-      if (await this.client.status()) return;
+      if (await this.client.status()) return true;
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
-    throw new Error(
-      "The Silvic gate service did not come up. Check that Silvic is allowed to run login items, then try again.",
-    );
+    return false;
+  }
+
+  /** Setup breadcrumbs beside the app's other logs; grep-able after the fact. */
+  private note(step: string): void {
+    try {
+      appendFileSync(
+        join(app.getPath("userData"), "gate-setup.log"),
+        `${new Date().toISOString()} ${step}\n`,
+      );
+    } catch {
+      // Diagnostics must never break the setup they describe.
+    }
+  }
+
+  private gateLogTail(): string {
+    try {
+      const tail = readFileSync(join(gateStateDirectory(), "gate.log"), "utf8")
+        .trimEnd()
+        .split("\n")
+        .slice(-3)
+        .join(" · ");
+      return tail ? ` Gate log: ${tail}` : "";
+    } catch {
+      return "";
+    }
   }
 
   /**
@@ -171,6 +240,10 @@ export class GateManager {
       request.end();
     });
   }
+}
+
+function describe(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 /** Where launchd finds a Node runtime and the gate script, dev and packaged. */
