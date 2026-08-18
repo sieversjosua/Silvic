@@ -213,7 +213,10 @@ export class CommandSupervisor {
 
     const note = (chunk: Buffer) => {
       log.write(chunk);
-      recent = `${recent}${chunk.toString("utf8")}`.slice(-2_000);
+      // Generous, because the dev server announces its URL once, early —
+      // a monorepo's build chatter must not scroll that anchor away before
+      // listener discovery reads it.
+      recent = `${recent}${chunk.toString("utf8")}`.slice(-20_000);
     };
     child.stdout?.on("data", note);
     child.stderr?.on("data", note);

@@ -205,6 +205,46 @@ describe("GateRoutePublisher", () => {
     );
   });
 
+  it("prefers the configured-port dev server to an ephemeral HTML sidecar", async () => {
+    const { link, routes } = recordingLink();
+    // Astro answers on ::1:4322; Cloudflare's workerd, in the same process
+    // tree, serves SSR HTML from an OS-assigned ephemeral port. Its URL
+    // announcement has long scrolled out of the output.
+    const probe = vi.fn(async (url: string) => {
+      if (url === "http://[::1]:4322/" || url === "http://127.0.0.1:53483/") {
+        return { status: 200, contentType: "text/html; charset=utf-8" };
+      }
+      if (url === "https://web-billing-mono.localhost/") {
+        return routes.get("web-billing-mono")?.port === 4322
+          ? { status: 200, contentType: "text/html; charset=utf-8" }
+          : undefined;
+      }
+      return undefined;
+    });
+    const publisher = new GateRoutePublisher({
+      link,
+      probe,
+      inspect: async () => [
+        { processId: 54738, port: 4322 },
+        { processId: 54964, port: 53483 },
+      ],
+      wait: async () => undefined,
+    });
+
+    const published = await publisher.publish({
+      routeName: "web-billing-mono",
+      processId: 54698,
+      expectedPort: 8691,
+      output: () => "",
+      timeoutMs: 10,
+    });
+
+    expect(published).toEqual({ port: 4322 });
+    expect(link.set).toHaveBeenCalledWith(
+      expect.objectContaining({ host: "::1", port: 4322 }),
+    );
+  });
+
   it("refuses to publish a health endpoint when no web server appears", async () => {
     let elapsed = 0;
     const { link } = recordingLink();

@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -5,9 +6,14 @@ import react from "@vitejs/plugin-react";
 import { defineConfig, externalizeDepsPlugin } from "electron-vite";
 
 const directory = fileURLToPath(new URL(".", import.meta.url));
+const { version } = JSON.parse(
+  readFileSync(resolve(directory, "package.json"), "utf8"),
+) as { version: string };
 
 export default defineConfig({
   main: {
+    // The gate daemon reports this so the app can restart it after updates.
+    define: { __SILVIC_GATE_VERSION__: JSON.stringify(version) },
     plugins: [
       externalizeDepsPlugin({
         exclude: [

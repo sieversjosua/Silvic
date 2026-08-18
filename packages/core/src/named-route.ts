@@ -259,6 +259,10 @@ async function selectListener({
             : 0) +
           (candidate.listener.processId !== 0 ? 2_000 : 0) +
           (announced.has(candidate.listener.port) ? 1_000 : 0) +
+          // Internal runtimes (Cloudflare's workerd, inspector bridges)
+          // bind OS-assigned ephemeral ports and can still serve HTML; a
+          // dev server people are meant to visit sits on a configured port.
+          (candidate.listener.port < 49_152 ? 500 : 0) +
           (candidate.listener.port === expectedPort ? 100 : 0) +
           (candidate.response.status >= 200 && candidate.response.status < 400
             ? 10

@@ -88,7 +88,22 @@ export class GateManager {
    * gate-setup.log, because a silent failure here once cost a day.
    */
   async ensureAgent(): Promise<void> {
-    if (await this.client.status()) return;
+    const status = await this.client.status();
+    if (status) {
+      // launchd's KeepAlive restarts a crashed daemon, but an app update
+      // that swapped gate.mjs under a living one goes unnoticed — the old
+      // code would keep serving until the next reboot.
+      if (status.version !== app.getVersion() && !this.refreshedDaemon) {
+        this.refreshedDaemon = true;
+        this.note(
+          `gate is ${status.version}, app is ${app.getVersion()}; restarting the daemon`,
+        );
+        await installLaunchAgent(gateRuntime());
+        await this.pollDaemon(5_000);
+        this.forget();
+      }
+      return;
+    }
     this.note("gate unreachable; installing the launch agent");
     try {
       await installLaunchAgent(gateRuntime());
@@ -126,6 +141,7 @@ export class GateManager {
   private privilegedAttempted = false;
   private trustAttempted = false;
   private fallbackSpawned = false;
+  private refreshedDaemon = false;
   private ensureInFlight: Promise<void> | undefined;
 
   /**

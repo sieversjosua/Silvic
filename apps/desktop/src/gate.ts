@@ -6,8 +6,14 @@
  */
 import { startGate } from "@silvic/gate";
 
+/** Baked in at build time; the app compares it to restart stale daemons. */
+declare const __SILVIC_GATE_VERSION__: string;
+
 const gate = await startGate({
-  version: process.env["SILVIC_GATE_VERSION"] ?? "bundled",
+  version:
+    typeof __SILVIC_GATE_VERSION__ === "string"
+      ? __SILVIC_GATE_VERSION__
+      : "dev",
 });
 
 const finish = async (): Promise<void> => {
