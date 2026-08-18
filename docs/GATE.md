@@ -85,6 +85,13 @@ process tree, probes candidates, and picks the browser-facing listener
 `portless alias`. Health checks compare the direct upstream and the named URL
 exactly as before.
 
+A daemon outage is never fatal to a command. The gate can vanish under a
+running Silvic — an app update replaces its file, launchd stops it — and the
+dev server it points at is fine either way. The app brings the daemon back and
+retries once (`GateManager.withDaemon`); if it still refuses, publishing fails
+with `GateUnreachable`, which leaves the command running with a sentence on
+its card and tries again on the next tick instead of killing it.
+
 Two rules keep a name off an internal listener. A port at or above 49152 was
 handed out by the OS, so it belongs to a runtime nobody is meant to visit —
 Cloudflare's workerd serves the app's SSR HTML from one, a second or two

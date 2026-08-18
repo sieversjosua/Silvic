@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CommandSupervisor } from "./command-supervisor";
-import type { NamedRoutePublisher } from "./named-route";
+import { GateUnreachable, type NamedRoutePublisher } from "./named-route";
 
 const temporaryDirectories: string[] = [];
 
@@ -211,6 +211,56 @@ describe("CommandSupervisor", () => {
     await vi.waitFor(() => expect(supervisor.list()[0]?.targetPort).toBe(4322));
     expect(publish).toHaveBeenCalledTimes(2);
     expect(supervisor.list()[0]?.status).toBe("running");
+    supervisor.stopAll();
+  });
+
+  it("keeps a running command when only the gate is missing", async () => {
+    const logDirectory = await mkdtemp(join(tmpdir(), "silvic-supervisor-"));
+    temporaryDirectories.push(logDirectory);
+    const publish = vi
+      .fn<NamedRoutePublisher["publish"]>()
+      .mockRejectedValueOnce(
+        new GateUnreachable("web-lost-gate.localhost has no address yet"),
+      )
+      .mockResolvedValue({ port: 4321 });
+    const routePublisher: NamedRoutePublisher = {
+      publish,
+      improve: vi.fn().mockResolvedValue(undefined),
+      healthy: vi.fn().mockResolvedValue(false),
+      remove: vi.fn().mockResolvedValue(undefined),
+    };
+    const supervisor = new CommandSupervisor({
+      logDirectory,
+      onChange: () => {},
+      routePublisher,
+      routeHealthIntervalMs: 5,
+    });
+
+    await supervisor.start({
+      plotPath: logDirectory,
+      id: "web",
+      command: { run: "sleep 10", url: true },
+      routeName: "web-lost-gate",
+      environment: { PORT: "4321" },
+      canRoute: true,
+      detached: false,
+    });
+
+    // The dev server survives the outage, says why, and is republished as
+    // soon as the daemon answers again.
+    await vi.waitFor(() =>
+      expect(supervisor.list()[0]).toMatchObject({
+        status: "running",
+        advice: expect.stringContaining("no address yet"),
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(supervisor.list()[0]).toMatchObject({
+        status: "running",
+        targetPort: 4321,
+      }),
+    );
+    expect(supervisor.list()[0]).not.toHaveProperty("advice");
     supervisor.stopAll();
   });
 

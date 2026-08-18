@@ -30,10 +30,31 @@ export class GateManager {
   constructor(onWake: (wake: GateWake) => void) {
     this.client = new GateClient({ onWake });
     const link: GateRouteLink = {
-      set: (route) => this.client.routeSet(route),
-      suspend: (name) => this.client.routeSuspend(name),
+      set: (route) => this.withDaemon(() => this.client.routeSet(route)),
+      suspend: (name) => this.withDaemon(() => this.client.routeSuspend(name)),
     };
     this.publisher = new GateRoutePublisher({ link });
+  }
+
+  /**
+   * The daemon can go missing under a running Silvic — an app update replaces
+   * its file, launchd stops it, someone unloads the agent. Bring it back and
+   * try once more before anyone upstream hears about it, and say it in a
+   * sentence rather than handing on `connect ENOENT …`.
+   */
+  private async withDaemon<Result>(
+    act: () => Promise<Result>,
+  ): Promise<Result> {
+    try {
+      return await act();
+    } catch {
+      await this.ensureAgent();
+      try {
+        return await act();
+      } catch {
+        throw new Error("The Silvic gate service is not answering");
+      }
+    }
   }
 
   /** Short-lived because the one-time setup may finish while Silvic is open. */

@@ -63,6 +63,14 @@ interface ListenerSelection {
   settled: boolean;
 }
 
+/**
+ * The gate daemon could not be told about the route. Distinct from "no web
+ * server appeared", because the command itself is fine: an app update swaps
+ * the daemon's file under a running Silvic, and launchd can stop it at any
+ * time. Only the address is missing, so nothing should be killed over it.
+ */
+export class GateUnreachable extends Error {}
+
 /** macOS hands these out to whoever asks; nobody configures one. */
 const firstEphemeralPort = 49_152;
 
@@ -141,6 +149,8 @@ export class GateRoutePublisher implements NamedRoutePublisher {
 
     /** When an internal listener first offered itself in place of a real one. */
     let settlingSince: number | undefined;
+    /** Why the gate refused the route, while it keeps refusing it. */
+    let unreachable: string | undefined;
 
     while (true) {
       const selected = await this.choose(request);
@@ -159,13 +169,23 @@ export class GateRoutePublisher implements NamedRoutePublisher {
       }
       if (selected) {
         const targetPort = selected.listener.port;
-        await this.link.set({
-          name: request.routeName,
-          host: selected.hostname,
-          port: targetPort,
-          ...(request.plotPath ? { plotPath: request.plotPath } : {}),
-          ...(request.commandId ? { commandId: request.commandId } : {}),
-        });
+        try {
+          await this.link.set({
+            name: request.routeName,
+            host: selected.hostname,
+            port: targetPort,
+            ...(request.plotPath ? { plotPath: request.plotPath } : {}),
+            ...(request.commandId ? { commandId: request.commandId } : {}),
+          });
+        } catch (error) {
+          // The daemon may be restarting: keep asking rather than giving the
+          // dev server's listener up over a socket that is coming back.
+          unreachable = `${request.routeName}.localhost has no address yet: ${describe(error)}`;
+          if (this.now() >= deadline) throw new GateUnreachable(unreachable);
+          await this.wait(Math.min(250, Math.max(0, deadline - this.now())));
+          continue;
+        }
+        unreachable = undefined;
         this.families.set(request.routeName, selected.hostname);
 
         while (this.now() < deadline) {
@@ -183,6 +203,7 @@ export class GateRoutePublisher implements NamedRoutePublisher {
       }
 
       if (this.now() >= deadline) {
+        if (unreachable) throw new GateUnreachable(unreachable);
         throw new Error(latest);
       }
       await this.wait(Math.min(250, Math.max(0, deadline - this.now())));
@@ -227,13 +248,18 @@ export class GateRoutePublisher implements NamedRoutePublisher {
   ): Promise<PublishedNamedRoute | undefined> {
     const selected = await this.choose(request);
     if (!selected?.settled) return undefined;
-    await this.link.set({
-      name: request.routeName,
-      host: selected.hostname,
-      port: selected.listener.port,
-      ...(request.plotPath ? { plotPath: request.plotPath } : {}),
-      ...(request.commandId ? { commandId: request.commandId } : {}),
-    });
+    try {
+      await this.link.set({
+        name: request.routeName,
+        host: selected.hostname,
+        port: selected.listener.port,
+        ...(request.plotPath ? { plotPath: request.plotPath } : {}),
+        ...(request.commandId ? { commandId: request.commandId } : {}),
+      });
+    } catch {
+      // An improvement is an offer, never a demand: the next tick asks again.
+      return undefined;
+    }
     this.families.set(request.routeName, selected.hostname);
     return { port: selected.listener.port };
   }
@@ -253,7 +279,9 @@ export class GateRoutePublisher implements NamedRoutePublisher {
   /** Stopping suspends rather than deletes: the URL keeps waking the plot. */
   async remove(routeName: string): Promise<void> {
     this.families.delete(routeName);
-    await this.link.suspend(routeName);
+    // A gate that cannot be told has nothing to suspend: it publishes no
+    // route at all until it reads its store again.
+    await this.link.suspend(routeName).catch(() => undefined);
   }
 }
 
@@ -338,6 +366,10 @@ async function selectListener({
         );
       })[0]
   );
+}
+
+function describe(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function browserFacing(response: RouteProbe): boolean {

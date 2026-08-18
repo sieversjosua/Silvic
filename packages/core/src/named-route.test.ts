@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   GateRoutePublisher,
+  GateUnreachable,
   descendantListenerPorts,
   type GateRouteLink,
 } from "./named-route";
@@ -379,6 +380,101 @@ describe("GateRoutePublisher", () => {
       }),
     ).resolves.toBeUndefined();
     expect(link.set).not.toHaveBeenCalled();
+  });
+
+  it("keeps asking while the gate daemon is restarting", async () => {
+    let elapsed = 0;
+    const { link, routes } = recordingLink();
+    const gateDown = { until: 1_000 };
+    const set = vi.fn(async (route: Parameters<GateRouteLink["set"]>[0]) => {
+      if (elapsed < gateDown.until) {
+        throw new Error("connect ENOENT /…/silvic-gate/gate.sock");
+      }
+      await link.set(route);
+    });
+    const publisher = new GateRoutePublisher({
+      link: { ...link, set },
+      probe: async (url) =>
+        url === "http://127.0.0.1:4321/" ||
+        (url === "https://web-restarting-gate.localhost/" &&
+          routes.has("web-restarting-gate"))
+          ? { status: 200, contentType: "text/html; charset=utf-8" }
+          : undefined,
+      inspect: async () => [{ processId: 4001, port: 4321 }],
+      now: () => elapsed,
+      wait: async (milliseconds) => {
+        elapsed += milliseconds;
+      },
+    });
+
+    await expect(
+      publisher.publish({
+        routeName: "web-restarting-gate",
+        processId: 4000,
+        expectedPort: 4321,
+        output: () => "",
+        timeoutMs: 30_000,
+      }),
+    ).resolves.toEqual({ port: 4321 });
+  });
+
+  it("names the gate rather than the command when it never answers", async () => {
+    let elapsed = 0;
+    const { link } = recordingLink();
+    const publisher = new GateRoutePublisher({
+      link: {
+        ...link,
+        set: async () => {
+          throw new Error("connect ENOENT /…/silvic-gate/gate.sock");
+        },
+      },
+      probe: async (url) =>
+        url === "http://127.0.0.1:4321/"
+          ? { status: 200, contentType: "text/html; charset=utf-8" }
+          : undefined,
+      inspect: async () => [{ processId: 4001, port: 4321 }],
+      now: () => elapsed,
+      wait: async (milliseconds) => {
+        elapsed += milliseconds;
+      },
+    });
+
+    await expect(
+      publisher.publish({
+        routeName: "web-lost-gate",
+        processId: 4000,
+        expectedPort: 4321,
+        output: () => "",
+        timeoutMs: 1_000,
+      }),
+    ).rejects.toBeInstanceOf(GateUnreachable);
+  });
+
+  it("leaves a route in place when the gate refuses an improvement", async () => {
+    const { link } = recordingLink();
+    const publisher = new GateRoutePublisher({
+      link: {
+        ...link,
+        set: async () => {
+          throw new Error("connect ENOENT /…/silvic-gate/gate.sock");
+        },
+      },
+      probe: async (url) =>
+        url === "http://127.0.0.1:4321/"
+          ? { status: 200, contentType: "text/html; charset=utf-8" }
+          : undefined,
+      inspect: async () => [{ processId: 4001, port: 4321 }],
+      wait: async () => undefined,
+    });
+
+    await expect(
+      publisher.improve({
+        routeName: "web-lost-gate",
+        processId: 4000,
+        expectedPort: 4321,
+        output: () => "",
+      }),
+    ).resolves.toBeUndefined();
   });
 
   it("refuses to publish a health endpoint when no web server appears", async () => {

@@ -8,7 +8,11 @@ import { promisify } from "node:util";
 import type { PlotCommand } from "@silvic/contracts";
 
 import { resolvedCommandPath } from "./command-runner";
-import { internalPort, type NamedRoutePublisher } from "./named-route";
+import {
+  GateUnreachable,
+  internalPort,
+  type NamedRoutePublisher,
+} from "./named-route";
 import { routes } from "./plot-address";
 
 const executeFile = promisify(execFile);
@@ -293,6 +297,29 @@ export class CommandSupervisor {
     } catch (error) {
       const entry = this.running.get(key);
       if (!entry || entry.processId !== processId) return;
+      if (error instanceof GateUnreachable) {
+        // Nothing is wrong with the command — only with the daemon that hands
+        // out its address. Killing a working dev server over that would be
+        // the one outcome nobody can undo, so it keeps running, says why, and
+        // is published again as soon as the gate answers.
+        this.running.set(key, {
+          ...entry,
+          status: "running",
+          advice: error.message,
+        });
+        this.announce();
+        this.retryRoute(key, processId, () =>
+          this.bindRoute({
+            key,
+            processId,
+            routeName,
+            expectedPort,
+            output,
+            ...(timeoutMs === undefined ? {} : { timeoutMs }),
+          }),
+        );
+        return;
+      }
       this.failRoutedCommand(
         key,
         processId,
@@ -326,6 +353,23 @@ export class CommandSupervisor {
       output: () => output,
       timeoutMs: 15_000,
     });
+  }
+
+  /** The next attempt at an address, on the same timer Stop already clears. */
+  private retryRoute(
+    key: string,
+    processId: number,
+    act: () => Promise<void>,
+  ): void {
+    this.clearRouteHealth(key);
+    const timer = setTimeout(() => {
+      const entry = this.running.get(key);
+      if (!entry || entry.processId !== processId) return;
+      if (entry.status === "stopping" || entry.status === "failed") return;
+      void act();
+    }, this.options.routeHealthIntervalMs ?? 10_000);
+    timer.unref();
+    this.routeHealthTimers.set(key, timer);
   }
 
   private scheduleRouteHealth(key: string, processId: number): void {
