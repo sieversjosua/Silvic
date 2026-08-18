@@ -1,4 +1,4 @@
-import { existsSync, statSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, normalize, relative } from "node:path";
 
@@ -199,9 +199,34 @@ async function readCodexTasks(
  * apps/web of a monorepo plot is that plot's activity. Requiring the exact
  * worktree root left such plots looking idle, and the grove folded them away
  * while Codex was busy inside.
+ *
+ * Codex itself records the *container* as a session's directory
+ * (`~/.codex/worktrees/65e0`, one level above the repo it made there), so a
+ * cwd that holds exactly one repository counts for that repository too. The
+ * one-repo requirement keeps a session run in a folder of many projects
+ * from lighting all of them up.
  */
-export function codexTaskMatches(targetPath: string, task: CodexTask): boolean {
-  return containsPath(targetPath, task.cwd);
+export function codexTaskMatches(
+  targetPath: string,
+  task: CodexTask,
+  resolveSoleRepository: (cwd: string) => string | undefined = soleRepositoryIn,
+): boolean {
+  if (containsPath(targetPath, task.cwd)) return true;
+  if (!containsPath(task.cwd, targetPath)) return false;
+  const sole = resolveSoleRepository(task.cwd);
+  return sole !== undefined && normalize(sole) === normalize(targetPath);
+}
+
+function soleRepositoryIn(cwd: string): string | undefined {
+  try {
+    const repositories = readdirSync(cwd, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => join(cwd, entry.name))
+      .filter((candidate) => existsSync(join(candidate, ".git")));
+    return repositories.length === 1 ? repositories[0] : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function modifiedAt(path: string): number {

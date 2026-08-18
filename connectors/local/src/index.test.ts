@@ -109,6 +109,26 @@ describe("createLocalContextConnector", () => {
     );
   });
 
+  it("counts a session recorded in a worktree container holding one repo", () => {
+    const task = (cwd: string) => ({
+      id: "task",
+      cwd,
+      title: "Fix billing",
+      updatedAtMs: 1_786_610_000_123,
+    });
+    const soleRepo = (cwd: string) =>
+      cwd === "/w/65e0" ? "/w/65e0/mono" : undefined;
+    // Codex records ~/.codex/worktrees/65e0 as the cwd of a session working
+    // in the mono repository it created inside.
+    expect(codexTaskMatches("/w/65e0/mono", task("/w/65e0"), soleRepo)).toBe(
+      true,
+    );
+    // A folder of many repositories claims none of them.
+    expect(codexTaskMatches("/dev/mono", task("/dev"), () => undefined)).toBe(
+      false,
+    );
+  });
+
   it("keeps the Codex task activity timestamp used by the grove", () => {
     const [task] = parseCodexTasks(
       JSON.stringify([
