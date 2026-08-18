@@ -51,9 +51,9 @@ The tag must exactly match `apps/desktop/package.json`. GitHub Actions then:
 5. verifies the signature, Gatekeeper assessment, ticket and update metadata;
 6. creates the public GitHub Release only after every verification passes.
 
-An installed Silvic checks shortly after launch and every four hours. It never
-downloads without a click: **Update to …** downloads the release, and only
-**Restart to update** quits and installs it.
+An installed Silvic checks at every launch and every four hours, and downloads
+a release it finds without being asked. Installing stays a click: only
+**Restart to update** quits Silvic and replaces it.
 
 On macOS the app must live in an Applications folder before Squirrel can replace
 it. A copy opened directly from the read-only DMG therefore offers **Move to

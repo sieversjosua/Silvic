@@ -260,6 +260,7 @@ if (!app.requestSingleInstanceLock()) {
         hasUpdateChannel &&
         process.platform === "darwin" &&
         !app.isInApplicationsFolder(),
+      downloadAutomatically: true,
       onState: publishUpdateState,
     });
     installApplicationMenu();
@@ -840,12 +841,13 @@ function scheduleAutomaticUpdateChecks(): void {
   ) {
     return;
   }
-  const initialCheck = setTimeout(() => void desktopUpdater?.check(), 10_000);
+  // Every start asks, so a Silvic that is opened daily is never more than a
+  // day behind — and one left running for a week still catches up.
+  void desktopUpdater?.check();
   const recurringCheck = setInterval(
     () => void desktopUpdater?.check(),
     4 * 60 * 60 * 1_000,
   );
-  initialCheck.unref();
   recurringCheck.unref();
 }
 

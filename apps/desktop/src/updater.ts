@@ -43,6 +43,8 @@ export class DesktopUpdater {
       currentVersion: string;
       enabled: boolean;
       relocationRequired?: boolean;
+      /** Fetch a found release right away instead of waiting for a click. */
+      downloadAutomatically?: boolean;
       onState(state: AppUpdateState): void;
     },
   ) {
@@ -65,6 +67,10 @@ export class DesktopUpdater {
         currentVersion: options.currentVersion,
         availableVersion: information.version,
       });
+      // Nobody wants to babysit a download. Installing stays a click, because
+      // it quits Silvic; having the bytes ready by then costs the person
+      // nothing. A failed download lands in "error" and stays retryable.
+      if (options.downloadAutomatically) void this.download();
     });
     options.source.on("update-not-available", () => {
       this.publish({

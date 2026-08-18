@@ -70,6 +70,54 @@ describe("DesktopUpdater", () => {
     ]);
   });
 
+  it("fetches a found release without being asked", async () => {
+    const source = new FakeUpdater();
+    const states: string[] = [];
+    const updater = new DesktopUpdater({
+      source,
+      currentVersion: "0.1.0",
+      enabled: true,
+      downloadAutomatically: true,
+      onState: (state) => states.push(state.phase),
+    });
+
+    await updater.check();
+    source.emit("update-available", { version: "0.1.1" });
+    await vi.waitFor(() =>
+      expect(source.downloadUpdate).toHaveBeenCalledOnce(),
+    );
+
+    source.emit("update-downloaded", { version: "0.1.1" });
+    expect(updater.getState()).toMatchObject({
+      phase: "ready",
+      availableVersion: "0.1.1",
+    });
+    expect(states).toEqual(["checking", "available", "downloading", "ready"]);
+    // Restarting into the new build stays the person's call.
+    expect(source.quitAndInstall).not.toHaveBeenCalled();
+  });
+
+  it("keeps an automatic download retryable when it fails", async () => {
+    const source = new FakeUpdater();
+    source.downloadUpdate.mockRejectedValueOnce(new Error("Download lost"));
+    const updater = new DesktopUpdater({
+      source,
+      currentVersion: "0.1.0",
+      enabled: true,
+      downloadAutomatically: true,
+      onState: () => undefined,
+    });
+
+    source.emit("update-available", { version: "0.1.1" });
+    await vi.waitFor(() =>
+      expect(updater.getState()).toMatchObject({
+        phase: "error",
+        message: "Download lost",
+      }),
+    );
+    await expect(updater.check()).resolves.toMatchObject({ phase: "checking" });
+  });
+
   it("requires relocation before contacting the update feed", async () => {
     const source = new FakeUpdater();
     const updater = new DesktopUpdater({
