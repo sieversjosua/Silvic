@@ -8,7 +8,7 @@ import { promisify } from "node:util";
 import type { PlotCommand } from "@silvic/contracts";
 
 import { resolvedCommandPath } from "./command-runner";
-import { type NamedRoutePublisher } from "./named-route";
+import { internalPort, type NamedRoutePublisher } from "./named-route";
 import { routes } from "./plot-address";
 
 const executeFile = promisify(execFile);
@@ -83,6 +83,7 @@ export class CommandSupervisor {
         Promise.reject(
           new Error("No route publisher is wired to this supervisor."),
         ),
+      improve: () => Promise.resolve(undefined),
       healthy: () => Promise.resolve(false),
       remove: () => Promise.resolve(),
     };
@@ -356,6 +357,13 @@ export class CommandSupervisor {
         port: entry.targetPort,
       })
     ) {
+      if (internalPort(entry.targetPort)) {
+        await this.upgradeRoute(key, processId, {
+          ...entry,
+          routeName: entry.routeName,
+          targetPort: entry.targetPort,
+        });
+      }
       this.scheduleRouteHealth(key, processId);
       return;
     }
@@ -375,6 +383,32 @@ export class CommandSupervisor {
       output: () => output,
       timeoutMs: 15_000,
     });
+  }
+
+  /**
+   * A route serving from an internal listener answers, so the health check is
+   * content — but the page it serves is missing its assets. Keep looking for
+   * the dev server itself, without ever failing a command that works.
+   */
+  private async upgradeRoute(
+    key: string,
+    processId: number,
+    entry: SupervisedCommand & { routeName: string; targetPort: number },
+  ): Promise<void> {
+    const output = await this.output(entry.plotPath, entry.id);
+    const improved = await this.routePublisher.improve({
+      routeName: entry.routeName,
+      processId,
+      expectedPort: entry.expectedPort ?? entry.targetPort,
+      output: () => output,
+      plotPath: entry.plotPath,
+      commandId: entry.id,
+    });
+    if (!improved) return;
+    const current = this.running.get(key);
+    if (!current || current.processId !== processId) return;
+    this.running.set(key, { ...current, targetPort: improved.port });
+    this.announce();
   }
 
   private failRoutedCommand(

@@ -133,6 +133,7 @@ const curlNamed = async (routeName: string, path = "/", headersOut = false) =>
 
 const unroutedPublisher: NamedRoutePublisher = {
   publish: () => Promise.reject(new Error("This test routes nothing")),
+  improve: () => Promise.resolve(undefined),
   healthy: () => Promise.resolve(false),
   remove: () => Promise.resolve(),
 };

@@ -245,6 +245,142 @@ describe("GateRoutePublisher", () => {
     );
   });
 
+  it("waits for the dev server rather than publishing workerd's head start", async () => {
+    let elapsed = 0;
+    const { link, routes } = recordingLink();
+    // Cloudflare's Vite plugin binds workerd first; Astro's own listener,
+    // the one that serves the modules and styles, follows a moment later.
+    const astroListening = { yet: false };
+    const probe = vi.fn(async (url: string) => {
+      if (url === "http://127.0.0.1:57019/") {
+        return { status: 200, contentType: "text/html; charset=utf-8" };
+      }
+      if (url === "http://[::1]:4322/" && astroListening.yet) {
+        return { status: 200, contentType: "text/html; charset=utf-8" };
+      }
+      if (url === "https://web-guided-to-do-mono.localhost/") {
+        return routes.get("web-guided-to-do-mono")?.port === 4322
+          ? { status: 200, contentType: "text/html; charset=utf-8" }
+          : undefined;
+      }
+      return undefined;
+    });
+    const publisher = new GateRoutePublisher({
+      link,
+      probe,
+      inspect: async () =>
+        astroListening.yet
+          ? [
+              { processId: 89357, port: 57019 },
+              { processId: 89224, port: 4322 },
+            ]
+          : [{ processId: 89357, port: 57019 }],
+      now: () => elapsed,
+      wait: async (milliseconds) => {
+        elapsed += milliseconds;
+        if (elapsed >= 2_000) astroListening.yet = true;
+      },
+      settleMs: 10_000,
+    });
+
+    const published = await publisher.publish({
+      routeName: "web-guided-to-do-mono",
+      processId: 89100,
+      expectedPort: 4321,
+      output: () => "[vite] Port 4321 is in use, trying another one...",
+      timeoutMs: 60_000,
+    });
+
+    expect(published).toEqual({ port: 4322 });
+    expect(link.set).toHaveBeenCalledTimes(1);
+    expect(link.set).toHaveBeenCalledWith(
+      expect.objectContaining({ host: "::1", port: 4322 }),
+    );
+  });
+
+  it("settles for an internal listener when nothing better ever appears", async () => {
+    let elapsed = 0;
+    const { link } = recordingLink();
+    const publisher = new GateRoutePublisher({
+      link,
+      probe: async (url) =>
+        url === "http://127.0.0.1:57019/" ||
+        url === "https://web-guided-to-do-mono.localhost/"
+          ? { status: 200, contentType: "text/html; charset=utf-8" }
+          : undefined,
+      inspect: async () => [{ processId: 89357, port: 57019 }],
+      now: () => elapsed,
+      wait: async (milliseconds) => {
+        elapsed += milliseconds;
+      },
+      settleMs: 10_000,
+    });
+
+    await expect(
+      publisher.publish({
+        routeName: "web-guided-to-do-mono",
+        processId: 89100,
+        expectedPort: 4321,
+        output: () => "",
+        timeoutMs: 60_000,
+      }),
+    ).resolves.toEqual({ port: 57019 });
+    expect(elapsed).toBeGreaterThanOrEqual(10_000);
+  });
+
+  it("moves a settled-for route onto the dev server once it appears", async () => {
+    const { link } = recordingLink();
+    const publisher = new GateRoutePublisher({
+      link,
+      probe: async (url) =>
+        url === "http://[::1]:4322/"
+          ? { status: 200, contentType: "text/html; charset=utf-8" }
+          : undefined,
+      inspect: async () => [
+        { processId: 89357, port: 57019 },
+        { processId: 89224, port: 4322 },
+      ],
+      wait: async () => undefined,
+    });
+
+    await expect(
+      publisher.improve({
+        routeName: "web-guided-to-do-mono",
+        processId: 89100,
+        expectedPort: 4321,
+        output: () => "",
+        plotPath: "/plots/mono-guided-to-do",
+        commandId: "web",
+      }),
+    ).resolves.toEqual({ port: 4322 });
+    expect(link.set).toHaveBeenCalledWith(
+      expect.objectContaining({ host: "::1", port: 4322 }),
+    );
+  });
+
+  it("leaves a settled-for route alone while only internal listeners answer", async () => {
+    const { link } = recordingLink();
+    const publisher = new GateRoutePublisher({
+      link,
+      probe: async (url) =>
+        url === "http://127.0.0.1:57019/"
+          ? { status: 200, contentType: "text/html; charset=utf-8" }
+          : undefined,
+      inspect: async () => [{ processId: 89357, port: 57019 }],
+      wait: async () => undefined,
+    });
+
+    await expect(
+      publisher.improve({
+        routeName: "web-guided-to-do-mono",
+        processId: 89100,
+        expectedPort: 4321,
+        output: () => "",
+      }),
+    ).resolves.toBeUndefined();
+    expect(link.set).not.toHaveBeenCalled();
+  });
+
   it("refuses to publish a health endpoint when no web server appears", async () => {
     let elapsed = 0;
     const { link } = recordingLink();

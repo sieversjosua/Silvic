@@ -55,6 +55,7 @@ describe("CommandSupervisor", () => {
             finishPublishing = resolve;
           }),
       ),
+      improve: vi.fn().mockResolvedValue(undefined),
       healthy: vi.fn().mockResolvedValue(true),
       remove: vi.fn().mockResolvedValue(undefined),
     };
@@ -119,6 +120,7 @@ describe("CommandSupervisor", () => {
     temporaryDirectories.push(logDirectory);
     const originalPublisher: NamedRoutePublisher = {
       publish: vi.fn().mockResolvedValue({ port: 4321 }),
+      improve: vi.fn().mockResolvedValue(undefined),
       healthy: vi.fn().mockResolvedValue(true),
       remove: vi.fn().mockResolvedValue(undefined),
     };
@@ -145,6 +147,7 @@ describe("CommandSupervisor", () => {
 
     const reopenedPublisher: NamedRoutePublisher = {
       publish: vi.fn().mockResolvedValue({ port: 4321 }),
+      improve: vi.fn().mockResolvedValue(undefined),
       // Reaching the persisted target proves only that the alias is wired to
       // that port. It can still be the old `OK` sidecar rather than the app.
       healthy: vi.fn().mockResolvedValue(true),
@@ -184,6 +187,7 @@ describe("CommandSupervisor", () => {
       .mockResolvedValueOnce({ port: 4322 });
     const routePublisher: NamedRoutePublisher = {
       publish,
+      improve: vi.fn().mockResolvedValue(undefined),
       healthy: vi.fn().mockResolvedValueOnce(false).mockResolvedValue(true),
       remove: vi.fn().mockResolvedValue(undefined),
     };
@@ -359,6 +363,7 @@ describe("CommandSupervisor", () => {
     temporaryDirectories.push(logDirectory);
     const routePublisher: NamedRoutePublisher = {
       publish: vi.fn(() => new Promise<{ port: number }>(() => undefined)),
+      improve: vi.fn().mockResolvedValue(undefined),
       healthy: vi.fn().mockResolvedValue(false),
       remove: vi.fn().mockResolvedValue(undefined),
     };

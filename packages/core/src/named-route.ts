@@ -38,6 +38,14 @@ export interface PublishedNamedRoute {
 
 export interface NamedRoutePublisher {
   publish(request: PublishNamedRouteRequest): Promise<PublishedNamedRoute>;
+  /**
+   * Looks once for a listener worth preferring over the one already published.
+   * A route that had to settle for an internal port keeps asking, because the
+   * dev server people are meant to visit may only be binding now.
+   */
+  improve(
+    request: PublishNamedRouteRequest,
+  ): Promise<PublishedNamedRoute | undefined>;
   healthy(request: { routeName: string; port: number }): Promise<boolean>;
   remove(routeName: string): Promise<void>;
 }
@@ -46,6 +54,21 @@ interface ListenerSelection {
   listener: ProcessListener;
   hostname: "127.0.0.1" | "::1";
   response: RouteProbe;
+  /**
+   * Whether this is the kind of listener a person is meant to visit. An
+   * OS-assigned port belongs to an internal runtime — Cloudflare's workerd,
+   * an inspector bridge — which can serve the app's HTML while the dev
+   * server that owns the assets has yet to bind its own port.
+   */
+  settled: boolean;
+}
+
+/** macOS hands these out to whoever asks; nobody configures one. */
+const firstEphemeralPort = 49_152;
+
+/** Whether a port was assigned by the OS rather than chosen by a dev server. */
+export function internalPort(port: number): boolean {
+  return port >= firstEphemeralPort;
 }
 
 /**
@@ -70,6 +93,8 @@ interface RoutePublisherOptions {
   probe?(url: string): Promise<RouteProbe | undefined>;
   wait?(milliseconds: number): Promise<void>;
   now?(): number;
+  /** How long an internal listener is held back before it is settled for. */
+  settleMs?: number;
 }
 
 const pause = (milliseconds: number) =>
@@ -90,6 +115,7 @@ export class GateRoutePublisher implements NamedRoutePublisher {
   private readonly probe: NonNullable<RoutePublisherOptions["probe"]>;
   private readonly wait: NonNullable<RoutePublisherOptions["wait"]>;
   private readonly now: NonNullable<RoutePublisherOptions["now"]>;
+  private readonly settleMs: number;
   /** Which loopback family each route's upstream answered on. */
   private readonly families = new Map<string, "127.0.0.1" | "::1">();
 
@@ -99,6 +125,7 @@ export class GateRoutePublisher implements NamedRoutePublisher {
     this.probe = options.probe ?? probeUrl;
     this.wait = options.wait ?? pause;
     this.now = options.now ?? Date.now;
+    this.settleMs = options.settleMs ?? 10_000;
   }
 
   async publish(
@@ -112,14 +139,24 @@ export class GateRoutePublisher implements NamedRoutePublisher {
     let latest =
       "No browser-facing HTML listener appeared in the runtime output or process tree.";
 
+    /** When an internal listener first offered itself in place of a real one. */
+    let settlingSince: number | undefined;
+
     while (true) {
-      const listeners = await this.inspect(request.processId);
-      const selected = await selectListener({
-        listeners,
-        expectedPort: request.expectedPort,
-        output: request.output(),
-        probe: this.probe,
-      });
+      const selected = await this.choose(request);
+      if (selected && !selected.settled) {
+        // Cloudflare's Vite plugin has workerd serving the app's SSR HTML a
+        // second or two before Astro binds the port that serves the assets.
+        // Publishing that first sighting pins the name to the sandbox: pages
+        // render and every module, style and font 404s.
+        settlingSince ??= this.now();
+        const holdUntil = Math.min(settlingSince + this.settleMs, deadline);
+        if (this.now() < holdUntil) {
+          latest = `Only an internal listener on port ${selected.listener.port} answered for ${request.routeName}.`;
+          await this.wait(Math.min(250, Math.max(0, holdUntil - this.now())));
+          continue;
+        }
+      }
       if (selected) {
         const targetPort = selected.listener.port;
         await this.link.set({
@@ -179,6 +216,40 @@ export class GateRoutePublisher implements NamedRoutePublisher {
     return true;
   }
 
+  /**
+   * The dev server may still have been binding when the route had to settle
+   * for an internal listener. Whoever visits meanwhile is stuck with an app
+   * whose assets 404, so a settled-for route keeps looking for the real one
+   * rather than staying wrong until the next restart.
+   */
+  async improve(
+    request: PublishNamedRouteRequest,
+  ): Promise<PublishedNamedRoute | undefined> {
+    const selected = await this.choose(request);
+    if (!selected?.settled) return undefined;
+    await this.link.set({
+      name: request.routeName,
+      host: selected.hostname,
+      port: selected.listener.port,
+      ...(request.plotPath ? { plotPath: request.plotPath } : {}),
+      ...(request.commandId ? { commandId: request.commandId } : {}),
+    });
+    this.families.set(request.routeName, selected.hostname);
+    return { port: selected.listener.port };
+  }
+
+  /** The best listener the command tree offers right now, if any. */
+  private async choose(
+    request: PublishNamedRouteRequest,
+  ): Promise<ListenerSelection | undefined> {
+    return selectListener({
+      listeners: await this.inspect(request.processId),
+      expectedPort: request.expectedPort,
+      output: request.output(),
+      probe: this.probe,
+    });
+  }
+
   /** Stopping suspends rather than deletes: the URL keeps waking the plot. */
   async remove(routeName: string): Promise<void> {
     this.families.delete(routeName);
@@ -226,6 +297,7 @@ async function selectListener({
         response: await probe(
           `http://${hostname === "::1" ? `[${hostname}]` : hostname}:${listener.port}/`,
         ),
+        settled: !internalPort(listener.port),
       })),
     ),
   );
@@ -233,24 +305,15 @@ async function selectListener({
   return (
     candidates
       .filter(
-        (
-          candidate,
-        ): candidate is {
-          listener: ProcessListener;
-          hostname: "127.0.0.1" | "::1";
-          response: RouteProbe;
-        } => candidate.response !== undefined,
+        (candidate): candidate is ListenerSelection =>
+          candidate.response !== undefined,
       )
       // A route marked as a web preview must actually render in a browser.
       // Health checks and API sidecars commonly answer 200 with `OK` or JSON;
       // publishing either would make a broken web runtime look successful.
       .filter((candidate) => browserFacing(candidate.response))
       .sort((left, right) => {
-        const score = (candidate: {
-          listener: ProcessListener;
-          hostname: "127.0.0.1" | "::1";
-          response: RouteProbe;
-        }) =>
+        const score = (candidate: ListenerSelection) =>
           // PORT is an offered address, not proof of identity. A monorepo can
           // hand it to a health/API sidecar while its browser app chooses another
           // listener, so browser-facing and announced listeners rank above it.
@@ -262,7 +325,7 @@ async function selectListener({
           // Internal runtimes (Cloudflare's workerd, inspector bridges)
           // bind OS-assigned ephemeral ports and can still serve HTML; a
           // dev server people are meant to visit sits on a configured port.
-          (candidate.listener.port < 49_152 ? 500 : 0) +
+          (candidate.settled ? 500 : 0) +
           (candidate.listener.port === expectedPort ? 100 : 0) +
           (candidate.response.status >= 200 && candidate.response.status < 400
             ? 10

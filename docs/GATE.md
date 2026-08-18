@@ -85,6 +85,16 @@ process tree, probes candidates, and picks the browser-facing listener
 `portless alias`. Health checks compare the direct upstream and the named URL
 exactly as before.
 
+Two rules keep a name off an internal listener. A port at or above 49152 was
+handed out by the OS, so it belongs to a runtime nobody is meant to visit —
+Cloudflare's workerd serves the app's SSR HTML from one, a second or two
+before Astro binds the port that serves the modules and styles. Such a
+listener is therefore held back for ten seconds before the route settles for
+it, and a route that did settle for one keeps looking on every health tick
+(`improve`) until the dev server itself appears. Without them the name
+publishes against the sandbox: pages render and every asset 404s, for as long
+as the command runs.
+
 ## Setup
 
 One-time, run automatically the first time a plot needs a named URL:
