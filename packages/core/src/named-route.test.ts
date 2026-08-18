@@ -21,6 +21,28 @@ const recordingLink = () => {
 };
 
 describe("descendantListenerPorts", () => {
+  it("keeps a listener whose shell died but whose process group lives", () => {
+    // The supervised `sh -lc` is gone; launchd adopted the dev server it
+    // started. The group it was launched into is the evidence that survives.
+    expect(
+      descendantListenerPorts({
+        rootProcessId: 100,
+        processes: [
+          [102, 1],
+          [900, 1],
+        ],
+        groups: new Map([
+          [102, 100],
+          [900, 900],
+        ]),
+        listeners: [
+          { processId: 102, port: 4321 },
+          { processId: 900, port: 8080 },
+        ],
+      }),
+    ).toEqual([{ processId: 102, port: 4321 }]);
+  });
+
   it("keeps listeners owned by the supervised process tree", () => {
     expect(
       descendantListenerPorts({
@@ -501,7 +523,7 @@ describe("GateRoutePublisher", () => {
         output: () => "[livekit] Server is listening on port 49731",
         timeoutMs: 10,
       }),
-    ).rejects.toThrow(/browser-facing HTML listener/i);
+    ).rejects.toThrow(/has not served a page yet/i);
     expect(link.set).not.toHaveBeenCalled();
   });
 

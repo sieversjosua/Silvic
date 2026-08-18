@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { WorkspaceSnapshot } from "@silvic/contracts";
 
-import { activityLabel, plotListRows } from "./plot-list";
+import { activityLabel, plotListRows, steadyRows } from "./plot-list";
 
 function plot(overrides: Partial<WorkspaceSnapshot>): WorkspaceSnapshot {
   const name = overrides.name ?? "plot";
@@ -99,6 +99,68 @@ describe("plotListRows", () => {
       ],
     });
     expect(rows.map((row) => row.workspace.name)).toEqual(["newer", "older"]);
+  });
+
+  it("holds the order while only timestamps move", () => {
+    const rowsAt = (older: number, newer: number) =>
+      plotListRows({
+        ...empty,
+        workspaces: [
+          plot({
+            name: "alpha",
+            observations: [session("alpha", "quiet", older)],
+          }),
+          plot({
+            name: "beta",
+            observations: [session("beta", "quiet", newer)],
+          }),
+        ],
+      });
+
+    const first = steadyRows(rowsAt(1, 2), undefined);
+    expect(first.rows.map((row) => row.workspace.name)).toEqual([
+      "beta",
+      "alpha",
+    ]);
+
+    // Alpha's agent writes a line, so it is now the most recent — but nothing
+    // about either plot's standing changed, and a person is reading the list.
+    const second = steadyRows(rowsAt(3, 2), first.order);
+    expect(second.rows.map((row) => row.workspace.name)).toEqual([
+      "beta",
+      "alpha",
+    ]);
+    expect(second.order).toBe(first.order);
+  });
+
+  it("reorders when a plot's rank really changes", () => {
+    const calm = plotListRows({
+      ...empty,
+      workspaces: [plot({ name: "alpha" }), plot({ name: "beta" })],
+    });
+    const held = steadyRows(calm, undefined);
+
+    const alarmed = plotListRows({
+      ...empty,
+      workspaces: [
+        plot({
+          name: "alpha",
+          git: {
+            branch: "alpha",
+            ahead: 0,
+            behind: 0,
+            staged: 0,
+            unstaged: 0,
+            untracked: 0,
+            conflicted: 2,
+          },
+        }),
+        plot({ name: "beta" }),
+      ],
+    });
+    expect(
+      steadyRows(alarmed, held.order).rows.map((row) => row.workspace.name),
+    ).toEqual(["alpha", "beta"]);
   });
 
   it("filters by the same query the canvas answers to", () => {

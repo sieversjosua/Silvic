@@ -144,8 +144,7 @@ export class GateRoutePublisher implements NamedRoutePublisher {
     // the gate's holding page in the meantime. Killing the process early
     // made slow starts look like brokenness.
     const deadline = this.now() + (request.timeoutMs ?? 120_000);
-    let latest =
-      "No browser-facing HTML listener appeared in the runtime output or process tree.";
+    let latest = `${request.routeName} has not served a page yet — nothing in this command's process tree answers with HTML. Silvic keeps looking; its output says what it is doing.`;
 
     /** When an internal listener first offered itself in place of a real one. */
     let settlingSince: number | undefined;
@@ -385,17 +384,28 @@ function mediaType(contentType: string | undefined): string {
   return contentType?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
 }
 
+/**
+ * Which listeners belong to a supervised command. Ancestry is the first
+ * answer, the process group the second: a command runs detached in its own
+ * group, and when its shell dies the dev server it started keeps serving with
+ * `launchd` as its parent. Asking only about ancestry made such a server
+ * invisible, so Silvic reported that nothing was listening and started a
+ * second one beside it.
+ */
 export function descendantListenerPorts({
   rootProcessId,
   processes,
   listeners,
+  groups,
 }: {
   rootProcessId: number;
   processes: readonly (readonly [number, number])[];
   listeners: readonly ProcessListener[];
+  groups?: ReadonlyMap<number, number>;
 }): readonly ProcessListener[] {
   const parents = new Map(processes);
   const belongsToTree = (processId: number) => {
+    if (groups?.get(processId) === rootProcessId) return true;
     const seen = new Set<number>();
     let current: number | undefined = processId;
     while (current !== undefined && !seen.has(current)) {
@@ -412,16 +422,22 @@ async function inspectProcessListeners(
   rootProcessId: number,
 ): Promise<readonly ProcessListener[]> {
   const [processes, sockets] = await Promise.all([
-    executeCommand("ps", ["-axo", "pid=,ppid="]),
+    executeCommand("ps", ["-axo", "pid=,ppid=,pgid="]),
     executeCommand("lsof", ["-nP", "-iTCP", "-sTCP:LISTEN", "-Fpn"]),
   ]);
-  const processPairs = processes.stdout
+  const rows = processes.stdout
     .split(/\r?\n/)
     .map((line) => line.trim().split(/\s+/).map(Number))
     .filter(
-      (pair): pair is [number, number] =>
-        pair.length === 2 && pair.every(Number.isSafeInteger),
+      (row): row is [number, number, number] =>
+        row.length === 3 && row.every(Number.isSafeInteger),
     );
+  const processPairs = rows.map(
+    ([processId, parentId]) => [processId, parentId] as const,
+  );
+  const groups = new Map(
+    rows.map(([processId, , groupId]) => [processId, groupId]),
+  );
   const listeners: ProcessListener[] = [];
   let processId: number | undefined;
   for (const line of sockets.stdout.split(/\r?\n/)) {
@@ -436,6 +452,7 @@ async function inspectProcessListeners(
   return descendantListenerPorts({
     rootProcessId,
     processes: processPairs,
+    groups,
     listeners: [
       ...new Map(
         listeners.map((listener) => [

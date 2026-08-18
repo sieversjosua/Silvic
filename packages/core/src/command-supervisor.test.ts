@@ -214,6 +214,51 @@ describe("CommandSupervisor", () => {
     supervisor.stopAll();
   });
 
+  it("keeps a slow dev server running instead of killing what works", async () => {
+    const logDirectory = await mkdtemp(join(tmpdir(), "silvic-supervisor-"));
+    temporaryDirectories.push(logDirectory);
+    const publish = vi
+      .fn<NamedRoutePublisher["publish"]>()
+      .mockRejectedValueOnce(new Error("web-slow has not served a page yet"))
+      .mockResolvedValue({ port: 4321 });
+    const routePublisher: NamedRoutePublisher = {
+      publish,
+      improve: vi.fn().mockResolvedValue(undefined),
+      healthy: vi.fn().mockResolvedValue(true),
+      remove: vi.fn().mockResolvedValue(undefined),
+    };
+    const supervisor = new CommandSupervisor({
+      logDirectory,
+      onChange: () => {},
+      routePublisher,
+      routeHealthIntervalMs: 5,
+    });
+
+    await supervisor.start({
+      plotPath: logDirectory,
+      id: "web",
+      command: { run: "sleep 10", url: true },
+      routeName: "web-slow",
+      environment: { PORT: "4321" },
+      canRoute: true,
+      detached: false,
+    });
+
+    // A dev server that has not compiled yet is a slow start, not a failure:
+    // the process must survive to become the thing Silvic was waiting for.
+    await vi.waitFor(() =>
+      expect(supervisor.list()[0]).toMatchObject({
+        status: "running",
+        advice: expect.stringContaining("has not served a page yet"),
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(supervisor.list()[0]).toMatchObject({ targetPort: 4321 }),
+    );
+    expect(supervisor.list()[0]).not.toHaveProperty("advice");
+    supervisor.stopAll();
+  });
+
   it("keeps a running command when only the gate is missing", async () => {
     const logDirectory = await mkdtemp(join(tmpdir(), "silvic-supervisor-"));
     temporaryDirectories.push(logDirectory);

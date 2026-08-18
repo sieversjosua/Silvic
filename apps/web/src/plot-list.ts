@@ -79,6 +79,42 @@ export function plotListRows({
     .toSorted(compareRows);
 }
 
+/** The order the list is currently holding, and what would justify redoing it. */
+export interface RowOrder {
+  signature: string;
+  ids: readonly string[];
+}
+
+/**
+ * Reordering is allowed when a plot's standing changes — not when a timestamp
+ * moves. Agent sessions write continuously and runtimes change tone every few
+ * seconds, so sorting afresh on every snapshot had rows trading places while
+ * someone was reading them. The rank signature ignores that jitter: it changes
+ * only when a plot enters or leaves the list, or moves to another rank.
+ */
+export function steadyRows(
+  rows: readonly PlotListRow[],
+  previous: RowOrder | undefined,
+): { rows: readonly PlotListRow[]; order: RowOrder } {
+  const signature = rows
+    .map((row) => `${row.workspace.workspaceId}:${rowRank(row)}`)
+    .toSorted()
+    .join("|");
+  const ids = rows.map((row) => row.workspace.workspaceId);
+  if (!previous || previous.signature !== signature) {
+    return { rows, order: { signature, ids } };
+  }
+  const position = new Map(
+    previous.ids.map((id, index) => [id, index] as const),
+  );
+  const held = rows.toSorted(
+    (left, right) =>
+      (position.get(left.workspace.workspaceId) ?? Number.MAX_SAFE_INTEGER) -
+      (position.get(right.workspace.workspaceId) ?? Number.MAX_SAFE_INTEGER),
+  );
+  return { rows: held, order: previous };
+}
+
 const urgency: Record<Tone, number> = {
   attention: 0,
   active: 1,

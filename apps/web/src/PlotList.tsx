@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import type {
   PlotCommand,
@@ -9,7 +9,13 @@ import type {
   WorkspaceSnapshot,
 } from "@silvic/contracts";
 
-import { activityLabel, plotListRows, type PlotListRow } from "./plot-list";
+import {
+  activityLabel,
+  plotListRows,
+  steadyRows,
+  type PlotListRow,
+  type RowOrder,
+} from "./plot-list";
 import { ConvexMark } from "./providers";
 import { workingTreeLabel } from "./state";
 
@@ -38,17 +44,21 @@ export function PlotList({
   selectedWorkspaceId,
   onSelect,
 }: PlotListProps) {
-  const rows = useMemo(
-    () =>
-      plotListRows({
-        workspaces: project.workspaces,
-        commands,
-        processes,
-        declared: declaredResources,
-        query,
-      }),
-    [project.workspaces, commands, processes, declaredResources, query],
-  );
+  // The order a person is looking at is held until a plot's rank actually
+  // changes; see steadyRows.
+  const held = useRef<RowOrder>(undefined);
+  const rows = useMemo(() => {
+    const fresh = plotListRows({
+      workspaces: project.workspaces,
+      commands,
+      processes,
+      declared: declaredResources,
+      query,
+    });
+    const steady = steadyRows(fresh, held.current);
+    held.current = steady.order;
+    return steady.rows;
+  }, [project.workspaces, commands, processes, declaredResources, query]);
   // The activity column shows coarse relative times; one tick a minute keeps
   // "3m ago" honest without re-deriving anything else.
   const [now, setNow] = useState(() => Date.now());

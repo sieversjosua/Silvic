@@ -8,11 +8,7 @@ import { promisify } from "node:util";
 import type { PlotCommand } from "@silvic/contracts";
 
 import { resolvedCommandPath } from "./command-runner";
-import {
-  GateUnreachable,
-  internalPort,
-  type NamedRoutePublisher,
-} from "./named-route";
+import { internalPort, type NamedRoutePublisher } from "./named-route";
 import { routes } from "./plot-address";
 
 const executeFile = promisify(execFile);
@@ -297,33 +293,26 @@ export class CommandSupervisor {
     } catch (error) {
       const entry = this.running.get(key);
       if (!entry || entry.processId !== processId) return;
-      if (error instanceof GateUnreachable) {
-        // Nothing is wrong with the command — only with the daemon that hands
-        // out its address. Killing a working dev server over that would be
-        // the one outcome nobody can undo, so it keeps running, says why, and
-        // is published again as soon as the gate answers.
-        this.running.set(key, {
-          ...entry,
-          status: "running",
-          advice: error.message,
-        });
-        this.announce();
-        this.retryRoute(key, processId, () =>
-          this.bindRoute({
-            key,
-            processId,
-            routeName,
-            expectedPort,
-            output,
-            ...(timeoutMs === undefined ? {} : { timeoutMs }),
-          }),
-        );
-        return;
-      }
-      this.failRoutedCommand(
-        key,
-        processId,
-        error instanceof Error ? error.message : String(error),
+      // Whether the gate would not answer or no page was served yet, the
+      // command itself is alive and doing something. Killing it would throw
+      // away the only thing that works — and a dev server that needs four
+      // minutes to compile is a slow start, not a broken one. It keeps
+      // running, says what is missing, and Silvic asks again.
+      this.running.set(key, {
+        ...entry,
+        status: "running",
+        advice: error instanceof Error ? error.message : String(error),
+      });
+      this.announce();
+      this.retryRoute(key, processId, () =>
+        this.bindRoute({
+          key,
+          processId,
+          routeName,
+          expectedPort,
+          output,
+          ...(timeoutMs === undefined ? {} : { timeoutMs }),
+        }),
       );
     }
   }
@@ -691,10 +680,33 @@ async function stillRunning(
       { encoding: "utf8", timeout: 2_000 },
     );
     const elapsed = stdout.trim();
-    if (!elapsed) return false;
-    if (!startedAt) return true;
-    const began = Date.now() - elapsedSeconds(elapsed) * 1_000;
-    return Math.abs(began - Date.parse(startedAt)) < 15_000;
+    if (elapsed) {
+      if (!startedAt) return true;
+      const began = Date.now() - elapsedSeconds(elapsed) * 1_000;
+      if (Math.abs(began - Date.parse(startedAt)) < 15_000) return true;
+    }
+  } catch {
+    // Fall through: the leader is gone, which says nothing about the group.
+  }
+  return groupAlive(processId);
+}
+
+/**
+ * A command is started detached, so its shell leads its own process group.
+ * The shell can die while the dev server it started keeps serving — orphaned
+ * to launchd, invisible to a check that only asks after the leader. Reviving
+ * the command then starts a second server beside the working one, and both
+ * fight over the port.
+ */
+async function groupAlive(processGroupId: number): Promise<boolean> {
+  try {
+    const { stdout } = await executeFile("ps", ["-axo", "pgid="], {
+      encoding: "utf8",
+      timeout: 2_000,
+    });
+    return stdout
+      .split(/\r?\n/)
+      .some((line) => Number(line.trim()) === processGroupId);
   } catch {
     return false;
   }
