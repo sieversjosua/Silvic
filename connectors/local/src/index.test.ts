@@ -7,6 +7,7 @@ import type {
 } from "@silvic/core";
 
 import {
+  codexTaskMatches,
   codexTaskObservation,
   createLocalContextConnector,
   parseCodexTasks,
@@ -81,6 +82,31 @@ describe("createLocalContextConnector", () => {
     connector.invalidate?.();
 
     expect(await connector.observe(target)).toEqual([]);
+  });
+
+  it("counts a Codex session anywhere inside the worktree as plot activity", () => {
+    const task = (cwd: string) => ({
+      id: "task",
+      cwd,
+      title: "Fix billing",
+      updatedAtMs: 1_786_610_000_123,
+    });
+    expect(
+      codexTaskMatches("/plots/mono-billing", task("/plots/mono-billing")),
+    ).toBe(true);
+    expect(
+      codexTaskMatches(
+        "/plots/mono-billing",
+        task("/plots/mono-billing/apps/web"),
+      ),
+    ).toBe(true);
+    // A sibling plot sharing the prefix is not inside.
+    expect(
+      codexTaskMatches("/plots/mono-billing", task("/plots/mono-billing-v2")),
+    ).toBe(false);
+    expect(codexTaskMatches("/plots/mono-billing", task("/plots/other"))).toBe(
+      false,
+    );
   });
 
   it("keeps the Codex task activity timestamp used by the grove", () => {

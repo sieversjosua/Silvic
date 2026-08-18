@@ -78,7 +78,7 @@ export function createLocalContextConnector(runner: CommandRunner): Connector {
           .filter((listener) => containsPath(target.path, listener.cwd))
           .map((listener) => runtimeObservation(target, listener)),
         ...context.tasks
-          .filter((task) => normalize(task.cwd) === normalize(target.path))
+          .filter((task) => codexTaskMatches(target.path, task))
           .map((task) => codexTaskObservation(target, task)),
       ];
     },
@@ -186,6 +186,16 @@ async function readCodexTasks(
   } catch {
     return [];
   }
+}
+
+/**
+ * Subtree containment, exactly like listeners: a Codex session started in
+ * apps/web of a monorepo plot is that plot's activity. Requiring the exact
+ * worktree root left such plots looking idle, and the grove folded them away
+ * while Codex was busy inside.
+ */
+export function codexTaskMatches(targetPath: string, task: CodexTask): boolean {
+  return containsPath(targetPath, task.cwd);
 }
 
 export function parseCodexTasks(output: string): readonly CodexTask[] {
