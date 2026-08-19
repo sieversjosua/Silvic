@@ -14,6 +14,7 @@ import {
   installLaunchAgent,
   installPrivileged,
   installUserTrust,
+  stopOrphanGate,
   type GateDiagnosis,
   type GateWake,
 } from "@silvic/gate";
@@ -137,6 +138,19 @@ export class GateManager {
       this.note("gate came up via the launch agent");
       this.forget();
       return;
+    }
+    // Before spawning another one: a gate that holds the ports without
+    // answering keeps every successor from ever binding them.
+    const orphans = await stopOrphanGate();
+    if (orphans.length > 0) {
+      this.note(
+        `stopped an unreachable gate holding the ports: ${orphans.join(", ")}`,
+      );
+      if (await this.pollDaemon(12_000)) {
+        this.note("gate came up once the orphan was gone");
+        this.forget();
+        return;
+      }
     }
     if (!this.fallbackSpawned) {
       this.fallbackSpawned = true;

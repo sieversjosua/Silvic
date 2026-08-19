@@ -8,6 +8,7 @@ import {
   GATE_HOST,
   GATE_HTTP_PORT,
   GATE_HTTPS_PORT,
+  GATE_SCRIPT_NAME,
   LAUNCH_AGENT_LABEL,
   PF_ANCHOR,
   PF_ANCHOR_FILE,
@@ -216,6 +217,87 @@ export async function installUserTrust(
     "trustRoot",
     caCertificate,
   ]);
+}
+
+/**
+ * Ends a gate that holds the ports but answers nobody. It happens: a gate
+ * spawned directly by the app outlives its launch agent, a successor dies on
+ * EADDRINUSE, and the machine is left with two half-gates and no HTTPS —
+ * nothing can bind 42443 while the orphan lives. Only Silvic's own daemon is
+ * ever stopped; another program on the port is a different diagnosis.
+ */
+export async function stopOrphanGate(
+  context: {
+    execute?(
+      executable: string,
+      arguments_: readonly string[],
+    ): Promise<{ stdout: string; stderr: string }>;
+    kill?(pid: number, signal: NodeJS.Signals): void;
+    wait?(milliseconds: number): Promise<void>;
+  } = {},
+): Promise<readonly number[]> {
+  const execute = context.execute ?? runBounded;
+  const kill = context.kill ?? ((pid, signal) => process.kill(pid, signal));
+  const wait =
+    context.wait ??
+    ((milliseconds: number) =>
+      new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
+  const holders = async (): Promise<readonly number[]> => {
+    let listed: string;
+    try {
+      // lsof exits non-zero when nothing listens, which is the good case.
+      ({ stdout: listed } = await execute("lsof", [
+        "-nP",
+        `-iTCP:${GATE_HTTPS_PORT}`,
+        "-sTCP:LISTEN",
+        "-t",
+      ]));
+    } catch {
+      return [];
+    }
+    const pids = listed
+      .split("\n")
+      .map((line) => Number.parseInt(line.trim(), 10))
+      .filter((pid) => Number.isInteger(pid) && pid > 0 && pid !== process.pid);
+    const ours: number[] = [];
+    for (const pid of new Set(pids)) {
+      try {
+        const { stdout } = await execute("ps", [
+          "-o",
+          "command=",
+          "-p",
+          `${pid}`,
+        ]);
+        if (stdout.includes(GATE_SCRIPT_NAME)) ours.push(pid);
+      } catch {
+        // Gone between the two calls; nothing left to stop.
+      }
+    }
+    return ours;
+  };
+
+  const orphans = await holders();
+  if (orphans.length === 0) return [];
+  for (const pid of orphans) attemptKill(kill, pid, "SIGTERM");
+  for (let left = LAUNCHCTL_ATTEMPTS; left > 0; left--) {
+    if ((await holders()).length === 0) return orphans;
+    await wait(LAUNCHCTL_INTERVAL_MS);
+  }
+  for (const pid of orphans) attemptKill(kill, pid, "SIGKILL");
+  await wait(LAUNCHCTL_INTERVAL_MS);
+  return orphans;
+}
+
+function attemptKill(
+  kill: (pid: number, signal: NodeJS.Signals) => void,
+  pid: number,
+  signal: NodeJS.Signals,
+): void {
+  try {
+    kill(pid, signal);
+  } catch {
+    // Already gone, or not ours to end.
+  }
 }
 
 export type GateCheck = "control-socket" | "proxy-443" | "certificate-trusted";

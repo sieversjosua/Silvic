@@ -7,6 +7,8 @@ export const GATE_HTTP_PORT = 42_080;
 export const GATE_HOST = "silvic-gate.localhost";
 
 export const LAUNCH_AGENT_LABEL = "dev.silvic.gate";
+/** How a gate process is recognised in `ps` output, orphans included. */
+export const GATE_SCRIPT_NAME = "gate.mjs";
 export const PF_DAEMON_LABEL = "dev.silvic.gate.pf";
 /**
  * macOS's stock /etc/pf.conf evaluates `rdr-anchor "com.apple/*"`, so an

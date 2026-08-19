@@ -9,11 +9,18 @@ import { startGate } from "@silvic/gate";
 /** Baked in at build time; the app compares it to restart stale daemons. */
 declare const __SILVIC_GATE_VERSION__: string;
 
-const gate = await startGate({
-  version:
-    typeof __SILVIC_GATE_VERSION__ === "string"
-      ? __SILVIC_GATE_VERSION__
-      : "dev",
+const version =
+  typeof __SILVIC_GATE_VERSION__ === "string" ? __SILVIC_GATE_VERSION__ : "dev";
+
+// launchd restarts this daemon on a schedule, so a start that cannot succeed
+// — another gate already holding the ports, say — repeats forever. One line
+// per attempt; the uncaught version once grew gate.log to megabytes of the
+// same stack trace and buried the sentence that explained it.
+const gate = await startGate({ version }).catch((error: unknown) => {
+  console.error(
+    `gate could not start: ${error instanceof Error ? error.message : String(error)}`,
+  );
+  process.exit(1);
 });
 
 const finish = async (): Promise<void> => {

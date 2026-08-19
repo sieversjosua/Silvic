@@ -24,6 +24,7 @@ import {
   installUserTrust,
   launchAgentPlist,
   pfAnchorRules,
+  stopOrphanGate,
 } from "./setup";
 import { controlSocketPath } from "./state-dir";
 
@@ -205,6 +206,45 @@ describe("setup artefacts", () => {
     ).rejects.toThrow(/would not load/);
   });
 
+  it("ends a gate that holds the ports but answers nobody", async () => {
+    const signals: [number, string][] = [];
+    let alive = true;
+    const stopped = await stopOrphanGate({
+      wait: async () => undefined,
+      kill: (pid, signal) => {
+        signals.push([pid, signal]);
+        alive = false;
+      },
+      execute: async (executable) => {
+        if (executable === "lsof") {
+          if (!alive) throw new Error("nothing listens");
+          return { stdout: "17201\n", stderr: "" };
+        }
+        return {
+          stdout:
+            "/Applications/Silvic.app/Contents/MacOS/Silvic /Applications/Silvic.app/…/gate.mjs\n",
+          stderr: "",
+        };
+      },
+    });
+    expect(stopped).toEqual([17201]);
+    expect(signals).toEqual([[17201, "SIGTERM"]]);
+  });
+
+  it("leaves a program that is not the gate on the port alone", async () => {
+    const signals: number[] = [];
+    const stopped = await stopOrphanGate({
+      wait: async () => undefined,
+      kill: (pid) => signals.push(pid),
+      execute: async (executable) =>
+        executable === "lsof"
+          ? { stdout: "4242\n", stderr: "" }
+          : { stdout: "/opt/homebrew/bin/caddy run\n", stderr: "" },
+    });
+    expect(stopped).toEqual([]);
+    expect(signals).toEqual([]);
+  });
+
   it("shell-quotes the admin script path for osascript", async () => {
     // The state directory lives under "Application Support"; an unquoted
     // space here once broke setup right after the password was typed.
@@ -331,6 +371,29 @@ describe("gate daemon", () => {
         request.end();
       },
     );
+
+  it("keeps the running gate reachable when a second one cannot bind", async () => {
+    // The state a work machine sat in for a day: an orphan held the ports
+    // while its crash-looping successor kept replacing the control socket,
+    // so nothing on the machine could see the gate that was actually there.
+    await expect(
+      startGate({
+        stateDirectory: directory,
+        httpsPort: gate.httpsPort,
+        httpPort: gate.httpPort,
+        version: "intruder",
+      }),
+    ).rejects.toThrow(/EADDRINUSE/);
+    const client = new GateClient({
+      socketPath: controlSocketPath(directory),
+    });
+    try {
+      expect((await client.status())?.version).toBe("test");
+    } finally {
+      // A client left connected counts as an app for the wake tests below.
+      client.close();
+    }
+  });
 
   it("proxies a registered route with forwarding headers", async () => {
     const client = new GateClient({

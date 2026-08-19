@@ -53,14 +53,13 @@ export async function startGate(options: GateOptions = {}): Promise<Gate> {
   const authority = new CertificateAuthority(stateDirectory);
   const fallback = await authority.certificateFor(GATE_HOST);
 
-  const control: ControlServer = await startControlServer({
-    socketPath: controlSocketPath(stateDirectory),
-    store,
-    version: options.version ?? "dev",
-    log,
-  });
+  // The control socket is claimed last, after the ports are held: starting
+  // it replaces whatever socket file is there, and an instance that then
+  // dies on EADDRINUSE would leave the gate that actually serves the ports
+  // unreachable — a deadlock nothing on the machine could break.
+  let control: ControlServer | undefined;
   const waker = new Waker({
-    broadcast: (event) => control.broadcast(event),
+    broadcast: (event) => control?.broadcast(event) ?? false,
     log,
     ...(options.launchApp ? { launchApp: options.launchApp } : {}),
   });
@@ -137,6 +136,13 @@ export async function startGate(options: GateOptions = {}): Promise<Gate> {
     httpPort = (await listen(http, httpPort, address, optional)) ?? httpPort;
     servers.push(https, http);
   }
+  control = await startControlServer({
+    socketPath: controlSocketPath(stateDirectory),
+    store,
+    version: options.version ?? "dev",
+    log,
+  });
+  const controlServer = control;
   log(
     `gate up: https ${httpsPort}, http ${httpPort}, routes ${store.list().length}`,
   );
@@ -146,7 +152,7 @@ export async function startGate(options: GateOptions = {}): Promise<Gate> {
     httpsPort,
     httpPort,
     close: async () => {
-      await control.close();
+      await controlServer.close();
       await Promise.all(
         servers.map(
           (server) =>
