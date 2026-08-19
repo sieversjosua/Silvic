@@ -104,13 +104,32 @@ export interface GateSetupContext {
     executable: string,
     arguments_: readonly string[],
   ): Promise<{ stdout: string; stderr: string }>;
+  /** Injected so tests do not wait out launchd's unload window. */
+  wait?(milliseconds: number): Promise<void>;
 }
 
-/** The unprivileged half: put the LaunchAgent in place and (re)start it. */
+/** How long the install waits for launchd, in steps of this length. */
+const LAUNCHCTL_ATTEMPTS = 12;
+const LAUNCHCTL_INTERVAL_MS = 250;
+
+/**
+ * The unprivileged half: put the LaunchAgent in place and (re)start it.
+ *
+ * `bootout` returns before launchd has finished unloading the old service,
+ * and a `bootstrap` that lands inside that window fails with EIO — which
+ * left the machine with the agent removed and no gate running at all, the
+ * failure swallowed. So: unload, wait until launchd admits the service is
+ * gone, load again, and throw when it never takes, so the caller can fall
+ * back to spawning the daemon itself.
+ */
 export async function installLaunchAgent(
   context: GateSetupContext,
 ): Promise<void> {
-  const execute = context.execute ?? runQuietly;
+  const execute = context.execute ?? runBounded;
+  const wait =
+    context.wait ??
+    ((milliseconds: number) =>
+      new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
   const stateDirectory = gateStateDirectory();
   const agents = join(homedir(), "Library", "LaunchAgents");
   await mkdir(agents, { recursive: true });
@@ -124,13 +143,34 @@ export async function installLaunchAgent(
     }),
   );
   const domain = `gui/${userInfo().uid}`;
-  await execute("launchctl", ["bootout", `${domain}/${LAUNCH_AGENT_LABEL}`]);
-  await execute("launchctl", ["bootstrap", domain, plistPath]);
-  await execute("launchctl", [
-    "kickstart",
-    "-k",
-    `${domain}/${LAUNCH_AGENT_LABEL}`,
-  ]);
+  const service = `${domain}/${LAUNCH_AGENT_LABEL}`;
+  let refused: unknown;
+  const attempt = async (arguments_: readonly string[]): Promise<boolean> => {
+    try {
+      await execute("launchctl", arguments_);
+      return true;
+    } catch (error) {
+      refused = error;
+      return false;
+    }
+  };
+
+  await attempt(["bootout", service]);
+  for (let left = LAUNCHCTL_ATTEMPTS; left > 0; left--) {
+    // `print` keeps succeeding while the old service is still on its way out.
+    if (!(await attempt(["print", service]))) break;
+    await wait(LAUNCHCTL_INTERVAL_MS);
+  }
+  for (let left = LAUNCHCTL_ATTEMPTS; left > 0; left--) {
+    // RunAtLoad starts the daemon as part of a successful bootstrap.
+    if (await attempt(["bootstrap", domain, plistPath])) return;
+    if (left > 1) await wait(LAUNCHCTL_INTERVAL_MS);
+  }
+  throw new Error(
+    `launchctl would not load the Silvic gate agent from ${plistPath}: ${
+      refused instanceof Error ? refused.message : String(refused)
+    }`,
+  );
 }
 
 /**
@@ -203,7 +243,7 @@ export async function diagnoseGate({
   /** GETs a URL, verifying TLS against the gate CA; resolves ok=false offline. */
   probe(url: string): Promise<boolean>;
 }): Promise<GateDiagnosis> {
-  const attempt = execute ?? runQuietlyFailing;
+  const attempt = execute ?? runBounded;
   const failures: { check: GateCheck; advice: string }[] = [];
 
   if (!(await socketStatus())) {
@@ -233,18 +273,8 @@ export async function diagnoseGate({
   return { healthy: failures.length === 0, failures };
 }
 
-async function runQuietly(
-  executable: string,
-  arguments_: readonly string[],
-): Promise<{ stdout: string; stderr: string }> {
-  try {
-    return await run(executable, [...arguments_], { timeout: 10_000 });
-  } catch {
-    return { stdout: "", stderr: "" };
-  }
-}
-
-async function runQuietlyFailing(
+/** Every command here is a quick local tool; none may hang the setup. */
+async function runBounded(
   executable: string,
   arguments_: readonly string[],
 ): Promise<{ stdout: string; stderr: string }> {

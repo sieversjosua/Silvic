@@ -19,6 +19,7 @@ import { startGate, type Gate } from "./daemon";
 import { RouteStore } from "./route-store";
 import {
   adminSetupScript,
+  installLaunchAgent,
   installPrivileged,
   installUserTrust,
   launchAgentPlist,
@@ -157,6 +158,51 @@ describe("setup artefacts", () => {
       "trustRoot",
     ]);
     expect(calls[0]).not.toContain("-d");
+  });
+
+  it("waits out launchd's unload window before loading the agent", async () => {
+    // `bootout` returns before the service is gone; a bootstrap sent into
+    // that window fails with EIO and leaves the machine with no gate at all.
+    let unloading = 2;
+    const calls: string[][] = [];
+    await inTemporaryHome(async () => {
+      await installLaunchAgent({
+        nodeExecutable: "/Applications/Silvic.app/Contents/MacOS/Silvic",
+        gateScript: "/Applications/Silvic.app/…/gate.mjs",
+        wait: async () => undefined,
+        execute: async (executable, arguments_) => {
+          calls.push([executable, ...arguments_]);
+          if (arguments_[0] === "print" && unloading-- > 0) {
+            return { stdout: "state = running", stderr: "" };
+          }
+          if (arguments_[0] === "print") throw new Error("Bad request.");
+          if (arguments_[0] === "bootstrap" && unloading > -1) {
+            throw new Error("Bootstrap failed: 5: Input/output error");
+          }
+          return { stdout: "", stderr: "" };
+        },
+      });
+    });
+    const verbs = calls.map((call) => call[1]);
+    expect(verbs).toEqual(["bootout", "print", "print", "print", "bootstrap"]);
+  });
+
+  it("reports a launch agent that launchd never loads", async () => {
+    await expect(
+      inTemporaryHome(() =>
+        installLaunchAgent({
+          nodeExecutable: "/Applications/Silvic.app/Contents/MacOS/Silvic",
+          gateScript: "/Applications/Silvic.app/…/gate.mjs",
+          wait: async () => undefined,
+          execute: async (_executable, arguments_) => {
+            if (arguments_[0] === "bootstrap") {
+              throw new Error("Bootstrap failed: 5: Input/output error");
+            }
+            throw new Error("Bad request.");
+          },
+        }),
+      ),
+    ).rejects.toThrow(/would not load/);
   });
 
   it("shell-quotes the admin script path for osascript", async () => {
@@ -408,3 +454,26 @@ describe("gate daemon", () => {
     );
   });
 });
+
+/** installLaunchAgent writes into ~/Library/LaunchAgents; keep that in /tmp. */
+async function inTemporaryHome(act: () => Promise<void>): Promise<void> {
+  const home = temporary();
+  const previous = {
+    home: process.env["HOME"],
+    state: process.env["SILVIC_GATE_STATE_DIR"],
+  };
+  process.env["HOME"] = home;
+  process.env["SILVIC_GATE_STATE_DIR"] = join(home, "state");
+  try {
+    await act();
+  } finally {
+    restore("HOME", previous.home);
+    restore("SILVIC_GATE_STATE_DIR", previous.state);
+    rmSync(home, { recursive: true, force: true });
+  }
+}
+
+function restore(name: string, value: string | undefined): void {
+  if (value === undefined) delete process.env[name];
+  else process.env[name] = value;
+}

@@ -92,6 +92,9 @@ export class GateManager {
    * Explicitly requested, so it always prompts again.
    */
   async setup(): Promise<void> {
+    // An explicit press may retry every last resort, the direct spawn
+    // included: a daemon spawned earlier in this run is plainly not there.
+    this.fallbackSpawned = false;
     await this.ensureAgent();
     this.privilegedAttempted = true;
     this.trustAttempted = true;
@@ -110,22 +113,21 @@ export class GateManager {
    */
   async ensureAgent(): Promise<void> {
     const status = await this.client.status();
+    // launchd's KeepAlive restarts a crashed daemon, but an app update that
+    // swapped gate.mjs under a living one goes unnoticed — the old code
+    // would keep serving until the next reboot.
+    const stale = status && status.version !== app.getVersion();
+    if (status && (!stale || this.refreshedDaemon)) return;
     if (status) {
-      // launchd's KeepAlive restarts a crashed daemon, but an app update
-      // that swapped gate.mjs under a living one goes unnoticed — the old
-      // code would keep serving until the next reboot.
-      if (status.version !== app.getVersion() && !this.refreshedDaemon) {
-        this.refreshedDaemon = true;
-        this.note(
-          `gate is ${status.version}, app is ${app.getVersion()}; restarting the daemon`,
-        );
-        await installLaunchAgent(gateRuntime());
-        await this.pollDaemon(5_000);
-        this.forget();
-      }
-      return;
+      this.refreshedDaemon = true;
+      this.note(
+        `gate is ${status.version}, app is ${app.getVersion()}; restarting the daemon`,
+      );
+    } else {
+      this.note("gate unreachable; installing the launch agent");
     }
-    this.note("gate unreachable; installing the launch agent");
+    // A restart that does not come back is the same situation as no daemon
+    // at all, so it takes the same route out — including the direct spawn.
     try {
       await installLaunchAgent(gateRuntime());
     } catch (error) {
@@ -180,6 +182,7 @@ export class GateManager {
     if (reprompt) {
       this.privilegedAttempted = false;
       this.trustAttempted = false;
+      this.fallbackSpawned = false;
     }
     this.ensureInFlight ??= this.escalate().finally(() => {
       this.ensureInFlight = undefined;
@@ -261,9 +264,12 @@ export class GateManager {
 
   private gateLogTail(): string {
     try {
+      // Non-empty lines only: a crashed daemon ends its dump with a closing
+      // brace and a blank line, which said nothing about what went wrong.
       const tail = readFileSync(join(gateStateDirectory(), "gate.log"), "utf8")
-        .trimEnd()
         .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0)
         .slice(-3)
         .join(" · ");
       return tail ? ` Gate log: ${tail}` : "";
