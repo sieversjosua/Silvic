@@ -11,6 +11,7 @@ import {
   type OpenLinkRequest,
   type OpenWorkspaceRequest,
   type ProjectActivationRequest,
+  type PullRequestLookupRequest,
   type RecipeSaveRequest,
   type PlotPreviewRequest,
   type PlotRenameRequest,
@@ -65,6 +66,8 @@ const api: SilvicDesktopApi = {
   connectGitHub: () => ipcRenderer.invoke(ipcChannels.githubConnect),
   listIssues: (request: IssueListRequest) =>
     ipcRenderer.invoke(ipcChannels.issuesList, request),
+  findPullRequest: (request: PullRequestLookupRequest) =>
+    ipcRenderer.invoke(ipcChannels.pullRequestFind, request),
   openWorkspace: (request: OpenWorkspaceRequest) =>
     ipcRenderer.invoke(ipcChannels.workspaceOpen, request),
   openLink: (request: OpenLinkRequest) =>

@@ -156,6 +156,48 @@ export const issueSummarySchema = z
   })
   .strict();
 
+/**
+ * A pull request as the New Plot dialog needs it: enough to recognise the work
+ * and to know which branch taking it up would put in the worktree.
+ */
+export interface PullRequestSummary {
+  provider: "github";
+  number: number;
+  title: string;
+  url: string;
+  state: "open" | "closed" | "merged";
+  draft: boolean;
+  /** The branch proposed for merging — what a plot would take up. */
+  headRefName: string;
+  /**
+   * `owner/repo` of the head branch when it lives in a fork. A fork's branch
+   * is not in this repository, so it cannot be taken up as a plot.
+   */
+  headRepository?: string;
+  /**
+   * Set when the head branch is nowhere to be found — neither here nor on the
+   * remote. A merged pull request whose branch was deleted leaves nothing to
+   * take up, which is worth saying before a plot is attempted.
+   */
+  headGone?: boolean;
+  author: string;
+}
+
+export const pullRequestSummarySchema = z
+  .object({
+    provider: z.literal("github"),
+    number: z.number().int().positive(),
+    title: z.string().max(500),
+    url: z.url().max(4_000),
+    state: z.enum(["open", "closed", "merged"]),
+    draft: z.boolean(),
+    headRefName: z.string().min(1).max(280),
+    headRepository: z.string().min(1).max(280).optional(),
+    headGone: z.boolean().optional(),
+    author: z.string().max(120),
+  })
+  .strict();
+
 export const taskContextSchema = z
   .object({
     title: z.string().min(1).max(500),
@@ -688,6 +730,17 @@ export const issueListRequestSchema = z
   .strict();
 export type IssueListRequest = z.infer<typeof issueListRequestSchema>;
 
+export const pullRequestLookupRequestSchema = z
+  .object({
+    projectId: z.string().min(1).max(400),
+    /** The pull request's number in the project's own repository. */
+    number: z.number().int().positive().max(1_000_000),
+  })
+  .strict();
+export type PullRequestLookupRequest = z.infer<
+  typeof pullRequestLookupRequestSchema
+>;
+
 export const plotProvisionRequestSchema = z
   .object({
     path: z.string().min(1),
@@ -923,6 +976,10 @@ export interface SilvicDesktopApi {
   executeDelivery(request: DeliveryExecuteRequest): Promise<DeliveryResult>;
   connectGitHub(): Promise<void>;
   listIssues(request: IssueListRequest): Promise<readonly IssueSummary[]>;
+  /** One pull request of this project by number, or nothing if there is none. */
+  findPullRequest(
+    request: PullRequestLookupRequest,
+  ): Promise<PullRequestSummary | undefined>;
   openWorkspace(request: OpenWorkspaceRequest): Promise<void>;
   openLink(request: OpenLinkRequest): Promise<void>;
   getAppearance(): Promise<AppearancePreference>;
@@ -971,6 +1028,7 @@ export const ipcChannels = {
   deliveryExecute: "silvic:delivery:execute",
   githubConnect: "silvic:github:connect",
   issuesList: "silvic:issues:list",
+  pullRequestFind: "silvic:pull-request:find",
   workspaceOpen: "silvic:workspace:open",
   linkOpen: "silvic:link:open",
   appearanceGet: "silvic:appearance:get",

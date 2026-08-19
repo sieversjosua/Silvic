@@ -3535,6 +3535,44 @@ button.plot-list-deployment:hover {
   color: var(--ink-faint);
 }
 
+/* A pull request needs two lines where a branch needs one: what the work is
+   called, and the branch taking it up would put in the worktree. */
+.pull-request-candidate {
+  height: auto;
+  min-height: 44px;
+  align-items: center;
+  padding: 6px 8px;
+}
+
+.pull-request-lines {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.pull-request-headline {
+  display: flex;
+  min-width: 0;
+  gap: 6px;
+  align-items: baseline;
+}
+
+.pull-request-candidate small {
+  color: var(--ink-faint);
+  font-size: 10.5px;
+}
+
+.pull-request-candidate:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.pull-request-candidate:disabled:hover {
+  background: transparent;
+}
+
 .branch-origin {
   flex: 0 0 auto;
   margin-left: auto;

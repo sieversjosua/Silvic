@@ -2,6 +2,7 @@ import type {
   Connector,
   ConnectorObservation,
   IssueSummary,
+  PullRequestSummary,
   WorkspaceTarget,
 } from "@silvic/contracts";
 import type { CommandRunner } from "@silvic/core";
@@ -68,6 +69,106 @@ export async function listGitHubIssues(
     labels: issue.labels.map((label) => label.name),
     assignees: issue.assignees.map((assignee) => assignee.login),
   }));
+}
+
+interface PullRequestViewResponse {
+  number: number;
+  title: string;
+  url: string;
+  state: string;
+  isDraft: boolean;
+  headRefName: string;
+  isCrossRepository: boolean;
+  headRepository: { name: string } | null;
+  headRepositoryOwner: { login: string } | null;
+  author: { login: string } | null;
+}
+
+/**
+ * One pull request of this repository, looked up by the number somebody typed
+ * or pasted. A number nobody opened a pull request for is not a failure —
+ * nothing is simply what there is to say — so it answers `undefined` rather
+ * than throwing, and keeps throwing for the failures worth reporting: no
+ * `gh`, no authentication, no network.
+ */
+export async function findGitHubPullRequest(
+  runner: CommandRunner,
+  cwd: string,
+  number: number,
+): Promise<PullRequestSummary | undefined> {
+  const result = await runner.run({
+    executable: "gh",
+    arguments: [
+      "pr",
+      "view",
+      String(number),
+      "--json",
+      "number,title,url,state,isDraft,headRefName,isCrossRepository,headRepository,headRepositoryOwner,author",
+    ],
+    cwd,
+  });
+  if (result.exitCode !== 0) {
+    const message = result.stderr.trim() || result.stdout.trim();
+    if (describesMissingPullRequest(message)) return undefined;
+    throw new Error(message || "GitHub CLI is unavailable");
+  }
+  const response = parsePullRequestView(result.stdout);
+  const headOwner = response.headRepositoryOwner?.login;
+  const headName = response.headRepository?.name;
+  return {
+    provider: "github",
+    number: response.number,
+    title: response.title,
+    url: response.url,
+    state: pullRequestState(response.state),
+    draft: response.isDraft,
+    headRefName: response.headRefName,
+    ...(response.isCrossRepository && headOwner && headName
+      ? { headRepository: `${headOwner}/${headName}` }
+      : {}),
+    author: response.author?.login ?? "",
+  };
+}
+
+/** What `gh` says when the number is free, an issue, or otherwise not a PR. */
+function describesMissingPullRequest(message: string): boolean {
+  return /could not resolve to a pullrequest|no pull requests found|not found/i.test(
+    message,
+  );
+}
+
+function pullRequestState(state: string): PullRequestSummary["state"] {
+  const known = state.toUpperCase();
+  if (known === "MERGED") return "merged";
+  if (known === "CLOSED") return "closed";
+  return "open";
+}
+
+function parsePullRequestView(output: string): PullRequestViewResponse {
+  const value: unknown = JSON.parse(output);
+  if (!isPullRequestView(value)) {
+    throw new Error("GitHub returned an unreadable pull-request response");
+  }
+  return value;
+}
+
+function isPullRequestView(value: unknown): value is PullRequestViewResponse {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "number" in value &&
+    typeof value.number === "number" &&
+    "title" in value &&
+    typeof value.title === "string" &&
+    "url" in value &&
+    typeof value.url === "string" &&
+    "state" in value &&
+    typeof value.state === "string" &&
+    "isDraft" in value &&
+    typeof value.isDraft === "boolean" &&
+    "headRefName" in value &&
+    typeof value.headRefName === "string"
+  );
 }
 
 function parseIssues(output: string): readonly IssueResponse[] {

@@ -28,6 +28,7 @@ import { autoUpdater } from "electron-updater";
 import { convexConnector } from "@silvic/connector-convex";
 import {
   createGitHubConnector,
+  findGitHubPullRequest,
   listGitHubIssues,
 } from "@silvic/connector-github";
 import { harnessById } from "@silvic/connector-harnesses";
@@ -39,6 +40,7 @@ import {
   deliveryExecuteRequestSchema,
   ipcChannels,
   issueListRequestSchema,
+  pullRequestLookupRequestSchema,
   openLinkRequestSchema,
   openWorkspaceRequestSchema,
   projectActivationRequestSchema,
@@ -476,6 +478,28 @@ function registerIpc(): void {
       parsed.query,
     );
   });
+  ipcMain.handle(
+    ipcChannels.pullRequestFind,
+    async (event, request: unknown) => {
+      assertTrustedSender(event);
+      const parsed = pullRequestLookupRequestSchema.parse(request);
+      const rootPath = knownProjectRoot(parsed.projectId);
+      const pullRequest = await findGitHubPullRequest(
+        runner,
+        rootPath,
+        parsed.number,
+      );
+      // A pull request opened elsewhere is usually not fetched here yet, and
+      // a worktree cannot be cut from a ref this clone has never seen. The
+      // lookup brings the branch down so taking it up is a local matter — and
+      // says so when there is no branch left to bring.
+      if (!pullRequest || pullRequest.headRepository) return pullRequest;
+      await fetchBranch(rootPath, pullRequest.headRefName);
+      return (await branchReachable(rootPath, pullRequest.headRefName))
+        ? pullRequest
+        : { ...pullRequest, headGone: true };
+    },
+  );
   ipcMain.handle(ipcChannels.linkOpen, async (event, request: unknown) => {
     assertTrustedSender(event);
     const { url } = openLinkRequestSchema.parse(request);
@@ -896,6 +920,39 @@ function knownProjectRoot(projectId: string): string {
   );
   if (!project) throw new Error("Silvic can only configure a known project");
   return project.rootPath;
+}
+
+/**
+ * Update one remote-tracking branch, best effort. Being offline is not a
+ * reason to refuse to show the pull request that was asked for; the branch
+ * this clone already has is then what taking it up would open, and a branch
+ * it has never seen fails loudly at creation instead.
+ */
+async function branchReachable(
+  rootPath: string,
+  branch: string,
+): Promise<boolean> {
+  for (const ref of [`refs/heads/${branch}`, `refs/remotes/origin/${branch}`]) {
+    const result = await runner.run({
+      executable: "git",
+      arguments: ["rev-parse", "--verify", "--quiet", ref],
+      cwd: rootPath,
+    });
+    if (result.exitCode === 0) return true;
+  }
+  return false;
+}
+
+async function fetchBranch(rootPath: string, branch: string): Promise<void> {
+  await runner.run({
+    executable: "git",
+    arguments: [
+      "fetch",
+      "origin",
+      `+refs/heads/${branch}:refs/remotes/origin/${branch}`,
+    ],
+    cwd: rootPath,
+  });
 }
 
 function currentWindowBackground(): string {

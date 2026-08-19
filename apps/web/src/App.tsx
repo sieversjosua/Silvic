@@ -50,6 +50,7 @@ import type {
   ProjectSnapshot,
   ProvisionRemedyId,
   ProvisionResult,
+  PullRequestSummary,
   Recipe,
   SilvicSnapshot,
   WorkspaceChanges,
@@ -76,6 +77,7 @@ import {
 import { concernsBranch, failureMessage } from "./errors";
 import { namedRoutingReady, pollNamedRouting } from "./named-routing";
 import { plotResources } from "./plot-resources";
+import { pullRequestReference } from "./pull-request";
 import { PlotList } from "./PlotList";
 import { useAccelerator, useKeyLayer } from "./shortcuts";
 import { useSilvic } from "./store";
@@ -1484,9 +1486,14 @@ function CopyRow({
  * are a fixed 30px with a pixel between them; eight is as many as the column
  * gives up before the rest scroll.
  */
-function candidateListHeight(count: number): number {
-  const rows = Math.min(count, 8);
+function candidateListHeight(count: number, minimum = 1): number {
+  const rows = Math.min(Math.max(count, minimum), 8);
   return rows * 30 + (rows - 1);
+}
+
+/** `github.com/example/silvic` is said as `example/silvic` to a person. */
+function repositorySlug(projectId: string): string {
+  return projectId.split("/").slice(-2).join("/");
 }
 
 /** `origin/feature-x` becomes the local `feature-x` that follows it. */
@@ -1577,8 +1584,16 @@ function NewPlotDialog({
   const [settingUpRouting, setSettingUpRouting] = useState(false);
   // Set when the plot is to take up a branch that already exists rather than
   // cut a new one. The ref is what Git is pointed at; the name is the local
-  // branch that ends up in the worktree.
-  const [adopt, setAdopt] = useState<{ ref: string; name: string }>();
+  // branch that ends up in the worktree, and the number is the pull request it
+  // was reached through, when it was.
+  const [adopt, setAdopt] = useState<{
+    ref: string;
+    name: string;
+    pullRequest?: number;
+  }>();
+  const [pullRequest, setPullRequest] = useState<PullRequestSummary>();
+  const [pullRequestLoading, setPullRequestLoading] = useState(false);
+  const [pullRequestFailure, setPullRequestFailure] = useState<string>();
   // The branch being created, so progress from an abandoned attempt cannot
   // paint over the one the dialog is waiting on.
   const creatingBranch = useRef<string | undefined>(undefined);
@@ -1614,6 +1629,12 @@ function NewPlotDialog({
       query === "" || candidate.ref.toLowerCase().includes(query.toLowerCase()),
   );
   const projectId = source?.projectId;
+  // A pull request is passed around as a URL or called `#123`, and neither is
+  // a branch name — so the same field reads them as what they are and asks
+  // GitHub, rather than filtering the branch list down to nothing.
+  const reference = pullRequestReference(branchQuery);
+  const wantedPullRequest = reference?.number;
+  const wantedRepository = reference?.projectId;
   // A refused branch name is a fault of the field, not of the dialog, so it is
   // reported there and the general area is left for everything else.
   const branchFailure =
@@ -1676,6 +1697,49 @@ function NewPlotDialog({
   }, [wanted, projectId, applyPreview, previewAttempt]);
 
   useEffect(() => {
+    setPullRequest(undefined);
+    setPullRequestFailure(undefined);
+    if (!wantedPullRequest || !projectId) {
+      setPullRequestLoading(false);
+      return;
+    }
+    // A URL says which repository it came from, and taking up a branch of
+    // another one is not a thing that can be done here.
+    if (wantedRepository && wantedRepository !== projectId.toLowerCase()) {
+      setPullRequestLoading(false);
+      setPullRequestFailure(
+        `That pull request is in ${repositorySlug(wantedRepository)}, not in this project.`,
+      );
+      return;
+    }
+    let current = true;
+    setPullRequestLoading(true);
+    const timer = window.setTimeout(() => {
+      void window.silvic
+        .findPullRequest({ projectId, number: wantedPullRequest })
+        .then((found) => {
+          if (!current) return;
+          setPullRequest(found);
+          setPullRequestFailure(
+            found
+              ? undefined
+              : `This project has no pull request #${wantedPullRequest}.`,
+          );
+        })
+        .catch((error: unknown) => {
+          if (current) setPullRequestFailure(failureMessage(error));
+        })
+        .finally(() => {
+          if (current) setPullRequestLoading(false);
+        });
+    }, 220);
+    return () => {
+      current = false;
+      window.clearTimeout(timer);
+    };
+  }, [wantedPullRequest, wantedRepository, projectId]);
+
+  useEffect(() => {
     if (!settingUpRouting || !preview?.advice || !wanted || !projectId) return;
     let current = true;
     let timer: number | undefined;
@@ -1719,6 +1783,19 @@ function NewPlotDialog({
       }
     };
   }, [settingUpRouting, preview?.advice, wanted, projectId, applyPreview]);
+
+  // One way in for both lists: whichever ref was picked becomes the branch the
+  // plot will hold. A branch this clone already has is taken up as it is; one
+  // that only exists on the remote is followed by a local branch of its name.
+  const takeUp = (
+    candidate: { ref: string; name: string },
+    number?: number,
+  ) => {
+    setAdopt({ ...candidate, ...(number ? { pullRequest: number } : {}) });
+    setBranch(candidate.name);
+    setFailure(undefined);
+    setSteps([]);
+  };
 
   const setupNamedRouting = () => {
     setFailure(undefined);
@@ -2114,7 +2191,13 @@ function NewPlotDialog({
                 <span>{branchFailure}</span>
               ) : adopt ? (
                 <span>
-                  Takes up <span className="mono">{adopt.ref}</span>
+                  Takes up{" "}
+                  {adopt.pullRequest ? (
+                    <>
+                      <span className="mono">#{adopt.pullRequest}</span> on{" "}
+                    </>
+                  ) : null}
+                  <span className="mono">{adopt.ref}</span>
                   {adopt.ref === adopt.name
                     ? ""
                     : ", following it from here on"}
@@ -2214,64 +2297,97 @@ function NewPlotDialog({
                 </select>
               </label>
             )}
-            {openable.length > 0 && (
-              <div className="branch-candidates">
-                <p className="micro">
-                  Take up a branch that exists
-                  <span className="micro-value">
-                    {query === ""
-                      ? openable.length
-                      : `${candidates.length} of ${openable.length}`}
-                  </span>
-                </p>
-                <label className="branch-search">
-                  <Search size={12} />
-                  <input
-                    value={branchQuery}
-                    onChange={(event) => setBranchQuery(event.target.value)}
-                    placeholder="Search branches"
-                    aria-label="Search branches"
+            <div className="branch-candidates">
+              <p className="micro">
+                Take up a branch or pull request
+                <span className="micro-value">
+                  {query === "" || reference
+                    ? openable.length
+                    : `${candidates.length} of ${openable.length}`}
+                </span>
+              </p>
+              <label className="branch-search">
+                <Search size={12} />
+                <input
+                  value={branchQuery}
+                  onChange={(event) => setBranchQuery(event.target.value)}
+                  placeholder="Search branches, or paste a pull request"
+                  aria-label="Search branches, or paste a pull request"
+                  disabled={creating}
+                />
+              </label>
+              {/* Sized by what could be listed, not by what the search has
+                  left, so filtering empties the box instead of resizing the
+                  dialog under the field being typed in. Two rows at the least,
+                  because a pull request can be looked up where no branch is
+                  free to be listed. */}
+              <div
+                className="branch-candidate-list"
+                style={{ height: candidateListHeight(openable.length, 2) }}
+              >
+                {reference && (
+                  <PullRequestResult
+                    number={reference.number}
+                    pullRequest={pullRequest}
+                    loading={pullRequestLoading}
+                    failure={pullRequestFailure}
+                    holder={
+                      pullRequest
+                        ? sources.find(
+                            (candidate) =>
+                              candidate.git.branch === pullRequest.headRefName,
+                          )?.name
+                        : undefined
+                    }
+                    selected={
+                      pullRequest !== undefined &&
+                      adopt?.name === pullRequest.headRefName
+                    }
                     disabled={creating}
+                    onTake={(found) =>
+                      takeUp(
+                        {
+                          ref: branches.includes(found.headRefName)
+                            ? found.headRefName
+                            : `origin/${found.headRefName}`,
+                          name: found.headRefName,
+                        },
+                        found.number,
+                      )
+                    }
                   />
-                </label>
-                {/* Sized by what could be listed, not by what the search has
-                    left, so filtering empties the box instead of resizing the
-                    dialog under the field being typed in. */}
-                <div
-                  className="branch-candidate-list"
-                  style={{ height: candidateListHeight(openable.length) }}
-                >
-                  {candidates.length === 0 && (
-                    <p className="candidates-empty">
-                      No branch matches <span className="mono">{query}</span>.
-                    </p>
-                  )}
-                  {candidates.map((candidate) => (
-                    <button
-                      key={candidate.ref}
-                      type="button"
-                      className="branch-candidate"
-                      data-selected={adopt?.ref === candidate.ref || undefined}
-                      disabled={creating}
-                      onClick={() => {
-                        setAdopt({ ref: candidate.ref, name: candidate.name });
-                        setBranch(candidate.name);
-                        setFailure(undefined);
-                        setSteps([]);
-                      }}
-                    >
-                      <GitBranch size={11} />
-                      <span className="truncate">{candidate.name}</span>
-                      {candidate.remote && (
-                        <span className="branch-origin mono">
-                          {candidate.ref}
-                        </span>
-                      )}
-                    </button>
-                  ))}
-                </div>
+                )}
+                {candidates.length === 0 && !reference && (
+                  <p className="candidates-empty">
+                    {openable.length === 0 ? (
+                      "Every branch here is already open as a plot."
+                    ) : (
+                      <>
+                        No branch matches <span className="mono">{query}</span>.
+                      </>
+                    )}
+                  </p>
+                )}
+                {candidates.map((candidate) => (
+                  <button
+                    key={candidate.ref}
+                    type="button"
+                    className="branch-candidate"
+                    data-selected={adopt?.ref === candidate.ref || undefined}
+                    disabled={creating}
+                    onClick={() => takeUp(candidate)}
+                  >
+                    <GitBranch size={11} />
+                    <span className="truncate">{candidate.name}</span>
+                    {candidate.remote && (
+                      <span className="branch-origin mono">
+                        {candidate.ref}
+                      </span>
+                    )}
+                  </button>
+                ))}
               </div>
-            )}
+            </div>
             <fieldset className="choices" disabled={creating}>
               <legend className="micro">Location</legend>
               <label data-selected={mode === "worktree" || undefined}>
@@ -2313,6 +2429,73 @@ function NewPlotDialog({
       </form>
     </div>
   );
+}
+
+/**
+ * What the branch search found when what was typed named a pull request
+ * rather than a branch. It says what is there and, when it cannot be taken
+ * up, why: a fork's branch is not in this repository, and one that is already
+ * checked out belongs to the plot holding it.
+ */
+function PullRequestResult({
+  number,
+  pullRequest,
+  loading,
+  failure,
+  holder,
+  selected,
+  disabled,
+  onTake,
+}: {
+  number: number;
+  pullRequest: PullRequestSummary | undefined;
+  loading: boolean;
+  failure: string | undefined;
+  /** The plot already holding the head branch, when one does. */
+  holder: string | undefined;
+  selected: boolean;
+  disabled: boolean;
+  onTake(pullRequest: PullRequestSummary): void;
+}) {
+  if (loading) {
+    return <p className="candidates-empty">Looking up #{number}…</p>;
+  }
+  if (failure) return <p className="candidates-empty">{failure}</p>;
+  if (!pullRequest) return null;
+  const refusal = pullRequest.headRepository
+    ? `Its branch lives in ${pullRequest.headRepository}, not here`
+    : pullRequest.headGone
+      ? `Its branch ${pullRequest.headRefName} is gone from GitHub`
+      : holder
+        ? `Already open as ${holder}`
+        : undefined;
+  return (
+    <button
+      type="button"
+      className="branch-candidate pull-request-candidate"
+      data-selected={selected || undefined}
+      disabled={disabled || refusal !== undefined}
+      onClick={() => onTake(pullRequest)}
+    >
+      <GitPullRequest size={12} />
+      <span className="pull-request-lines">
+        <span className="pull-request-headline">
+          <span className="mono">#{pullRequest.number}</span>
+          <span className="truncate">{pullRequest.title}</span>
+        </span>
+        <small className="truncate">
+          {refusal ??
+            `${pullRequestWord(pullRequest)} · ${pullRequest.headRefName}`}
+        </small>
+      </span>
+    </button>
+  );
+}
+
+function pullRequestWord(pullRequest: PullRequestSummary): string {
+  if (pullRequest.state === "merged") return "Merged";
+  if (pullRequest.state === "closed") return "Closed";
+  return pullRequest.draft ? "Draft" : "Open";
 }
 
 function PlotOnlineStatus({

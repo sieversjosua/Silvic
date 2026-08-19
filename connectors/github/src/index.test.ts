@@ -7,7 +7,11 @@ import type {
   CommandRunner,
 } from "@silvic/core";
 
-import { createGitHubConnector, listGitHubIssues } from "./index";
+import {
+  createGitHubConnector,
+  findGitHubPullRequest,
+  listGitHubIssues,
+} from "./index";
 
 const target: WorkspaceTarget = {
   workspaceId: "workspace-1",
@@ -65,6 +69,103 @@ describe("GitHub connector", () => {
         cwd: "/projects/silvic",
       },
     ]);
+  });
+
+  it("finds one pull request by number and names the branch it proposes", async () => {
+    const runner = new RecordingRunner({
+      exitCode: 0,
+      stdout: JSON.stringify({
+        number: 123,
+        title: "Fix authentication",
+        url: "https://github.com/example/silvic/pull/123",
+        state: "OPEN",
+        isDraft: true,
+        headRefName: "agent/auth",
+        isCrossRepository: false,
+        headRepository: { name: "silvic" },
+        headRepositoryOwner: { login: "example" },
+        author: { login: "josua" },
+      }),
+      stderr: "",
+    });
+
+    await expect(
+      findGitHubPullRequest(runner, "/projects/silvic", 123),
+    ).resolves.toEqual({
+      provider: "github",
+      number: 123,
+      title: "Fix authentication",
+      url: "https://github.com/example/silvic/pull/123",
+      state: "open",
+      draft: true,
+      headRefName: "agent/auth",
+      author: "josua",
+    });
+    expect(runner.requests).toEqual([
+      {
+        executable: "gh",
+        arguments: [
+          "pr",
+          "view",
+          "123",
+          "--json",
+          "number,title,url,state,isDraft,headRefName,isCrossRepository,headRepository,headRepositoryOwner,author",
+        ],
+        cwd: "/projects/silvic",
+      },
+    ]);
+  });
+
+  it("names the fork a cross-repository head branch lives in", async () => {
+    const runner = new RecordingRunner({
+      exitCode: 0,
+      stdout: JSON.stringify({
+        number: 9,
+        title: "Contribute a fix",
+        url: "https://github.com/example/silvic/pull/9",
+        state: "MERGED",
+        isDraft: false,
+        headRefName: "patch-1",
+        isCrossRepository: true,
+        headRepository: { name: "silvic" },
+        headRepositoryOwner: { login: "outsider" },
+        author: { login: "outsider" },
+      }),
+      stderr: "",
+    });
+
+    await expect(
+      findGitHubPullRequest(runner, "/projects/silvic", 9),
+    ).resolves.toMatchObject({
+      state: "merged",
+      headRepository: "outsider/silvic",
+    });
+  });
+
+  it("answers nothing for a number no pull request has", async () => {
+    const runner = new RecordingRunner({
+      exitCode: 1,
+      stdout: "",
+      stderr:
+        "GraphQL: Could not resolve to a PullRequest with the number of 404. (repository.pullRequest)",
+    });
+
+    await expect(
+      findGitHubPullRequest(runner, "/projects/silvic", 404),
+    ).resolves.toBeUndefined();
+  });
+
+  it("reports a failure that is worth acting on", async () => {
+    const runner = new RecordingRunner({
+      exitCode: 1,
+      stdout: "",
+      stderr:
+        "gh: To use GitHub CLI in a GitHub Actions workflow, set the GH_TOKEN",
+    });
+
+    await expect(
+      findGitHubPullRequest(runner, "/projects/silvic", 5),
+    ).rejects.toThrow(/GH_TOKEN/);
   });
 
   it("maps the current branch pull request and check rollup", async () => {
