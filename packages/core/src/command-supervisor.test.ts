@@ -214,6 +214,167 @@ describe("CommandSupervisor", () => {
     supervisor.stopAll();
   });
 
+  it("restarts once and returns to running after a stale Vite failure", async () => {
+    const logDirectory = await mkdtemp(join(tmpdir(), "silvic-supervisor-"));
+    temporaryDirectories.push(logDirectory);
+    const onChange = vi.fn();
+    const publish = vi.fn().mockResolvedValue({ port: 4321 });
+    const diagnose = vi
+      .fn<NonNullable<NamedRoutePublisher["diagnose"]>>()
+      .mockResolvedValue({ status: "healthy", httpStatus: 200 });
+    const routePublisher: NamedRoutePublisher = {
+      publish,
+      improve: vi.fn().mockResolvedValue(undefined),
+      healthy: vi.fn().mockResolvedValue(true),
+      diagnose,
+      remove: vi.fn().mockResolvedValue(undefined),
+    };
+    const supervisor = new CommandSupervisor({
+      logDirectory,
+      onChange,
+      routePublisher,
+      routeHealthIntervalMs: 5,
+    });
+
+    await supervisor.start({
+      plotPath: logDirectory,
+      id: "web",
+      command: { run: "sleep 10", url: true },
+      routeName: "web-vite-recovery",
+      environment: { PORT: "4321" },
+      canRoute: true,
+      detached: false,
+    });
+    await vi.waitFor(() =>
+      expect(supervisor.list()[0]?.status).toBe("running"),
+    );
+    const originalProcessId = supervisor.list()[0]?.processId;
+    supervisor.reportRouteFailure(
+      "web-vite-recovery",
+      "vite-stale-optimized-dependency",
+    );
+
+    await vi.waitFor(() => expect(publish).toHaveBeenCalledTimes(2), {
+      timeout: 5_000,
+    });
+    await vi.waitFor(
+      () =>
+        expect(supervisor.list()[0]).toMatchObject({
+          status: "running",
+          notice: expect.stringContaining("recovered the preview"),
+        }),
+      { timeout: 5_000 },
+    );
+    expect(supervisor.list()[0]?.processId).not.toBe(originalProcessId);
+    expect(supervisor.list()[0]).not.toHaveProperty("recoveryAttempts");
+    expect(onChange).toHaveBeenCalledWith([
+      expect.objectContaining({ recoveryAttempts: 1 }),
+    ]);
+    supervisor.stopAll();
+  });
+
+  it("degrades after the restarted preview repeats the Vite failure", async () => {
+    const logDirectory = await mkdtemp(join(tmpdir(), "silvic-supervisor-"));
+    temporaryDirectories.push(logDirectory);
+    const publish = vi.fn().mockResolvedValue({ port: 4321 });
+    const routePublisher: NamedRoutePublisher = {
+      publish,
+      improve: vi.fn().mockResolvedValue(undefined),
+      healthy: vi.fn().mockResolvedValue(true),
+      diagnose: vi
+        .fn()
+        .mockResolvedValue({ status: "healthy", httpStatus: 200 }),
+      remove: vi.fn().mockResolvedValue(undefined),
+    };
+    const supervisor = new CommandSupervisor({
+      logDirectory,
+      onChange: () => {},
+      routePublisher,
+      routeHealthIntervalMs: 10_000,
+    });
+
+    await supervisor.start({
+      plotPath: logDirectory,
+      id: "web",
+      command: { run: "sleep 10", url: true },
+      routeName: "web-vite-loop",
+      environment: { PORT: "4321" },
+      canRoute: true,
+      detached: false,
+    });
+    await vi.waitFor(() =>
+      expect(supervisor.list()[0]?.status).toBe("running"),
+    );
+    supervisor.reportRouteFailure(
+      "web-vite-loop",
+      "vite-stale-optimized-dependency",
+    );
+    await vi.waitFor(
+      () =>
+        expect(supervisor.list()[0]).toMatchObject({
+          status: "running",
+          recoveryAttempts: 1,
+        }),
+      { timeout: 5_000 },
+    );
+    supervisor.reportRouteFailure(
+      "web-vite-loop",
+      "vite-stale-optimized-dependency",
+    );
+
+    await vi.waitFor(
+      () =>
+        expect(supervisor.list()[0]).toMatchObject({
+          status: "failed",
+          advice: expect.stringContaining("Rebuild the Vite cache"),
+        }),
+      { timeout: 5_000 },
+    );
+    expect(supervisor.list()[0]).not.toHaveProperty("processId");
+    expect(publish).toHaveBeenCalledTimes(2);
+  });
+
+  it("leaves an unrelated application 500 running", async () => {
+    const logDirectory = await mkdtemp(join(tmpdir(), "silvic-supervisor-"));
+    temporaryDirectories.push(logDirectory);
+    const publish = vi.fn().mockResolvedValue({ port: 4321 });
+    const diagnose = vi
+      .fn()
+      .mockResolvedValue({ status: "healthy", httpStatus: 500 });
+    const routePublisher: NamedRoutePublisher = {
+      publish,
+      improve: vi.fn().mockResolvedValue(undefined),
+      healthy: vi.fn().mockResolvedValue(true),
+      diagnose,
+      remove: vi.fn().mockResolvedValue(undefined),
+    };
+    const supervisor = new CommandSupervisor({
+      logDirectory,
+      onChange: () => {},
+      routePublisher,
+      routeHealthIntervalMs: 5,
+    });
+
+    await supervisor.start({
+      plotPath: logDirectory,
+      id: "web",
+      command: { run: "sleep 10", url: true },
+      routeName: "web-app-error",
+      environment: { PORT: "4321" },
+      canRoute: true,
+      detached: false,
+    });
+    const processId = supervisor.list()[0]?.processId;
+    await vi.waitFor(() => expect(diagnose).toHaveBeenCalled());
+
+    expect(supervisor.list()[0]).toMatchObject({
+      status: "running",
+      processId,
+    });
+    expect(publish).toHaveBeenCalledTimes(1);
+    supervisor.stopAll();
+  });
+
   it("keeps a slow dev server running instead of killing what works", async () => {
     const logDirectory = await mkdtemp(join(tmpdir(), "silvic-supervisor-"));
     temporaryDirectories.push(logDirectory);

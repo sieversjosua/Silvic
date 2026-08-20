@@ -16,6 +16,7 @@ import {
   installUserTrust,
   stopOrphanGate,
   type GateDiagnosis,
+  type GateFailure,
   type GateWake,
 } from "@silvic/gate";
 
@@ -28,8 +29,11 @@ export class GateManager {
   readonly client: GateClient;
   readonly publisher: GateRoutePublisher;
 
-  constructor(onWake: (wake: GateWake) => void) {
-    this.client = new GateClient({ onWake });
+  constructor(
+    onWake: (wake: GateWake) => void,
+    onFailure: (failure: GateFailure) => void,
+  ) {
+    this.client = new GateClient({ onWake, onFailure });
     const link: GateRouteLink = {
       set: (route) => this.withDaemon(() => this.client.routeSet(route)),
       suspend: (name) => this.withDaemon(() => this.client.routeSuspend(name)),
@@ -351,4 +355,4 @@ function gateRuntime(): { nodeExecutable: string; gateScript: string } {
 }
 
 export { GATE_HOST };
-export type { GateWake };
+export type { GateFailure, GateWake };

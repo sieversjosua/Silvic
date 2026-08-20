@@ -4,6 +4,7 @@ import {
   GateRoutePublisher,
   GateUnreachable,
   descendantListenerPorts,
+  viteOptimizerFailure,
   type GateRouteLink,
 } from "./named-route";
 
@@ -630,5 +631,61 @@ describe("GateRoutePublisher", () => {
         port: 9236,
       }),
     ).resolves.toBe(false);
+  });
+
+  it("diagnoses only the known stale Vite optimized-dependency 500", async () => {
+    const { link } = recordingLink();
+    const stale = {
+      status: 500,
+      contentType: "text/html; charset=utf-8",
+      failure: "vite-stale-optimized-dependency" as const,
+    };
+    const publisher = new GateRoutePublisher({
+      link,
+      inspect: async () => [],
+      probe: async () => stale,
+      wait: async () => undefined,
+    });
+
+    await expect(
+      publisher.diagnose({
+        routeName: "web-vite-plot",
+        port: 4321,
+      }),
+    ).resolves.toEqual({
+      status: "recoverable",
+      failure: "vite-stale-optimized-dependency",
+    });
+
+    const unrelated = new GateRoutePublisher({
+      link,
+      inspect: async () => [],
+      probe: async () => ({ status: 500, contentType: "text/html" }),
+      wait: async () => undefined,
+    });
+    await expect(
+      unrelated.diagnose({
+        routeName: "web-vite-plot",
+        port: 4321,
+      }),
+    ).resolves.toEqual({ status: "healthy", httpStatus: 500 });
+  });
+});
+
+describe("viteOptimizerFailure", () => {
+  it("matches Vite's missing optimized-dependency signature", () => {
+    expect(
+      viteOptimizerFailure(
+        `The file does not exist at "/plot/node_modules/.vite/deps_ssr/clsx.js?v=123" which is in the optimize deps directory.`,
+      ),
+    ).toBe(true);
+  });
+
+  it("does not match an unrelated application error", () => {
+    expect(
+      viteOptimizerFailure(
+        "The file does not exist at /uploads/photo.jpg and the request failed.",
+      ),
+    ).toBe(false);
   });
 });

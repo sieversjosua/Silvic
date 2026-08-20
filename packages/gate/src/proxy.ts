@@ -14,6 +14,7 @@ export interface ProxyContext {
   store: RouteStore;
   version: string;
   wake(route: GateRoute): void;
+  recover(route: GateRoute, failure: "vite-stale-optimized-dependency"): void;
 }
 
 /**
@@ -76,6 +77,9 @@ function forward(
         upstreamResponse.statusMessage,
         rewriteLocation(upstreamResponse.headers, publicHost, port),
       );
+      inspectFailurePrefix(upstreamResponse, (failure) =>
+        context.recover(route, failure),
+      );
       upstreamResponse.pipe(response);
     },
   );
@@ -95,6 +99,58 @@ function forward(
   });
   request.once("aborted", () => upstream.destroy());
   request.pipe(upstream);
+}
+
+const failurePrefixLimit = 16 * 1_024;
+
+/** Observes a bounded prefix while the unchanged upstream response streams. */
+function inspectFailurePrefix(
+  upstream: IncomingMessage,
+  report: (failure: "vite-stale-optimized-dependency") => void,
+): void {
+  const status = upstream.statusCode ?? 0;
+  if (
+    status < 500 ||
+    status >= 600 ||
+    mediaType(upstream.headers["content-type"]) !== "text/html"
+  ) {
+    return;
+  }
+  const chunks: Buffer[] = [];
+  let length = 0;
+  let inspected = false;
+  const inspect = () => {
+    if (inspected) return;
+    inspected = true;
+    const prefix = Buffer.concat(chunks, length).toString("utf8");
+    chunks.length = 0;
+    if (viteOptimizerFailure(prefix)) {
+      report("vite-stale-optimized-dependency");
+    }
+  };
+  upstream.on("data", (chunk: Buffer) => {
+    if (inspected) return;
+    const bounded = chunk.subarray(0, failurePrefixLimit - length);
+    chunks.push(bounded);
+    length += bounded.length;
+    if (length >= failurePrefixLimit) inspect();
+  });
+  upstream.once("end", inspect);
+}
+
+function viteOptimizerFailure(prefix: string): boolean {
+  const normalized = prefix.toLowerCase();
+  return (
+    normalized.includes("the file does not exist at") &&
+    /node_modules\/(?:\.vite|\.cache\/vite)\/(?:deps|deps_ssr)\//.test(
+      normalized,
+    ) &&
+    normalized.includes("which is in the optimize deps directory")
+  );
+}
+
+function mediaType(contentType: string | undefined): string {
+  return contentType?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
 }
 
 /** WebSocket upgrades pass through as raw TCP once the handshake is sent. */

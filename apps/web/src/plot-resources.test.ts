@@ -51,6 +51,7 @@ describe("plotResources", () => {
             id: "web",
             status: "running",
             url: "https://web-heic-app.localhost",
+            notice: "Silvic recovered the preview.",
           },
           {
             plotPath: workspace.path,
@@ -76,6 +77,7 @@ describe("plotResources", () => {
           kind: "runtime",
           state: "active",
           url: "https://web-heic-app.localhost",
+          detail: "Silvic recovered the preview.",
         }),
         expect.objectContaining({
           id: "command:agent",

@@ -112,7 +112,7 @@ import {
   type WorkspaceRecord,
 } from "@silvic/core";
 
-import { GateManager, type GateWake } from "./gate-manager";
+import { GateManager, type GateFailure, type GateWake } from "./gate-manager";
 import { PlotProgressReporter } from "./plot-progress";
 import {
   updateMenuPresentations,
@@ -169,7 +169,10 @@ const workspaceRegistry = new WorkspaceRegistry();
 let runtimeObservationRefreshTimer: NodeJS.Timeout | undefined;
 let lastSupervisedPaths = new Set<string>();
 const pendingRuntimeObservationPaths = new Set<string>();
-const gate = new GateManager((wake) => void wakePlotFromGate(wake));
+const gate = new GateManager(
+  (wake) => void wakePlotFromGate(wake),
+  (failure) => recoverPlotFromGate(failure),
+);
 const supervisor = new CommandSupervisor({
   routePublisher: gate.publisher,
   logDirectory: join(app.getPath("userData"), "command-logs"),
@@ -1353,6 +1356,10 @@ async function wakePlotFromGate(wake: GateWake): Promise<void> {
       await new Promise((resolve) => setTimeout(resolve, 1_000));
     }
   }
+}
+
+function recoverPlotFromGate(failure: GateFailure): void {
+  supervisor.reportRouteFailure(failure.route, failure.failure);
 }
 
 /** `open -b dev.silvic.app --args --silvic-wake=<route>`, from the gate. */

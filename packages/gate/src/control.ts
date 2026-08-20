@@ -4,13 +4,13 @@ import { createServer, type Server, type Socket } from "node:net";
 import {
   parseControlRequest,
   type ControlReply,
-  type WakeEvent,
+  type GateEvent,
 } from "./control-protocol";
 import type { RouteStore } from "./route-store";
 
 export interface ControlServer {
   /** Sends a wake to every connected client; false when nobody listens. */
-  broadcast(event: WakeEvent): boolean;
+  broadcast(event: GateEvent): boolean;
   close(): Promise<void>;
 }
 

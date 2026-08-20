@@ -109,7 +109,7 @@ function commandResource(
     label: title(id),
     ...profile,
     state: processState(process),
-    detail: process?.advice ?? command.run,
+    detail: process?.advice ?? process?.notice ?? command.run,
     ...(url ? { url } : {}),
     commandId: id,
   };

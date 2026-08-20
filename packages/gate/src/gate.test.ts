@@ -316,6 +316,18 @@ describe("gate daemon", () => {
         response.end();
         return;
       }
+      if (request.url === "/vite-stale") {
+        response.writeHead(500, { "content-type": "text/html" });
+        response.end(
+          `The file does not exist at "/tmp/plot/node_modules/.vite/deps_ssr/clsx.js?v=123" which is in the optimize deps directory.`,
+        );
+        return;
+      }
+      if (request.url === "/application-error") {
+        response.writeHead(500, { "content-type": "text/html" });
+        response.end("<h1>The application failed</h1>");
+        return;
+      }
       response.writeHead(200, { "content-type": "text/html" });
       response.end("<h1>plot</h1>");
     });
@@ -423,6 +435,37 @@ describe("gate daemon", () => {
     expect(reply.headers.location).toBe(
       "https://web-live-shop.localhost/after",
     );
+  });
+
+  it("reports only the known Vite failure while preserving the response", async () => {
+    const failed = vi.fn();
+    const listener = new GateClient({
+      socketPath: controlSocketPath(directory),
+      onFailure: failed,
+    });
+    await listener.status();
+
+    const stale = await get("web-live-shop.localhost", "/vite-stale");
+    expect(stale.status).toBe(500);
+    expect(stale.body).toContain("node_modules/.vite/deps_ssr/clsx.js");
+    await vi.waitFor(() =>
+      expect(failed).toHaveBeenCalledWith({
+        route: "web-live-shop",
+        plotPath: "/tmp/plot",
+        commandId: "web",
+        failure: "vite-stale-optimized-dependency",
+      }),
+    );
+
+    failed.mockClear();
+    const unrelated = await get(
+      "web-live-shop.localhost",
+      "/application-error",
+    );
+    expect(unrelated.status).toBe(500);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(failed).not.toHaveBeenCalled();
+    listener.close();
   });
 
   it("answers its own host with gate health", async () => {

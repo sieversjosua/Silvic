@@ -67,6 +67,21 @@ export async function startGate(options: GateOptions = {}): Promise<Gate> {
     store,
     version: options.version ?? "dev",
     wake: (route: Parameters<Waker["wake"]>[0]) => waker.wake(route),
+    recover: (
+      route: Parameters<Waker["wake"]>[0],
+      failure: "vite-stale-optimized-dependency",
+    ) => {
+      const event = {
+        type: "route-failure" as const,
+        route: route.name,
+        failure,
+        ...(route.plotPath ? { plotPath: route.plotPath } : {}),
+        ...(route.commandId ? { commandId: route.commandId } : {}),
+      };
+      if (control?.broadcast(event)) {
+        log(`route failure ${route.name}: ${failure}`);
+      }
+    },
   };
 
   const contexts = new Map<string, Promise<SecureContext>>();

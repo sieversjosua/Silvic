@@ -18,7 +18,14 @@ export interface ProcessListener {
 export interface RouteProbe {
   status: number;
   contentType?: string;
+  /** A narrowly recognised failure found in a bounded HTML response prefix. */
+  failure?: "vite-stale-optimized-dependency";
 }
+
+export type RouteDiagnosis =
+  | { status: "healthy"; httpStatus?: number }
+  | { status: "unavailable" }
+  | { status: "recoverable"; failure: "vite-stale-optimized-dependency" };
 
 export interface PublishNamedRouteRequest {
   routeName: string;
@@ -47,6 +54,14 @@ export interface NamedRoutePublisher {
     request: PublishNamedRouteRequest,
   ): Promise<PublishedNamedRoute | undefined>;
   healthy(request: { routeName: string; port: number }): Promise<boolean>;
+  /**
+   * Distinguishes a routed application error Silvic knows how to repair from
+   * an unavailable route. Optional so non-HTTP publishers can remain simple.
+   */
+  diagnose?(request: {
+    routeName: string;
+    port: number;
+  }): Promise<RouteDiagnosis>;
   remove(routeName: string): Promise<void>;
 }
 
@@ -216,24 +231,45 @@ export class GateRoutePublisher implements NamedRoutePublisher {
     routeName: string;
     port: number;
   }): Promise<boolean> {
+    return (await this.diagnose({ routeName, port })).status !== "unavailable";
+  }
+
+  async diagnose({
+    routeName,
+    port,
+  }: {
+    routeName: string;
+    port: number;
+  }): Promise<RouteDiagnosis> {
     const family = this.families.get(routeName) ?? "127.0.0.1";
     const directHost = family === "::1" ? "[::1]" : family;
     const [direct, named] = await Promise.all([
       this.probe(`http://${directHost}:${port}/`),
       this.probe(`https://${routeName}.localhost/`),
     ]);
-    if (!direct || !named) return false;
-    if (!browserFacing(direct) || !browserFacing(named)) return false;
+    if (!direct || !named) return { status: "unavailable" };
+    if (!browserFacing(direct) || !browserFacing(named)) {
+      return { status: "unavailable" };
+    }
     // The gate preserves the upstream content type. A different type means
     // the name reached another listener even when both answered 200 —
     // commonly a monorepo health sidecar whose entire response is `OK`.
     if (mediaType(direct.contentType) !== mediaType(named.contentType)) {
-      return false;
+      return { status: "unavailable" };
     }
     // The gate preserves the upstream status. Exact agreement lets a real
     // browser error overlay through while rejecting the gate's own 404/503.
-    if (direct.status !== named.status) return false;
-    return true;
+    if (direct.status !== named.status) return { status: "unavailable" };
+    if (
+      direct.failure === "vite-stale-optimized-dependency" &&
+      named.failure === "vite-stale-optimized-dependency"
+    ) {
+      return {
+        status: "recoverable",
+        failure: "vite-stale-optimized-dependency",
+      };
+    }
+    return { status: "healthy", httpStatus: direct.status };
   }
 
   /**
@@ -464,6 +500,8 @@ async function inspectProcessListeners(
   });
 }
 
+const responsePrefixLimit = 16 * 1_024;
+
 function probeUrl(url: string): Promise<RouteProbe | undefined> {
   const target = new URL(url);
   const hostname = target.hostname.replace(/^\[|\]$/g, "");
@@ -482,18 +520,66 @@ function probeUrl(url: string): Promise<RouteProbe | undefined> {
           : {}),
       },
       (response) => {
-        response.resume();
         const contentType = response.headers["content-type"];
-        resolve({
+        const result: RouteProbe = {
           status: response.statusCode ?? 0,
           ...(typeof contentType === "string" ? { contentType } : {}),
+        };
+        if (
+          result.status < 500 ||
+          result.status >= 600 ||
+          mediaType(result.contentType) !== "text/html"
+        ) {
+          response.resume();
+          resolve(result);
+          return;
+        }
+
+        const chunks: Buffer[] = [];
+        let length = 0;
+        let settled = false;
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          const prefix = Buffer.concat(chunks, length).toString("utf8");
+          resolve({
+            ...result,
+            ...(viteOptimizerFailure(prefix)
+              ? { failure: "vite-stale-optimized-dependency" as const }
+              : {}),
+          });
+        };
+        response.on("data", (chunk: Buffer) => {
+          const remaining = responsePrefixLimit - length;
+          if (remaining <= 0) return;
+          const bounded = chunk.subarray(0, remaining);
+          chunks.push(bounded);
+          length += bounded.length;
+          if (length >= responsePrefixLimit) {
+            finish();
+            response.destroy();
+          }
         });
+        response.once("end", finish);
+        response.once("error", finish);
       },
     );
     request.setTimeout(2_000, () => request.destroy());
     request.once("error", () => resolve(undefined));
     request.end();
   });
+}
+
+/** Exact enough to avoid treating an application's own 500 as infrastructure. */
+export function viteOptimizerFailure(prefix: string): boolean {
+  const normalized = prefix.toLowerCase();
+  return (
+    normalized.includes("the file does not exist at") &&
+    /node_modules\/(?:\.vite|\.cache\/vite)\/(?:deps|deps_ssr)\//.test(
+      normalized,
+    ) &&
+    normalized.includes("which is in the optimize deps directory")
+  );
 }
 
 function executeCommand(

@@ -877,6 +877,10 @@ export interface PlotProcess {
   exitCode?: number;
   /** Why this is not what was asked for, when Silvic had to settle. */
   advice?: string;
+  /** A short local lifecycle note, such as a completed automatic recovery. */
+  notice?: string;
+  /** Restarts already spent in the current recoverable failure episode. */
+  recoveryAttempts?: number;
 }
 
 export const plotCommandRequestSchema = z

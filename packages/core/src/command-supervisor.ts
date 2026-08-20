@@ -8,7 +8,11 @@ import { promisify } from "node:util";
 import type { PlotCommand } from "@silvic/contracts";
 
 import { resolvedCommandPath } from "./command-runner";
-import { internalPort, type NamedRoutePublisher } from "./named-route";
+import {
+  internalPort,
+  type NamedRoutePublisher,
+  type RouteDiagnosis,
+} from "./named-route";
 import { routes } from "./plot-address";
 
 const executeFile = promisify(execFile);
@@ -32,6 +36,10 @@ export interface SupervisedCommand {
   exitCode?: number;
   /** Why this is not what was asked for, when Silvic had to settle. */
   advice?: string;
+  /** A short local lifecycle note, such as a completed automatic recovery. */
+  notice?: string;
+  /** Restarts already spent in the current recoverable failure episode. */
+  recoveryAttempts?: number;
 }
 
 export interface StartRequest {
@@ -63,6 +71,11 @@ export class CommandSupervisor {
   private readonly logs = new Map<string, WriteStream>();
   private readonly stopping = new Set<string>();
   private readonly forcedFailures = new Map<string, string>();
+  private readonly startRequests = new Map<string, StartRequest>();
+  private readonly recoveries = new Map<
+    string,
+    { request: StartRequest; routed: boolean }
+  >();
   private readonly routeHealthTimers = new Map<string, NodeJS.Timeout>();
   private readonly routePublisher: NamedRoutePublisher;
 
@@ -91,6 +104,28 @@ export class CommandSupervisor {
 
   list(): readonly SupervisedCommand[] {
     return [...this.running.values()];
+  }
+
+  /** A failure observed on any path through the named HTTPS gate. */
+  reportRouteFailure(
+    routeName: string,
+    failure: "vite-stale-optimized-dependency",
+  ): void {
+    if (failure !== "vite-stale-optimized-dependency") return;
+    const found = [...this.running.entries()].find(
+      ([, entry]) =>
+        entry.routeName === routeName &&
+        entry.status === "running" &&
+        entry.processId !== undefined &&
+        entry.targetPort !== undefined,
+    );
+    if (!found) return;
+    const [key, entry] = found;
+    this.recoverStaleViteRoute(key, entry.processId!, {
+      ...entry,
+      routeName,
+      targetPort: entry.targetPort!,
+    });
   }
 
   /**
@@ -139,6 +174,7 @@ export class CommandSupervisor {
 
   async start(request: StartRequest): Promise<void> {
     const key = keyFor(request.plotPath, request.id);
+    this.startRequests.set(key, request);
     const status = this.running.get(key)?.status;
     // A stopping command's group is still dying and still holds its port;
     // starting into that would race the corpse for the address.
@@ -160,10 +196,15 @@ export class CommandSupervisor {
   private async spawn(
     request: StartRequest,
     routed: boolean,
-    advice?: string,
+    state: {
+      advice?: string;
+      notice?: string;
+      recoveryAttempts?: number;
+      appendLog?: boolean;
+    } = {},
   ): Promise<void> {
     const key = keyFor(request.plotPath, request.id);
-    const log = await this.openLog(key, advice !== undefined);
+    const log = await this.openLog(key, state.appendLog ?? false);
     let recent = "";
     const namedUrl = `https://${request.routeName}.localhost`;
     const environment: NodeJS.ProcessEnv = {
@@ -207,7 +248,11 @@ export class CommandSupervisor {
         : request.command.url === true && request.environment["SILVIC_URL"]
           ? { url: request.environment["SILVIC_URL"] }
           : {}),
-      ...(advice ? { advice } : {}),
+      ...(state.advice ? { advice: state.advice } : {}),
+      ...(state.notice ? { notice: state.notice } : {}),
+      ...(state.recoveryAttempts
+        ? { recoveryAttempts: state.recoveryAttempts }
+        : {}),
     };
     this.running.set(key, entry);
     this.announce();
@@ -223,10 +268,10 @@ export class CommandSupervisor {
     child.stderr?.on("data", note);
     child.once("error", (error) => {
       log.write(`\n${error.message}\n`);
-      this.settle(key, 1);
+      this.settle(key, 1, child.pid);
     });
     child.once("close", (exitCode) => {
-      this.settle(key, exitCode ?? 0);
+      this.settle(key, exitCode ?? 0, child.pid);
     });
     if (routed && child.pid !== undefined) {
       if (!Number.isSafeInteger(expectedPort) || expectedPort <= 0) {
@@ -384,12 +429,34 @@ export class CommandSupervisor {
     ) {
       return;
     }
-    if (
-      await this.routePublisher.healthy({
+    const diagnosis = await this.routeDiagnosis({
+      routeName: entry.routeName,
+      port: entry.targetPort,
+    });
+    if (diagnosis.status === "recoverable") {
+      this.recoverStaleViteRoute(key, processId, {
+        ...entry,
         routeName: entry.routeName,
-        port: entry.targetPort,
-      })
-    ) {
+        targetPort: entry.targetPort,
+      });
+      return;
+    }
+    if (diagnosis.status === "healthy") {
+      if (
+        entry.recoveryAttempts &&
+        diagnosis.httpStatus !== undefined &&
+        diagnosis.httpStatus >= 200 &&
+        diagnosis.httpStatus < 400
+      ) {
+        const { recoveryAttempts: _spent, ...recovered } = entry;
+        this.running.set(key, {
+          ...recovered,
+          notice:
+            "Silvic recovered the preview by restarting it after a stale Vite dependency failure.",
+        });
+        this.logs.get(key)?.write("\n[Silvic] Preview recovery verified.\n");
+        this.announce();
+      }
       if (internalPort(entry.targetPort)) {
         await this.upgradeRoute(key, processId, {
           ...entry,
@@ -416,6 +483,70 @@ export class CommandSupervisor {
       output: () => output,
       timeoutMs: 15_000,
     });
+  }
+
+  private async routeDiagnosis(request: {
+    routeName: string;
+    port: number;
+  }): Promise<RouteDiagnosis> {
+    if (this.routePublisher.diagnose) {
+      return this.routePublisher.diagnose(request);
+    }
+    return (await this.routePublisher.healthy(request))
+      ? { status: "healthy" }
+      : { status: "unavailable" };
+  }
+
+  /** One automatic restart, then an explicit human decision for this episode. */
+  private recoverStaleViteRoute(
+    key: string,
+    processId: number,
+    entry: SupervisedCommand & { routeName: string; targetPort: number },
+  ): void {
+    const current = this.running.get(key);
+    if (
+      !current ||
+      current.processId !== processId ||
+      current.status !== "running"
+    ) {
+      return;
+    }
+    const live = { ...entry, ...current };
+    if (live.recoveryAttempts) {
+      this.logs
+        .get(key)
+        ?.write(
+          "\n[Silvic] Vite recovery failed; automatic restarts stopped.\n",
+        );
+      this.failRoutedCommand(key, processId, viteRecoveryAdvice);
+      return;
+    }
+    const request = this.startRequests.get(key);
+    if (!request) {
+      this.failRoutedCommand(key, processId, viteRecoveryAdvice);
+      return;
+    }
+
+    this.clearRouteHealth(key);
+    this.recoveries.set(key, { request, routed: routes(request.command) });
+    this.running.set(key, {
+      ...live,
+      status: "starting",
+      recoveryAttempts: 1,
+      notice:
+        "Silvic is restarting this preview after a stale Vite dependency failure.",
+    });
+    this.logs
+      .get(key)
+      ?.write("\n[Silvic] Stale Vite dependency detected; restarting once.\n");
+    this.announce();
+    void this.routePublisher.remove(entry.routeName);
+    try {
+      process.kill(-processId, "SIGTERM");
+      this.ensureStopped(key, processId);
+    } catch {
+      this.settle(key, 0, processId);
+    }
   }
 
   /**
@@ -459,7 +590,7 @@ export class CommandSupervisor {
       process.kill(-processId, "SIGTERM");
       this.ensureStopped(key, processId);
     } catch {
-      this.settle(key, 1);
+      this.settle(key, 1, processId);
     }
   }
 
@@ -495,6 +626,7 @@ export class CommandSupervisor {
     const key = keyFor(plotPath, id);
     const entry = this.running.get(key);
     if (!entry?.processId || entry.status === "stopping") return;
+    this.recoveries.delete(key);
     this.stopping.add(key);
     this.removeRoute(key, entry);
     try {
@@ -509,7 +641,7 @@ export class CommandSupervisor {
       this.ensureStopped(key, entry.processId);
     } catch {
       // Already gone, which is the state being asked for.
-      this.settle(key, 0);
+      this.settle(key, 0, entry.processId);
     }
   }
 
@@ -534,10 +666,31 @@ export class CommandSupervisor {
     }
   }
 
-  private settle(key: string, exitCode: number): void {
+  private settle(key: string, exitCode: number, processId?: number): void {
     const entry = this.running.get(key);
     if (!entry) return;
+    // A forced-stop watcher can settle the old process before its close event.
+    // That late event must never settle the replacement using the same key.
+    if (processId !== undefined && entry.processId !== processId) return;
     this.removeRoute(key, entry);
+    const recovery = this.recoveries.get(key);
+    if (recovery) {
+      this.recoveries.delete(key);
+      this.logs.get(key)?.end();
+      this.logs.delete(key);
+      void this.spawn(recovery.request, recovery.routed, {
+        notice:
+          "Silvic restarted this preview after a stale Vite dependency failure.",
+        recoveryAttempts: 1,
+        appendLog: true,
+      }).catch((error) => {
+        this.refuse(
+          recovery.request,
+          `Silvic could not restart the preview: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      });
+      return;
+    }
     const forcedFailure = this.forcedFailures.get(key);
     if (forcedFailure) {
       this.forcedFailures.delete(key);
@@ -605,7 +758,7 @@ export class CommandSupervisor {
       } catch {
         // The group is empty, which is the state being asked for.
       }
-      this.settle(key, 0);
+      this.settle(key, 0, processId);
       return;
     }
     this.ensureStopped(key, processId, attempt + 1);
@@ -642,6 +795,9 @@ export class CommandSupervisor {
 
 export const proxyAdvice =
   "The named HTTPS URL needs Silvic's local gate. Approve the one-time HTTPS setup prompt when it appears, then press Start again. Or disable Named HTTPS URL in the recipe to use the stable localhost port.";
+
+export const viteRecoveryAdvice =
+  "The preview still has a stale Vite optimized dependency after Silvic restarted it once. Rebuild the Vite cache, then press Start. Silvic did not delete source files or dependency caches.";
 
 function keyFor(plotPath: string, id: string): string {
   return `${plotPath}::${id}`;

@@ -3,7 +3,8 @@ import { connect, type Socket } from "node:net";
 import type {
   ControlReply,
   ControlRequest,
-  WakeEvent,
+  GateEvent,
+  RouteFailureEvent,
 } from "./control-protocol";
 import type { GateRoute } from "./route-store";
 import { controlSocketPath, gateStateDirectory } from "./state-dir";
@@ -17,6 +18,13 @@ export interface GateWake {
   route: string;
   plotPath?: string;
   commandId?: string;
+}
+
+export interface GateFailure {
+  route: string;
+  plotPath?: string;
+  commandId?: string;
+  failure: RouteFailureEvent["failure"];
 }
 
 /** Omit distributed over the request union, so each variant keeps its shape. */
@@ -45,6 +53,7 @@ export class GateClient {
     private readonly options: {
       socketPath?: string;
       onWake?(wake: GateWake): void;
+      onFailure?(failure: GateFailure): void;
       timeoutMs?: number;
     } = {},
   ) {}
@@ -143,10 +152,19 @@ export class GateClient {
         continue;
       }
       if (typeof parsed !== "object" || parsed === null) continue;
-      const message = parsed as ControlReply | WakeEvent;
+      const message = parsed as ControlReply | GateEvent;
       if (message.type === "wake") {
         this.options.onWake?.({
           route: message.route,
+          ...(message.plotPath ? { plotPath: message.plotPath } : {}),
+          ...(message.commandId ? { commandId: message.commandId } : {}),
+        });
+        continue;
+      }
+      if (message.type === "route-failure") {
+        this.options.onFailure?.({
+          route: message.route,
+          failure: message.failure,
           ...(message.plotPath ? { plotPath: message.plotPath } : {}),
           ...(message.commandId ? { commandId: message.commandId } : {}),
         });

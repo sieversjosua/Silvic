@@ -35,6 +35,17 @@ export interface WakeEvent {
   commandId?: string;
 }
 
+/** A routed response the app's supervisor can safely repair. */
+export interface RouteFailureEvent {
+  type: "route-failure";
+  route: string;
+  plotPath?: string;
+  commandId?: string;
+  failure: "vite-stale-optimized-dependency";
+}
+
+export type GateEvent = WakeEvent | RouteFailureEvent;
+
 export function parseControlRequest(line: string): ControlRequest | undefined {
   let parsed: unknown;
   try {
