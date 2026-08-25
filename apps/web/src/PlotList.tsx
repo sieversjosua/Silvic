@@ -54,6 +54,7 @@ export function PlotList({
       processes,
       declared: declaredResources,
       query,
+      project,
     });
     const steady = steadyRows(fresh, held.current);
     held.current = steady.order;

@@ -3,6 +3,7 @@ import type {
   PlotProcess,
   PlotResource,
   PlotResourceDefinition,
+  ProjectSnapshot,
   WorkspaceSnapshot,
 } from "@silvic/contracts";
 
@@ -41,16 +42,18 @@ export function plotListRows({
   processes,
   declared,
   query,
+  project,
 }: {
   workspaces: readonly WorkspaceSnapshot[];
   commands: readonly (readonly [string, PlotCommand])[];
   processes: readonly PlotProcess[];
   declared: Readonly<Record<string, PlotResourceDefinition>>;
   query: string;
+  project?: ProjectSnapshot;
 }): readonly PlotListRow[] {
   const commandMap = Object.fromEntries(commands);
   return workspaces
-    .filter((workspace) => workspaceMatchesQuery(workspace, query))
+    .filter((workspace) => workspaceMatchesQuery(workspace, query, project))
     .map((workspace): PlotListRow => {
       const resources = plotResources({
         workspace,

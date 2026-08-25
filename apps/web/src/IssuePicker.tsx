@@ -108,6 +108,7 @@ export function IssuePicker({
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Search open GitHub issues"
+            aria-label="Search open GitHub issues"
             disabled={disabled}
           />
         </label>
@@ -119,7 +120,12 @@ export function IssuePicker({
           <X size={13} />
         </button>
       </div>
-      <div className="issue-results" aria-busy={loading}>
+      <div
+        className="issue-results"
+        aria-label="Matching open GitHub issues"
+        aria-live="polite"
+        aria-busy={loading}
+      >
         {loading && <p className="section-empty">Loading issues…</p>}
         {!loading && failure && (
           <div className="issue-failure">
