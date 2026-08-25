@@ -58,3 +58,27 @@ it("discovers the nearest checked-out ancestors of an external stack", () => {
     evidence: "inferred",
   });
 });
+
+it("does not thread detached worktrees through a named branch stack", () => {
+  const detached = workspace("detached", "b");
+  detached.branch = "(detached)";
+  detached.git.branch = "(detached)";
+
+  const result = inferWorkspaceLineage(
+    [workspace("main", "a", true), detached, workspace("billing", "c")],
+    ["c b", "b a", "a"].join("\n"),
+  );
+
+  expect(
+    result.find((item) => item.workspaceId === "billing")?.lineage,
+  ).toEqual({
+    parentWorkspaceId: "main",
+    evidence: "inferred",
+  });
+  expect(
+    result.find((item) => item.workspaceId === "detached")?.lineage,
+  ).toEqual({
+    parentWorkspaceId: "main",
+    evidence: "inferred",
+  });
+});

@@ -145,7 +145,22 @@ export function showsByDefault(
 ): boolean {
   if (workspace.isPrimary) return true;
   const tone = workspaceState(workspace).tone;
-  if (tone === "attention" || tone === "active" || tone === "waiting") {
+  // Discovery is not an operational emergency. A large external stack can
+  // contain dozens of perfectly healthy worktrees, and marking every newly
+  // discovered member as `not-adopted` gives each one the attention tone.
+  // Let those fold by age unless there is separate evidence that this exact
+  // worktree is active or genuinely needs attention.
+  if (workspace.adoption?.status === "not-adopted" && tone === "attention") {
+    const operationallyUrgent =
+      workspace.git.conflicted > 0 ||
+      workspace.observations.some(
+        (observation) =>
+          observation.state === "attention" ||
+          ((observation.kind === "runtime" || observation.kind === "session") &&
+            observation.state === "active"),
+      );
+    if (operationallyUrgent) return true;
+  } else if (tone === "attention" || tone === "active" || tone === "waiting") {
     return true;
   }
   const updatedAt = latestSessionActivity(workspace);

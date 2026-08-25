@@ -177,7 +177,16 @@ export function inferWorkspaceLineage(
       const revision = queue.shift();
       if (!revision) break;
       const candidates = (byRevision.get(revision) ?? [])
-        .filter((candidate) => candidate.workspaceId !== workspace.workspaceId)
+        .filter(
+          (candidate) =>
+            candidate.workspaceId !== workspace.workspaceId &&
+            // A detached checkout is an environment at a commit, not a
+            // durable branch in the user's stack. Treating it as a parent
+            // threads arbitrary Codex worktrees through named PR branches;
+            // ancestry-aware search then exposes every one of those unrelated
+            // intermediates.
+            (candidate.isPrimary || candidate.branch !== "(detached)"),
+        )
         .sort(
           (left, right) =>
             Number(left.isPrimary) - Number(right.isPrimary) ||

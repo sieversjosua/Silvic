@@ -445,6 +445,39 @@ describe("layout", () => {
     expect(showsByDefault(runtime, now)).toBe(true);
   });
 
+  it("folds old external worktrees that merely await adoption", () => {
+    const discovered = Array.from({ length: 40 }, (_, index) =>
+      workspace(`external-${index}`, {
+        adoption: {
+          status: "not-adopted",
+          at: new Date(now - RECENT_SESSION_WINDOW_MS - 1).toISOString(),
+          attempt: 0,
+        },
+      }),
+    );
+    const conflicted = workspace("external-conflicted", {
+      adoption: {
+        status: "not-adopted",
+        at: new Date(now - RECENT_SESSION_WINDOW_MS - 1).toISOString(),
+        attempt: 0,
+      },
+      git: { ...workspace("external-conflicted").git, conflicted: 1 },
+    });
+    const result = layout(
+      project([trunk, ...discovered, conflicted]),
+      false,
+      now,
+    );
+
+    expect(
+      result.placements.find((item) => item.key.startsWith("quiet:"))
+        ?.hiddenCount,
+    ).toBe(40);
+    expect(
+      result.placements.some((item) => item.key === conflicted.workspaceId),
+    ).toBe(true);
+  });
+
   it("still shows a recent descendant when its older parent is folded", () => {
     const olderParent: WorkspaceSnapshot = {
       ...workspace("older-parent"),
