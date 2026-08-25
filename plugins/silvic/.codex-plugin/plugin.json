@@ -1,6 +1,6 @@
 {
   "name": "silvic",
-  "version": "0.1.38",
+  "version": "0.1.39",
   "description": "Control local Silvic runtimes and previews without desktop UI automation.",
   "author": {
     "name": "Josua Sievers",

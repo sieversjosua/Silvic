@@ -1,5 +1,6 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { format } from "prettier";
 
 const version = process.argv[2];
 if (!version || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) {
@@ -15,7 +16,10 @@ for (const relativePath of [
   const path = resolve(relativePath);
   const contents = JSON.parse(await readFile(path, "utf8"));
   contents.version = version;
-  await writeFile(path, JSON.stringify(contents, null, 2) + "\n");
+  await writeFile(
+    path,
+    await format(JSON.stringify(contents), { filepath: path }),
+  );
 }
 
 console.log("Silvic release version is now " + version);
