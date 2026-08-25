@@ -8,16 +8,17 @@ import {
   parseAutomationRequest,
   type AutomationRequest,
 } from "./protocol";
+import { automationSocketPath } from "./state-dir";
 
 export interface AutomationServer {
   close(): Promise<void>;
 }
 
 export async function startAutomationServer({
-  socketPath,
+  socketPath = automationSocketPath(),
   handle,
 }: {
-  socketPath: string;
+  socketPath?: string;
   handle(request: AutomationRequest, signal: AbortSignal): Promise<unknown>;
 }): Promise<AutomationServer> {
   const clients = new Set<Socket>();

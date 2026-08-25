@@ -2,7 +2,7 @@ import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 
 import { AutomationClient } from "./client";
 import { AutomationError } from "./protocol";
@@ -14,11 +14,24 @@ let server: AutomationServer | undefined;
 afterEach(async () => {
   await server?.close();
   server = undefined;
+  vi.unstubAllEnvs();
   await Promise.all(
     directories
       .splice(0)
       .map((directory) => rm(directory, { recursive: true, force: true })),
   );
+});
+
+it("shares the default socket path between server and client", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "silvic-automation-"));
+  directories.push(directory);
+  vi.stubEnv("SILVIC_AUTOMATION_DIR", directory);
+  server = await startAutomationServer({
+    handle: async (request) => ({ method: request.method }),
+  });
+
+  const client = new AutomationClient();
+  await expect(client.call("status")).resolves.toEqual({ method: "status" });
 });
 
 it("round-trips structured requests over a user-local socket", async () => {

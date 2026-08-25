@@ -27,7 +27,6 @@ import { autoUpdater } from "electron-updater";
 
 import {
   AutomationController,
-  automationSocketPath,
   startAutomationServer,
   type AutomationServer,
 } from "@silvic/automation";
@@ -281,9 +280,6 @@ if (!app.requestSingleInstanceLock()) {
     await supervisor.adopt(leftRunning);
     try {
       automationServer = await startAutomationServer({
-        socketPath: automationSocketPath(
-          process.env["SILVIC_AUTOMATION_DIR"] ?? app.getPath("userData"),
-        ),
         handle: (request, signal) => automation.handle(request, signal),
       });
     } catch (error) {
