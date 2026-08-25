@@ -6,6 +6,7 @@ describe("PlotMenuTrigger", () => {
   it("stays independently visible and toggles the card menu", () => {
     const onToggle = vi.fn();
     const trigger = PlotMenuTrigger({
+      workspaceId: "auth-callback",
       workspaceName: "auth-callback",
       expanded: false,
       buttonRef: { current: null },
@@ -33,6 +34,7 @@ describe("PlotMenuTrigger", () => {
 
   it("exposes the open state without relying on hover or selection", () => {
     const trigger = PlotMenuTrigger({
+      workspaceId: "payments",
       workspaceName: "payments",
       expanded: true,
       buttonRef: { current: null },

@@ -764,6 +764,7 @@ button.app-update[aria-disabled="true"] {
   min-height: 0;
   flex-direction: column;
   background: var(--surface-sunk);
+  container: stage / inline-size;
 }
 
 .stage-head {
@@ -886,9 +887,9 @@ button.app-update[aria-disabled="true"] {
 .plot-list-grid {
   display: grid;
   grid-template-columns:
-    minmax(190px, 1.5fr) 122px minmax(88px, 0.7fr) minmax(150px, 1.2fr)
-    minmax(96px, 0.8fr) 88px;
-  gap: 14px;
+    minmax(170px, 1.5fr) 112px minmax(78px, 0.7fr) minmax(120px, 1.1fr)
+    minmax(88px, 0.8fr) 76px minmax(118px, auto);
+  gap: 12px;
   align-items: center;
   padding: 0 20px;
 }
@@ -922,6 +923,14 @@ button.app-update[aria-disabled="true"] {
 
 .plot-list-row[data-active] {
   background: var(--accent-wash);
+}
+
+.plot-list-select {
+  width: 100%;
+  padding: 0;
+  border-radius: var(--r-sm);
+  color: inherit;
+  text-align: left;
 }
 
 .plot-list-plot {
@@ -1007,6 +1016,109 @@ button.plot-list-deployment:hover {
 
 .plot-list-activity[data-tone] {
   color: var(--tone);
+}
+
+.plot-list-actions {
+  display: flex;
+  min-width: 0;
+  gap: 4px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.plot-list-actions > button,
+.plot-list-actions .plot-action-error {
+  display: inline-flex;
+  width: 27px;
+  height: 25px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--rule);
+  border-radius: var(--r-md);
+  color: var(--ink-muted);
+  background: var(--surface);
+}
+
+.plot-list-actions > button:hover:not(:disabled) {
+  color: var(--ink);
+  border-color: var(--rule-strong);
+  background: var(--surface-hover);
+}
+
+.plot-list-actions .plot-runtime-toggle {
+  border-color: color-mix(in srgb, var(--tone-active) 36%, var(--rule));
+  color: var(--tone-active);
+}
+
+.plot-list-actions .plot-runtime-toggle[data-action="start"] {
+  border-color: color-mix(in srgb, var(--ink) 22%, var(--rule));
+  color: var(--ink);
+}
+
+.plot-list-actions .plot-runtime-toggle:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+.plot-list-actions .plot-teardown {
+  border-color: color-mix(in srgb, var(--tone-ready) 42%, var(--rule));
+  color: var(--tone-ready);
+}
+
+.plot-list-actions .plot-action-error {
+  border-color: color-mix(in srgb, var(--tone-attention) 42%, var(--rule));
+  color: var(--tone-attention);
+}
+
+.plot-list-actions .plot-action-label {
+  display: none;
+}
+
+.plot-list-actions .plot-new {
+  opacity: 1;
+}
+
+@container stage (max-width: 980px) {
+  .plot-list-grid {
+    grid-template-columns:
+      minmax(160px, 1.5fr) 112px minmax(78px, 0.7fr) minmax(88px, 0.8fr)
+      76px minmax(118px, auto);
+  }
+
+  .plot-list-col-convex {
+    display: none;
+  }
+}
+
+@container stage (max-width: 760px) {
+  .plot-list-grid {
+    grid-template-columns:
+      minmax(150px, 1.5fr) 112px minmax(78px, 0.7fr) minmax(88px, 0.8fr)
+      minmax(118px, auto);
+    gap: 9px;
+    padding-right: 12px;
+    padding-left: 12px;
+  }
+
+  .plot-list-col-activity {
+    display: none;
+  }
+}
+
+@container stage (max-width: 590px) {
+  .plot-list-grid {
+    grid-template-columns: minmax(140px, 1fr) minmax(72px, 0.5fr) minmax(
+        118px,
+        auto
+      );
+  }
+
+  .plot-list-col-status,
+  .plot-list-col-changes {
+    display: none;
+  }
 }
 
 .plot-list-empty {
@@ -1574,6 +1686,14 @@ button.plot-list-deployment:hover {
   gap: 5px;
   margin-top: auto;
   padding-top: 10px;
+}
+
+.plot-action-error {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  color: var(--tone-attention);
+  font-size: 10.5px;
 }
 
 .plot-new,
