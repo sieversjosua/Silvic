@@ -197,7 +197,8 @@ function GroveCanvas({
           workspace,
           selected: workspace.workspaceId === selectedWorkspaceId,
           dimmed:
-            needle.length > 0 && !workspaceMatchesQuery(workspace, needle),
+            needle.length > 0 &&
+            !workspaceMatchesQuery(workspace, needle, project),
           menuOpen: menuPlotId === workspace.workspaceId,
           project,
           runtime: cardRuntimeState({ workspace, commands, processes }),

@@ -18,6 +18,7 @@ import {
   showsByDefault,
   stabilizePlacements,
   viewShift,
+  workspaceMatchesQuery,
   type Point,
 } from "./grove-layout";
 
@@ -561,6 +562,71 @@ describe("layout", () => {
     const { placements } = layout(project([trunk, a, b]), true);
 
     expect(placements).toHaveLength(3);
+  });
+});
+
+describe("workspaceMatchesQuery", () => {
+  it("finds every plot by repository identity", () => {
+    const plot = workspace("auth-callback", {
+      repositoryName: "Silvic Desktop",
+      origin: "git@github.com:example/silvic.git",
+    });
+
+    expect(workspaceMatchesQuery(plot, "silvic desktop")).toBe(true);
+    expect(workspaceMatchesQuery(plot, "github.com:example/silvic")).toBe(true);
+  });
+
+  it("finds every plot through the containing project's repository URL", () => {
+    const workspaces = [workspace("auth"), workspace("billing")];
+    const repository = {
+      ...project(workspaces),
+      origin: "git@github.com:example/silvic.git",
+      remoteUrl: "https://github.com/example/silvic",
+    };
+
+    expect(
+      projectForQuery(repository, "https://github.com/example/silvic")
+        .workspaces,
+    ).toEqual(workspaces);
+  });
+
+  it("finds linked issues and pull requests by number or URL", () => {
+    const plot = workspace("auth-callback", {
+      task: {
+        title: "Repair authentication",
+        issue: {
+          provider: "github",
+          number: 184,
+          title: "Callback fails",
+          body: "The OAuth callback returns an error.",
+          url: "https://github.com/example/silvic/issues/184",
+          labels: ["bug"],
+          assignees: ["josua"],
+        },
+      },
+      observations: [
+        {
+          connectorId: "github",
+          workspaceId: "auth-callback",
+          kind: "review",
+          state: "ready",
+          label: "#290 draft",
+          detail: "Repair authentication",
+          url: "https://github.com/example/silvic/pull/290",
+        },
+      ],
+    });
+
+    expect(workspaceMatchesQuery(plot, "#184")).toBe(true);
+    expect(
+      workspaceMatchesQuery(
+        plot,
+        "https://github.com/example/silvic/issues/184",
+      ),
+    ).toBe(true);
+    expect(
+      workspaceMatchesQuery(plot, "https://github.com/example/silvic/pull/290"),
+    ).toBe(true);
   });
 });
 

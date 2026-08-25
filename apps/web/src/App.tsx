@@ -59,6 +59,7 @@ import type {
 
 import { useAppearance } from "./appearance";
 import { Grove } from "./Grove";
+import { workspaceMatchesQuery } from "./grove-layout";
 import { Mark } from "./Mark";
 import { HarnessRows, harnessLabel } from "./harnesses";
 import { IssuePicker } from "./IssuePicker";
@@ -227,6 +228,12 @@ export function App() {
   const workspace = project?.workspaces.find(
     (candidate) => candidate.workspaceId === selectedWorkspaceId,
   );
+  const searchResultCount =
+    project && query.trim()
+      ? project.workspaces.filter((candidate) =>
+          workspaceMatchesQuery(candidate, query, project),
+        ).length
+      : undefined;
   const openWorkspace = useCallback(
     async (path: string, target: HarnessDefinition["id"]) => {
       await window.silvic.openWorkspace({ path, target });
@@ -393,6 +400,7 @@ export function App() {
                       setQuery("");
                     }}
                     placeholder="Find in project"
+                    aria-label="Find in project"
                   />
                   {query && (
                     <button
@@ -403,6 +411,13 @@ export function App() {
                       <X size={11} />
                     </button>
                   )}
+                  <span className="visually-hidden" role="status">
+                    {searchResultCount === undefined
+                      ? ""
+                      : searchResultCount === 0
+                        ? "No matching plots"
+                        : `${searchResultCount} matching ${searchResultCount === 1 ? "plot" : "plots"}`}
+                  </span>
                 </label>
                 <button
                   type="button"
@@ -2324,6 +2339,9 @@ function NewPlotDialog({
               <div
                 className="branch-candidate-list"
                 style={{ height: candidateListHeight(openable.length, 2) }}
+                aria-label="Matching branches and pull requests"
+                aria-live="polite"
+                aria-busy={pullRequestLoading}
               >
                 {reference && (
                   <PullRequestResult

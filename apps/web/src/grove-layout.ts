@@ -176,23 +176,34 @@ export function recentActivityOrder(
 export function workspaceMatchesQuery(
   workspace: WorkspaceSnapshot,
   query: string,
+  project?: ProjectSnapshot,
 ): boolean {
   const needle = query.trim().toLowerCase();
   if (needle.length === 0) return true;
   return [
     workspace.name,
+    workspace.repositoryName,
     workspace.branch,
     workspace.path,
+    workspace.origin ?? "",
+    project?.id ?? "",
+    project?.name ?? "",
+    project?.rootPath ?? "",
+    project?.origin ?? "",
+    project?.remoteUrl ?? "",
     workspace.purpose ?? "",
     workspace.task?.title ?? "",
     workspace.task?.description ?? "",
+    workspace.task?.issue ? `#${workspace.task.issue.number}` : "",
     workspace.task?.issue?.title ?? "",
     workspace.task?.issue?.body ?? "",
+    workspace.task?.issue?.url ?? "",
     ...(workspace.task?.issue?.labels ?? []),
     ...(workspace.task?.issue?.assignees ?? []),
     ...workspace.observations.flatMap((observation) => [
       observation.label,
       observation.detail ?? "",
+      observation.url ?? "",
     ]),
   ]
     .join(" ")
@@ -220,7 +231,7 @@ export function projectForQuery(
   if (primary) included.add(primary.workspaceId);
 
   for (const workspace of project.workspaces) {
-    if (!workspaceMatchesQuery(workspace, query)) continue;
+    if (!workspaceMatchesQuery(workspace, query, project)) continue;
     let current: WorkspaceSnapshot | undefined = workspace;
     const seen = new Set<string>();
     while (current && !seen.has(current.workspaceId)) {

@@ -172,6 +172,26 @@ describe("plotListRows", () => {
     expect(rows.map((row) => row.workspace.name)).toEqual(["auth-callback"]);
   });
 
+  it("keeps every row when the query names the containing repository", () => {
+    const workspaces = [plot({ name: "auth" }), plot({ name: "billing" })];
+    const rows = plotListRows({
+      ...empty,
+      query: "github.com/example/app",
+      project: {
+        id: "github.com/example/app",
+        name: "app",
+        rootPath: "/repos/app",
+        remoteUrl: "https://github.com/example/app",
+        workspaces,
+        branches: [],
+        remoteBranches: [],
+      },
+      workspaces,
+    });
+
+    expect(rows.map((row) => row.workspace.name)).toEqual(["auth", "billing"]);
+  });
+
   it("surfaces Convex deployments and counts active sessions", () => {
     const rows = plotListRows({
       ...empty,
