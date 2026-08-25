@@ -25,6 +25,12 @@ import {
 import Store from "electron-store";
 import { autoUpdater } from "electron-updater";
 
+import {
+  AutomationController,
+  automationSocketPath,
+  startAutomationServer,
+  type AutomationServer,
+} from "@silvic/automation";
 import { convexConnector } from "@silvic/connector-convex";
 import {
   createGitHubConnector,
@@ -70,6 +76,7 @@ import {
   type PlotAdoptionRunResult,
   type PlotReadiness,
   type PlotRuntimeStart,
+  type ProjectSnapshot,
   type ProvisionResult,
   type RecipeDocument,
   type OpenWorkspaceRequest,
@@ -216,9 +223,21 @@ const settings = new Store<Settings>({
     runningCommands: [],
   },
 });
+const automation = new AutomationController({
+  snapshot: () => latestSnapshot,
+  roots: () => settings.get("roots"),
+  definition: automationPlotDefinition,
+  processes: () => supervisor.list(),
+  start: (plotPath, runtimeId) => startPlotCommand(plotPath, runtimeId, false),
+  stop: (plotPath, runtimeId) => supervisor.stop(plotPath, runtimeId),
+  output: (plotPath, runtimeId, limit) =>
+    supervisor.output(plotPath, runtimeId, limit),
+  probe: probePreview,
+});
 
 let mainWindow: BrowserWindow | undefined;
 let desktopUpdater: DesktopUpdater | undefined;
+let automationServer: AutomationServer | undefined;
 let latestSnapshot: SilvicSnapshot = {
   projects: [],
   connectorFailures: [],
@@ -260,6 +279,16 @@ if (!app.requestSingleInstanceLock()) {
     void gate.ensureAgent().catch(() => undefined);
     const leftRunning = settings.get("runningCommands");
     await supervisor.adopt(leftRunning);
+    try {
+      automationServer = await startAutomationServer({
+        socketPath: automationSocketPath(
+          process.env["SILVIC_AUTOMATION_DIR"] ?? app.getPath("userData"),
+        ),
+        handle: (request, signal) => automation.handle(request, signal),
+      });
+    } catch (error) {
+      console.error("Silvic automation interface could not start", error);
+    }
     const hasUpdateChannel =
       app.isPackaged &&
       process.env.SILVIC_DISABLE_UPDATES !== "1" &&
@@ -294,6 +323,8 @@ if (!app.requestSingleInstanceLock()) {
 }
 
 app.on("before-quit", () => {
+  void automationServer?.close();
+  automationServer = undefined;
   rootWatchers.forEach((watcher) => watcher.close());
   rootWatchers = [];
   if (runtimeObservationRefreshTimer) {
@@ -1885,6 +1916,33 @@ async function startPlotCommand(
     ...(routeAdvice ? { routeAdvice } : {}),
     detached: settings.get("keepCommandsRunning"),
   });
+}
+
+async function automationPlotDefinition(
+  project: ProjectSnapshot,
+  workspace: WorkspaceSnapshot,
+): Promise<{
+  commands: Readonly<Record<string, PlotCommand>>;
+  previewUrl?: string;
+}> {
+  const recipe = await readRecipe(project.rootPath);
+  const plot = plotNameIn(
+    workspace.path,
+    recipe.project,
+    workspace.isPrimary ? undefined : workspace.git.branch,
+  );
+  const port =
+    storedPlotPort(workspace.path) ??
+    plotPort(recipe.project, plot, takenPlotPorts());
+  const servesPreview = Object.values(recipe.commands).some(
+    (command) => command.url === true,
+  );
+  return {
+    commands: recipe.commands,
+    ...(servesPreview
+      ? { previewUrl: addressFor(recipe, plot, port).url }
+      : {}),
+  };
 }
 
 /** The commands Silvic has running in a plot, by their recipe ids. */

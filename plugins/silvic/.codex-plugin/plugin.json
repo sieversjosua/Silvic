@@ -1,0 +1,26 @@
+{
+  "name": "silvic",
+  "version": "0.1.38",
+  "description": "Control local Silvic runtimes and previews without desktop UI automation.",
+  "author": {
+    "name": "Josua Sievers",
+    "url": "https://github.com/sieversjosua"
+  },
+  "repository": "https://github.com/sieversjosua/Silvic",
+  "license": "MIT",
+  "keywords": ["development", "preview", "runtime", "automation"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Silvic",
+    "shortDescription": "Run and inspect local Plot previews.",
+    "longDescription": "Find Silvic Plots, control their declared runtimes, wait for canonical preview URLs, and inspect logs and diagnostics.",
+    "developerName": "Josua Sievers",
+    "category": "Developer Tools",
+    "capabilities": ["Read", "Write"],
+    "defaultPrompt": [
+      "Start this Plot and verify its preview.",
+      "Show the status and logs for this Plot."
+    ]
+  },
+  "mcpServers": "./.mcp.json"
+}

@@ -4,6 +4,7 @@ set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
 
+pnpm --filter @silvic/cli build
 pnpm --filter @silvic/desktop build
 pnpm --filter @silvic/desktop exec electron-builder --mac dir
 

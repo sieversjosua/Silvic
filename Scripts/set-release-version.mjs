@@ -6,7 +6,12 @@ if (!version || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) {
   throw new Error("Usage: pnpm release:version <semver>");
 }
 
-for (const relativePath of ["package.json", "apps/desktop/package.json"]) {
+for (const relativePath of [
+  "package.json",
+  "apps/desktop/package.json",
+  "apps/cli/package.json",
+  "plugins/silvic/.codex-plugin/plugin.json",
+]) {
   const path = resolve(relativePath);
   const contents = JSON.parse(await readFile(path, "utf8"));
   contents.version = version;

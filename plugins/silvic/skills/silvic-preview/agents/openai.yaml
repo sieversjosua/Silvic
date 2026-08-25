@@ -1,0 +1,3 @@
+interface:
+  display_name: "Silvic Preview"
+  short_description: "Run and inspect local Plot previews"

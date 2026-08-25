@@ -1,0 +1,26 @@
+{
+  "name": "@silvic/cli",
+  "version": "0.1.38",
+  "description": "Non-interactive runtime and preview control for Silvic",
+  "repository": "https://github.com/sieversjosua/Silvic",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "silvic": "dist/silvic.mjs"
+  },
+  "files": [
+    "dist/silvic.mjs"
+  ],
+  "scripts": {
+    "build": "esbuild src/main.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/silvic.mjs --banner:js=\"#!/usr/bin/env node\" && node scripts/stage-plugin.mjs",
+    "prepack": "pnpm build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/server": "^2.0.0",
+    "@silvic/automation": "workspace:*",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  }
+}

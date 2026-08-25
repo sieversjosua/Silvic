@@ -18,6 +18,7 @@
     "@silvic/connector-github": "workspace:*",
     "@silvic/connector-harnesses": "workspace:*",
     "@silvic/connector-local": "workspace:*",
+    "@silvic/automation": "workspace:*",
     "@silvic/contracts": "workspace:*",
     "@silvic/core": "workspace:*",
     "@silvic/gate": "workspace:*",
@@ -45,6 +46,12 @@
     },
     "files": [
       "out/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "../cli/dist/silvic.mjs",
+        "to": "bin/silvic"
+      }
     ],
     "mac": {
       "category": "public.app-category.developer-tools",

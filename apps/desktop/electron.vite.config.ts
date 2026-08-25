@@ -17,6 +17,7 @@ export default defineConfig({
     plugins: [
       externalizeDepsPlugin({
         exclude: [
+          "@silvic/automation",
           "@silvic/contracts",
           "@silvic/core",
           "@silvic/gate",

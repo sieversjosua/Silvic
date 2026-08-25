@@ -136,6 +136,9 @@ pnpm build
 pnpm package:mac
 ```
 
+Runtime and preview automation is available through the documented `silvic`
+CLI and bundled Codex plugin. See [the automation guide](docs/AUTOMATION.md).
+
 The verified app archive is written to `release/Silvic-mac-arm64.zip`.
 Local directory builds receive an ad-hoc signature when no valid Apple signing
 identity is available; release distribution still requires Developer ID signing
@@ -151,7 +154,9 @@ release flow.
 
 ```text
 apps/desktop        Electron main process, secure preload, packaging
+apps/cli            Non-interactive CLI and stdio MCP adapter
 apps/web            React renderer, grove canvas, recipe editor
+packages/automation Versioned local protocol and lifecycle application service
 packages/contracts  Shared connector, snapshot, recipe, and IPC types
 packages/core       Discovery, naming, recipes, provisioning, delivery
 connectors/*        GitHub, Convex, local-context, and harness integrations

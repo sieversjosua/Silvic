@@ -9,7 +9,8 @@
   },
   "scripts": {
     "dev": "pnpm --filter @silvic/desktop dev",
-    "build": "pnpm --filter @silvic/desktop build",
+    "build": "pnpm --filter @silvic/cli build && pnpm --filter @silvic/desktop build",
+    "cli": "node apps/cli/dist/silvic.mjs",
     "package:mac": "pnpm --filter @silvic/desktop package:mac",
     "release:version": "node Scripts/set-release-version.mjs",
     "test": "vitest run",
