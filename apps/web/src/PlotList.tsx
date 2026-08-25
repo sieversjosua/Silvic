@@ -186,6 +186,7 @@ function Row({
     <article
       className="plot-list-row plot-list-grid"
       data-active={active || undefined}
+      onClick={onSelect}
     >
       {renaming ? (
         <div className="plot-list-plot">
@@ -202,7 +203,10 @@ function Row({
           className="plot-list-plot plot-list-select"
           aria-label={`Select ${workspace.name}`}
           aria-current={active ? "true" : undefined}
-          onClick={onSelect}
+          onClick={(event) => {
+            event.stopPropagation();
+            onSelect();
+          }}
         >
           <i className="dot" data-tone={state.tone} />
           <div className="plot-list-name">
@@ -266,7 +270,10 @@ function Row({
           ? `${activeSessions} session${activeSessions === 1 ? "" : "s"}`
           : (activityLabel(row.activityAt, now) ?? "—")}
       </span>
-      <div className="plot-list-actions plot-list-col-actions">
+      <div
+        className="plot-list-actions plot-list-col-actions"
+        onClick={(event) => event.stopPropagation()}
+      >
         <button
           type="button"
           className="plot-list-open"

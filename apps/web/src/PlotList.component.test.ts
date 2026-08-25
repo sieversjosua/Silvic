@@ -1,4 +1,7 @@
-import { createElement } from "react";
+// @vitest-environment jsdom
+
+import { act, createElement } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
@@ -10,6 +13,10 @@ import type {
 } from "@silvic/contracts";
 
 import { PlotList } from "./PlotList";
+
+(
+  globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
+).IS_REACT_ACT_ENVIRONMENT = true;
 
 const project: ProjectSnapshot = {
   id: "project-1",
@@ -42,6 +49,33 @@ const project: ProjectSnapshot = {
 };
 
 describe("PlotList actions", () => {
+  it("selects a plot when any non-action part of its list row is clicked", () => {
+    const onSelect = vi.fn();
+    const onOpen = vi.fn();
+    const container = document.createElement("div");
+    const root = createRoot(container);
+
+    act(() => {
+      root.render(listElement({ onSelect, onOpen }));
+    });
+
+    const status = container.querySelector<HTMLElement>(
+      "article .plot-list-col-status",
+    );
+    expect(status).not.toBeNull();
+    act(() => status?.click());
+    expect(onSelect).toHaveBeenCalledWith("list-actions");
+
+    onSelect.mockClear();
+    act(() =>
+      container.querySelector<HTMLButtonElement>(".plot-list-open")?.click(),
+    );
+    expect(onOpen).toHaveBeenCalledWith("/plots/list-actions", "codex");
+    expect(onSelect).not.toHaveBeenCalled();
+
+    act(() => root.unmount());
+  });
+
   it("exposes the managed runtime and overflow actions for each row", () => {
     const markup = renderList();
 
@@ -125,22 +159,36 @@ function renderList({
   commands?: readonly (readonly [string, PlotCommand])[];
   workspace?: WorkspaceSnapshot;
 } = {}): string {
-  return renderToStaticMarkup(
-    createElement(PlotList, {
-      project: { ...project, workspaces: [workspace] },
-      commands,
-      declaredResources: {},
-      processes,
-      query: "",
-      selectedWorkspaceId: undefined,
-      onSelect: vi.fn(),
-      onOpen: vi.fn(),
-      onEditRecipe: vi.fn(),
-      onNewPlot: vi.fn(),
-      defaultHarness: "codex",
-      onSetDefaultHarness: vi.fn(),
-      onRename: vi.fn(async () => undefined),
-      onTeardown: vi.fn(),
-    }),
-  );
+  return renderToStaticMarkup(listElement({ processes, commands, workspace }));
+}
+
+function listElement({
+  processes = [],
+  commands = [["web", { run: "pnpm dev", url: true }]],
+  workspace = project.workspaces[0]!,
+  onSelect = vi.fn(),
+  onOpen = vi.fn(),
+}: {
+  processes?: readonly PlotProcess[];
+  commands?: readonly (readonly [string, PlotCommand])[];
+  workspace?: WorkspaceSnapshot;
+  onSelect?: (id: string) => void;
+  onOpen?: (path: string, target: "codex") => void;
+} = {}) {
+  return createElement(PlotList, {
+    project: { ...project, workspaces: [workspace] },
+    commands,
+    declaredResources: {},
+    processes,
+    query: "",
+    selectedWorkspaceId: undefined,
+    onSelect,
+    onOpen,
+    onEditRecipe: vi.fn(),
+    onNewPlot: vi.fn(),
+    defaultHarness: "codex",
+    onSetDefaultHarness: vi.fn(),
+    onRename: vi.fn(async () => undefined),
+    onTeardown: vi.fn(),
+  });
 }
