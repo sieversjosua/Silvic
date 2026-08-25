@@ -135,8 +135,14 @@ function GroveCanvas({
     [project, query],
   );
   const proposed = useMemo(
-    () => layout(viewProject, showInactive || searching),
-    [viewProject, showInactive, searching],
+    () =>
+      layout(
+        viewProject,
+        showInactive || searching,
+        Date.now(),
+        selectedWorkspaceId,
+      ),
+    [viewProject, showInactive, searching, selectedWorkspaceId],
   );
   const activityOrder = useMemo(
     () => recentActivityOrder(project.workspaces).join("\0"),

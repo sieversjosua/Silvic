@@ -275,6 +275,7 @@ export function layout(
   project: ProjectSnapshot,
   showInactive: boolean,
   now = Date.now(),
+  focusedWorkspaceId?: string,
 ): { placements: Placement[]; links: Link[] } {
   const byId = new Map(
     project.workspaces.map((workspace) => [workspace.workspaceId, workspace]),
@@ -305,7 +306,12 @@ export function layout(
 
   const included = new Set(
     project.workspaces
-      .filter((workspace) => showInactive || showsByDefault(workspace, now))
+      .filter(
+        (workspace) =>
+          showInactive ||
+          workspace.workspaceId === focusedWorkspaceId ||
+          showsByDefault(workspace, now),
+      )
       .map((workspace) => workspace.workspaceId),
   );
   included.add(primary.workspaceId);
@@ -320,7 +326,7 @@ export function layout(
     return candidate;
   };
   const children = new Map<string, string[]>();
-  const hiddenByParent = new Map<string, number>();
+  let hiddenCount = 0;
   for (const workspace of project.workspaces) {
     if (workspace.workspaceId === primary.workspaceId) continue;
     const parent = nearestIncludedParent(workspace.workspaceId);
@@ -333,7 +339,7 @@ export function layout(
         evidenceOf.set(workspace.workspaceId, "unrecorded");
       }
     } else {
-      hiddenByParent.set(parent, (hiddenByParent.get(parent) ?? 0) + 1);
+      hiddenCount += 1;
     }
   }
 
@@ -390,11 +396,16 @@ export function layout(
       .map((id) => byId.get(id))
       .filter((workspace) => workspace !== undefined)
       .sort(compareRecentActivity);
-    const hiddenCount = hiddenByParent.get(parent.id) ?? 0;
-    if (kids.length === 0 && hiddenCount === 0) continue;
+    // Folding is a project-level display concern, not another lineage branch.
+    // One stack beside the trunk gives the reader one predictable place to
+    // reveal quiet work instead of scattering several identical stacks around
+    // whichever visible descendants happen to own hidden children.
+    const parentHiddenCount =
+      parent.id === primary.workspaceId ? hiddenCount : 0;
+    if (kids.length === 0 && parentHiddenCount === 0) continue;
 
     const entries: Array<WorkspaceSnapshot | undefined> =
-      hiddenCount > 0 ? [...kids, undefined] : kids;
+      parentHiddenCount > 0 ? [...kids, undefined] : kids;
 
     // The trunk splits its stably ordered children; the first half grows right,
     // which is the direction the eye already travels.
@@ -442,7 +453,7 @@ export function layout(
         const key = `quiet:${parent.id}`;
         placements.push({
           key,
-          hiddenCount,
+          hiddenCount: parentHiddenCount,
           position: cell(column, row),
         });
         links.push({

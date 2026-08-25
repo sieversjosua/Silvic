@@ -269,6 +269,48 @@ describe("layout", () => {
     expect(placements.filter((item) => item.workspace)).toHaveLength(2);
   });
 
+  it("uses one project-wide stack even when quiet plots have different parents", () => {
+    const parent = recentlyActive("parent");
+    const quietChild = workspace("quiet-child", {
+      lineage: {
+        parentWorkspaceId: parent.workspaceId,
+        evidence: "recorded",
+      },
+    });
+    const quietSibling = workspace("quiet-sibling");
+
+    const { placements, links } = layout(
+      project([trunk, parent, quietChild, quietSibling]),
+      false,
+      now,
+    );
+    const stacks = placements.filter((item) => item.hiddenCount !== undefined);
+
+    expect(stacks).toHaveLength(1);
+    expect(stacks[0]?.hiddenCount).toBe(2);
+    expect(links.find((link) => link.target === stacks[0]?.key)?.source).toBe(
+      trunk.workspaceId,
+    );
+  });
+
+  it("keeps the focused plot visible after it becomes quiet", () => {
+    const stopped = workspace("stopped");
+
+    const { placements } = layout(
+      project([trunk, stopped, workspace("other-quiet")]),
+      false,
+      now,
+      stopped.workspaceId,
+    );
+
+    expect(placements.some((item) => item.key === stopped.workspaceId)).toBe(
+      true,
+    );
+    expect(
+      placements.find((item) => item.hiddenCount !== undefined)?.hiddenCount,
+    ).toBe(1);
+  });
+
   it("shows every environment once folding is turned off", () => {
     const older = Array.from({ length: 5 }, (_, index) =>
       workspace(`older-${index}`),
