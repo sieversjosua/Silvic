@@ -39,6 +39,8 @@ import type {
   HarnessId,
   IssueSummary,
   PlotCommand,
+  PlotAdoptionPlan,
+  PlotAdoptionRunResult,
   PlotCreationResult,
   PlotPreview,
   PlotProcess,
@@ -481,13 +483,21 @@ export function App() {
         )}
       </aside>
 
-      {provisioningPlot && (
-        <ProvisionDialog
-          key={provisioningPlot.workspaceId}
-          workspace={provisioningPlot}
-          onClose={() => setProvisioningPlot(undefined)}
-        />
-      )}
+      {provisioningPlot &&
+        (provisioningPlot.adoption &&
+        provisioningPlot.adoption.status !== "adopted" ? (
+          <AdoptionDialog
+            key={provisioningPlot.workspaceId}
+            workspace={provisioningPlot}
+            onClose={() => setProvisioningPlot(undefined)}
+          />
+        ) : (
+          <ProvisionDialog
+            key={provisioningPlot.workspaceId}
+            workspace={provisioningPlot}
+            onClose={() => setProvisioningPlot(undefined)}
+          />
+        ))}
       {teardownPlot && (
         <TeardownDialog
           workspace={teardownPlot}
@@ -1092,6 +1102,12 @@ function WorkspaceInspector({
         </Section>
         {!workspace.isPrimary && (
           <Section icon={<PackageCheck size={12} />} title="Provisioning">
+            {workspace.adoption && (
+              <Field
+                label="Adoption"
+                value={adoptionLabel(workspace.adoption.status)}
+              />
+            )}
             <Field
               label="Recipe"
               value={provisioningLabel(workspace.provisioning)}
@@ -1109,9 +1125,15 @@ function WorkspaceInspector({
               className="section-action"
               onClick={onProvision}
             >
-              {workspace.provisioning?.status === "failed"
-                ? "Finish provisioning"
-                : "Provision again"}
+              {workspace.adoption?.status === "not-adopted"
+                ? "Adopt plot or family…"
+                : workspace.adoption?.status === "adopting"
+                  ? "Resume adoption…"
+                  : workspace.adoption?.status === "failed"
+                    ? "Retry adoption…"
+                    : workspace.provisioning?.status === "failed"
+                      ? "Finish provisioning"
+                      : "Provision again"}
             </button>
           </Section>
         )}
@@ -1193,6 +1215,15 @@ function provisioningLabel(provisioning: PlotProvisioning | undefined): string {
   return provisioning.status === "complete"
     ? `Complete · ${shortDate(provisioning.at)}`
     : `Failed · ${shortDate(provisioning.at)}`;
+}
+
+function adoptionLabel(
+  status: NonNullable<WorkspaceSnapshot["adoption"]>["status"],
+): string {
+  if (status === "not-adopted") return "Not adopted";
+  if (status === "adopting") return "Adoption in progress";
+  if (status === "failed") return "Failed · retry available";
+  return "Adopted";
 }
 
 function failedStepLabel(provisioning: PlotProvisioning): string | undefined {
@@ -2608,6 +2639,200 @@ function ProvisionResults({
         );
       })}
     </ol>
+  );
+}
+
+/**
+ * Explicit hand-off from discovery to a runnable Plot. The preview is loaded
+ * from the main process, so routes and provider warnings shown here are the
+ * same values the run is required to use.
+ */
+function AdoptionDialog({
+  workspace,
+  onClose,
+}: {
+  workspace: WorkspaceSnapshot;
+  onClose(): void;
+}) {
+  const [scope, setScope] = useState<"single" | "family">("family");
+  const [plan, setPlan] = useState<PlotAdoptionPlan>();
+  const [confirmed, setConfirmed] = useState(false);
+  const [running, setRunning] = useState(false);
+  const [result, setResult] = useState<PlotAdoptionRunResult>();
+  const [failure, setFailure] = useState<string>();
+
+  useEffect(() => {
+    let current = true;
+    setPlan(undefined);
+    setFailure(undefined);
+    setConfirmed(false);
+    void window.silvic
+      .planPlotAdoption({ workspaceId: workspace.workspaceId, scope })
+      .then((next) => {
+        if (current) setPlan(next);
+      })
+      .catch((error: unknown) => {
+        if (current) setFailure(failureMessage(error));
+      });
+    return () => {
+      current = false;
+    };
+  }, [workspace.workspaceId, scope]);
+
+  const run = () => {
+    if (!plan || running) return;
+    setRunning(true);
+    setFailure(undefined);
+    setResult(undefined);
+    void window.silvic
+      .adoptPlots({
+        workspaceId: workspace.workspaceId,
+        scope,
+        confirmProviderChanges: confirmed,
+      })
+      .then(setResult)
+      .catch((error: unknown) => setFailure(failureMessage(error)))
+      .finally(() => setRunning(false));
+  };
+
+  const blocked =
+    !plan || (plan.requiresProviderConfirmation && !confirmed) || running;
+  useKeyLayer({
+    dismiss: running ? undefined : onClose,
+    confirm: blocked ? undefined : run,
+  });
+
+  return (
+    <div className="scrim" onMouseDown={running ? undefined : onClose}>
+      <section
+        className="dialog"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <p className="micro">External worktree adoption</p>
+        <h2>{workspace.name}</h2>
+        <p className="dialog-copy">
+          Silvic will keep these worktrees where they are, claim stable routes,
+          run the repository recipe, and start configured runtimes. Completed
+          members are skipped on retry.
+        </p>
+
+        <div className="segmented" aria-label="Adoption scope">
+          <button
+            type="button"
+            data-active={scope === "single" || undefined}
+            onClick={() => setScope("single")}
+            disabled={running}
+          >
+            This plot
+          </button>
+          <button
+            type="button"
+            data-active={scope === "family" || undefined}
+            onClick={() => setScope("family")}
+            disabled={running}
+          >
+            Stack / family
+          </button>
+        </div>
+
+        {plan && (
+          <>
+            <ol className="provision-steps">
+              {plan.members.map((member) => {
+                const outcome = result?.members.find(
+                  (item) => item.workspaceId === member.workspaceId,
+                );
+                return (
+                  <li
+                    key={member.workspaceId}
+                    data-status={
+                      outcome?.status === "failed"
+                        ? "failed"
+                        : outcome
+                          ? "done"
+                          : "pending"
+                    }
+                  >
+                    <div className="provision-head">
+                      <strong>{member.name}</strong>
+                      <span className="mono">
+                        {outcome?.status === "already-adopted"
+                          ? "already adopted"
+                          : (outcome?.status ?? member.status)}
+                      </span>
+                    </div>
+                    <code className="mono">{member.url}</code>
+                    {outcome?.error && (
+                      <p className="step-advice">{outcome.error}</p>
+                    )}
+                  </li>
+                );
+              })}
+            </ol>
+            <div className="dialog-copy">
+              <strong>Recipe preview</strong>
+              {plan.steps.length === 0 ? (
+                <p>
+                  No provisioning steps; configured runtimes will still start.
+                </p>
+              ) : (
+                <ul>
+                  {plan.steps.map((step, index) => (
+                    <li key={`${step.label}-${index}`}>
+                      {step.label}
+                      {step.providerChanging ? " · may change a provider" : ""}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            {plan.requiresProviderConfirmation && (
+              <div className="checks">
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={confirmed}
+                    disabled={running}
+                    onChange={(event) => setConfirmed(event.target.checked)}
+                  />
+                  <span>
+                    I confirm these steps may create deployments or scoped keys,
+                    sync environment variables, push code, or make other
+                    persistent provider changes.
+                  </span>
+                </label>
+              </div>
+            )}
+          </>
+        )}
+        {running && (
+          <p className="dialog-copy">Adopting members in lineage order…</p>
+        )}
+        {failure && <p className="dialog-error">{failure}</p>}
+        <div className="dialog-actions">
+          <button
+            type="button"
+            className="ghost-button"
+            onClick={onClose}
+            disabled={running}
+          >
+            Close
+          </button>
+          <button
+            type="button"
+            className="primary-button"
+            onClick={run}
+            disabled={blocked}
+          >
+            {running
+              ? "Adopting…"
+              : result
+                ? "Retry unfinished"
+                : `Adopt ${plan?.members.length ?? ""} plot${plan?.members.length === 1 ? "" : "s"}`}
+          </button>
+        </div>
+      </section>
+    </div>
   );
 }
 

@@ -301,6 +301,18 @@ export function WorkspaceNode({ data }: NodeProps<WorkspaceFlowNode>) {
           <span>Provisioning unfinished</span>
         </p>
       )}
+      {workspace.adoption?.status === "not-adopted" && (
+        <p className="plot-unprovisioned">
+          <TriangleAlert size={11} />
+          <span>Discovered · adoption required</span>
+        </p>
+      )}
+      {workspace.adoption?.status === "failed" && (
+        <p className="plot-unprovisioned" title={workspace.adoption.error}>
+          <TriangleAlert size={11} />
+          <span>Adoption unfinished · retry available</span>
+        </p>
+      )}
 
       {/* What went wrong (or what Silvic is doing about it), readable on the
           card itself — a tooltip is where explanations go to be missed. */}

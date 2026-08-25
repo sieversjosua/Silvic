@@ -1,4 +1,5 @@
 export * from "./command-runner";
+export * from "./adoption";
 export * from "./command-supervisor";
 export * from "./connector-registry";
 export * from "./convex-provisioner";

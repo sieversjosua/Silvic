@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { plotRenameRequestSchema } from "./index";
+import { plotAdoptionRunRequestSchema, plotRenameRequestSchema } from "./index";
 
 describe("plotRenameRequestSchema", () => {
   it("trims and accepts a human Plot name", () => {
@@ -19,5 +19,20 @@ describe("plotRenameRequestSchema", () => {
         name: "   ",
       }),
     ).toThrow();
+  });
+});
+
+describe("plotAdoptionRunRequestSchema", () => {
+  it("never infers provider confirmation from choosing adoption", () => {
+    expect(
+      plotAdoptionRunRequestSchema.parse({
+        workspaceId: "plot-184",
+        scope: "family",
+      }),
+    ).toEqual({
+      workspaceId: "plot-184",
+      scope: "family",
+      confirmProviderChanges: false,
+    });
   });
 });

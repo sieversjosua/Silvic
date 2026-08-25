@@ -35,6 +35,15 @@ export function workspaceState(workspace: WorkspaceSnapshot): OperationalState {
   if (workspace.git.conflicted > 0) {
     return { label: "Needs attention", tone: "attention" };
   }
+  if (!workspace.isPrimary && workspace.adoption?.status === "not-adopted") {
+    return { label: "Not adopted", tone: "attention" };
+  }
+  if (!workspace.isPrimary && workspace.adoption?.status === "adopting") {
+    return { label: "Adopting…", tone: "waiting" };
+  }
+  if (!workspace.isPrimary && workspace.adoption?.status === "failed") {
+    return { label: "Adoption failed", tone: "attention" };
+  }
   if (workspace.observations.some((item) => item.state === "attention")) {
     return { label: "Needs attention", tone: "attention" };
   }
