@@ -23,6 +23,8 @@ export interface PlotListRow {
   state: OperationalState;
   /** The supervised command set, when the recipe declares one. */
   runtime: CardRuntimeState | undefined;
+  /** All projected resources, used by row actions such as Copy address. */
+  resources: readonly PlotResource[];
   /** Convex backends attached to this exact plot: deployments and dev servers. */
   convex: readonly PlotResource[];
   /** Agent sessions currently active here. */
@@ -65,6 +67,7 @@ export function plotListRows({
         workspace,
         state: workspaceState(workspace),
         runtime: cardRuntimeState({ workspace, commands, processes }),
+        resources,
         // Deployments always show; a supervised `convex dev` only earns the
         // column while it does something, or every row repeats the recipe.
         convex: resources.filter(

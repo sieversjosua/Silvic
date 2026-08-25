@@ -1,26 +1,13 @@
 import { useRef, useState } from "react";
-import type { RefObject } from "react";
-import { createPortal } from "react-dom";
 import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
 import {
-  Check,
-  Copy,
-  FolderOpen,
   GitBranch,
   GitPullRequest,
-  Link2,
-  MoreHorizontal,
   Monitor,
-  Pencil,
-  Play,
   Plus,
   Radio,
-  SlidersHorizontal,
-  Square,
-  Trash2,
   Terminal,
   TriangleAlert,
-  X,
 } from "lucide-react";
 
 import type {
@@ -33,7 +20,13 @@ import type {
 
 import { CodexMark, ConvexMark, GitHubMark, HarnessMark } from "./providers";
 import { isQuiet } from "./grove-layout";
-import { HarnessRows, harnessLabel } from "./harnesses";
+import { harnessLabel } from "./harnesses";
+import {
+  PlotMenu,
+  PlotMenuTrigger,
+  PlotRenameForm,
+  PlotRuntimeActions,
+} from "./PlotActions";
 import {
   cardSignals,
   locationLabel,
@@ -44,8 +37,7 @@ import {
   type CardRuntimeState,
   type CardSignal,
 } from "./state";
-import { failureMessage } from "./errors";
-import { useKeyLayer } from "./shortcuts";
+export { PlotMenuTrigger } from "./PlotActions";
 
 export interface WorkspaceNodeData extends Record<string, unknown> {
   workspace: WorkspaceSnapshot;
@@ -71,12 +63,7 @@ export type WorkspaceFlowNode = Node<WorkspaceNodeData, "workspace">;
 
 export function WorkspaceNode({ data }: NodeProps<WorkspaceFlowNode>) {
   const { workspace } = data;
-  const [runtimeWorking, setRuntimeWorking] = useState<"start" | "stop">();
-  const [runtimeFailure, setRuntimeFailure] = useState<string>();
   const [renaming, setRenaming] = useState(false);
-  const [renameValue, setRenameValue] = useState("");
-  const [renameWorking, setRenameWorking] = useState(false);
-  const [renameFailure, setRenameFailure] = useState<string>();
   const runtime = data.runtime;
   const conclusion = plotConclusion(workspace);
   // Supervised runtimes speak once, in the head: the runtime label is the
@@ -110,42 +97,6 @@ export function WorkspaceNode({ data }: NodeProps<WorkspaceFlowNode>) {
   // running or midway through stopping.
   const actions = plotCardActions({ conclusion, runtime });
 
-  const beginRename = () => {
-    setRenameValue(workspace.name);
-    setRenameFailure(undefined);
-    setRenaming(true);
-  };
-
-  const submitRename = () => {
-    const name = renameValue.trim();
-    if (!name || renameWorking) return;
-    if (name === workspace.name) {
-      setRenaming(false);
-      return;
-    }
-    setRenameWorking(true);
-    setRenameFailure(undefined);
-    void data
-      .onRename(workspace.workspaceId, name)
-      .then(() => setRenaming(false))
-      .catch((error: unknown) => setRenameFailure(failureMessage(error)))
-      .finally(() => setRenameWorking(false));
-  };
-
-  const runRuntimes = (action: "start" | "stop", ids: readonly string[]) => {
-    setRuntimeWorking(action);
-    setRuntimeFailure(undefined);
-    void Promise.all(
-      ids.map((id) =>
-        action === "stop"
-          ? window.silvic.stopPlotCommand({ path: workspace.path, id })
-          : window.silvic.startPlotCommand({ path: workspace.path, id }),
-      ),
-    )
-      .catch((error: unknown) => setRuntimeFailure(failureMessage(error)))
-      .finally(() => setRuntimeWorking(undefined));
-  };
-
   return (
     <article
       className="plot"
@@ -177,6 +128,7 @@ export function WorkspaceNode({ data }: NodeProps<WorkspaceFlowNode>) {
             {state.label}
           </span>
           <PlotMenuTrigger
+            workspaceId={workspace.workspaceId}
             workspaceName={workspace.name}
             expanded={data.menuOpen}
             buttonRef={menuButton}
@@ -191,55 +143,11 @@ export function WorkspaceNode({ data }: NodeProps<WorkspaceFlowNode>) {
 
       <div className="plot-title">
         {renaming ? (
-          <form
-            className="plot-rename"
-            title={renameFailure}
-            onClick={(event) => event.stopPropagation()}
-            onSubmit={(event) => {
-              event.preventDefault();
-              submitRename();
-            }}
-            onKeyDown={(event) => {
-              event.stopPropagation();
-              if (event.key !== "Escape") return;
-              event.preventDefault();
-              setRenaming(false);
-            }}
-          >
-            <input
-              aria-label="Plot name"
-              value={renameValue}
-              maxLength={120}
-              disabled={renameWorking}
-              autoFocus
-              data-invalid={renameFailure ? true : undefined}
-              aria-invalid={renameFailure ? true : undefined}
-              title={renameFailure}
-              onFocus={(event) => event.currentTarget.select()}
-              onChange={(event) => setRenameValue(event.target.value)}
-            />
-            <button
-              type="submit"
-              aria-label="Save plot name"
-              disabled={!renameValue.trim() || renameWorking}
-            >
-              <Check size={12} />
-            </button>
-            <button
-              type="button"
-              aria-label="Cancel renaming"
-              disabled={renameWorking}
-              onClick={() => setRenaming(false)}
-            >
-              <X size={12} />
-            </button>
-            {renameFailure && (
-              <span className="plot-rename-error" role="alert">
-                <TriangleAlert size={10} />
-                {renameFailure}
-              </span>
-            )}
-          </form>
+          <PlotRenameForm
+            workspace={workspace}
+            onRename={data.onRename}
+            onDone={() => setRenaming(false)}
+          />
         ) : (
           <h3
             className="plot-name"
@@ -316,24 +224,14 @@ export function WorkspaceNode({ data }: NodeProps<WorkspaceFlowNode>) {
 
       {/* What went wrong (or what Silvic is doing about it), readable on the
           card itself — a tooltip is where explanations go to be missed. */}
-      {(runtime?.advice ?? runtimeFailure) && (
+      {runtime?.advice && (
         <p className="plot-advice" data-tone={state.tone}>
-          <span>{runtime?.advice ?? runtimeFailure}</span>
+          <span>{runtime.advice}</span>
         </p>
       )}
 
-      {(previewSignal || runtimeFailure || signals.length > 0) && (
+      {(previewSignal || signals.length > 0) && (
         <div className="plot-signals">
-          {runtimeFailure && (
-            <span
-              className="chip plot-runtime-state"
-              data-tone="attention"
-              title={runtimeFailure}
-            >
-              <TriangleAlert size={10} />
-              <span>Runtime action failed</span>
-            </span>
-          )}
           {previewSignal && <Signal signal={previewSignal} />}
           {signals.map((signal) => (
             <Signal key={signal.kind} signal={signal} />
@@ -366,69 +264,12 @@ export function WorkspaceNode({ data }: NodeProps<WorkspaceFlowNode>) {
           </button>
         )}
         <span className="plot-actions-gap" />
-        {actions.teardown && (
-          /* The plot's work has landed (or been abandoned); the card's one
-             offer is to see it off — worktree, branch and all. */
-          <button
-            type="button"
-            className="plot-teardown"
-            aria-label={`Tear down ${workspace.name}`}
-            title={
-              conclusion === "merged"
-                ? "The pull request is merged — remove the worktree and branch"
-                : "The pull request is closed — remove this plot"
-            }
-            onClick={(event) => {
-              event.stopPropagation();
-              data.onTeardown(workspace);
-            }}
-          >
-            <Trash2 size={11} />
-            Tear down…
-          </button>
-        )}
-        {actions.stop && runtime && (
-          <button
-            type="button"
-            className="plot-runtime-toggle"
-            data-action="stop"
-            aria-label={`Stop runtimes for ${workspace.name}`}
-            title={
-              runtime.startIds.length > 0
-                ? "Stop the running runtimes"
-                : "Stop runtimes"
-            }
-            disabled={runtimeWorking !== undefined}
-            onClick={(event) => {
-              event.stopPropagation();
-              runRuntimes("stop", runtime.stopIds);
-            }}
-          >
-            <Square size={10} />
-            {runtimeWorking === "stop" ? "Stopping…" : "Stop"}
-          </button>
-        )}
-        {actions.start && runtime && (
-          <button
-            type="button"
-            className="plot-runtime-toggle"
-            data-action="start"
-            aria-label={`Start runtimes for ${workspace.name}`}
-            title={
-              runtime.stopIds.length > 0
-                ? "Start the missing runtimes"
-                : "Start runtimes"
-            }
-            disabled={runtimeWorking !== undefined}
-            onClick={(event) => {
-              event.stopPropagation();
-              runRuntimes("start", runtime.startIds);
-            }}
-          >
-            <Play size={10} />
-            {runtimeWorking === "start" ? "Starting…" : "Start"}
-          </button>
-        )}
+        <PlotRuntimeActions
+          workspace={workspace}
+          runtime={runtime}
+          conclusion={conclusion}
+          onTeardown={data.onTeardown}
+        />
         {workspace.isPrimary && (
           <button
             type="button"
@@ -454,149 +295,12 @@ export function WorkspaceNode({ data }: NodeProps<WorkspaceFlowNode>) {
           onOpen={data.onOpen}
           onSetDefaultHarness={data.onSetDefaultHarness}
           onEditRecipe={data.onEditRecipe}
-          onRename={beginRename}
+          onRename={() => setRenaming(true)}
           onTeardown={data.onTeardown}
         />
       )}
       <Handle id="out-right" type="source" position={Position.Right} />
     </article>
-  );
-}
-
-export function PlotMenuTrigger({
-  workspaceName,
-  expanded,
-  buttonRef,
-  onToggle,
-}: {
-  workspaceName: string;
-  expanded: boolean;
-  buttonRef: RefObject<HTMLButtonElement | null>;
-  onToggle(): void;
-}) {
-  return (
-    <button
-      type="button"
-      className="plot-menu-trigger"
-      aria-label={`Actions for ${workspaceName}`}
-      aria-haspopup="menu"
-      aria-expanded={expanded}
-      ref={buttonRef}
-      onClick={(event) => {
-        event.stopPropagation();
-        onToggle();
-      }}
-    >
-      <MoreHorizontal size={14} />
-    </button>
-  );
-}
-
-/**
- * React Flow puts nodes inside a transformed viewport, so a menu rendered in
- * place would scale with the zoom and position against the transform rather
- * than the screen. Portalling to the body keeps it a normal-sized menu anchored
- * to where the button actually is.
- */
-function PlotMenu({
-  anchor,
-  workspace,
-  runtimeUrl,
-  defaultHarness,
-  onClose,
-  onOpen,
-  onSetDefaultHarness,
-  onEditRecipe,
-  onRename,
-  onTeardown,
-}: {
-  anchor: HTMLElement | null;
-  workspace: WorkspaceSnapshot;
-  runtimeUrl: string | undefined;
-  defaultHarness: HarnessId;
-  onClose(): void;
-  onOpen(path: string, target: HarnessDefinition["id"]): void;
-  onSetDefaultHarness(id: HarnessId): void;
-  onEditRecipe(): void;
-  onRename(): void;
-  onTeardown(workspace: WorkspaceSnapshot): void;
-}) {
-  useKeyLayer({ dismiss: onClose });
-
-  const rect = anchor?.getBoundingClientRect();
-  if (!rect) return null;
-  const run = (action: () => void) => () => {
-    onClose();
-    action();
-  };
-
-  return createPortal(
-    <>
-      <div className="menu-scrim" onClick={onClose} />
-      <div
-        className="menu plot-menu"
-        role="menu"
-        style={{ top: rect.bottom + 6, left: Math.max(8, rect.right - 200) }}
-      >
-        <HarnessRows
-          defaultHarness={defaultHarness}
-          onOpen={(id) => run(() => onOpen(workspace.path, id))()}
-          onSetDefault={onSetDefaultHarness}
-        />
-        <div className="menu-rule" />
-        <button
-          type="button"
-          role="menuitem"
-          onClick={run(() => onOpen(workspace.path, "finder"))}
-        >
-          <FolderOpen size={14} />
-          Reveal in Finder
-        </button>
-        <button
-          type="button"
-          role="menuitem"
-          onClick={run(() => void window.silvic.copyText(workspace.path))}
-        >
-          <Copy size={14} />
-          Copy path
-        </button>
-        {runtimeUrl && (
-          <button
-            type="button"
-            role="menuitem"
-            onClick={run(() => void window.silvic.copyText(runtimeUrl))}
-          >
-            <Link2 size={14} />
-            Copy address
-          </button>
-        )}
-        <div className="menu-rule" />
-        {workspace.isPrimary ? (
-          <button type="button" role="menuitem" onClick={run(onEditRecipe)}>
-            <SlidersHorizontal size={14} />
-            Recipe…
-          </button>
-        ) : (
-          <>
-            <button type="button" role="menuitem" onClick={run(onRename)}>
-              <Pencil size={14} />
-              Rename…
-            </button>
-            <div className="menu-rule" />
-            <button
-              type="button"
-              role="menuitem"
-              className="danger"
-              onClick={run(() => onTeardown(workspace))}
-            >
-              <Trash2 size={14} />
-              Tear down…
-            </button>
-          </>
-        )}
-      </div>
-    </>,
-    window.document.body,
   );
 }
 

@@ -468,6 +468,15 @@ export function App() {
                 query={query}
                 selectedWorkspaceId={workspace?.workspaceId}
                 onSelect={selectWorkspace}
+                onOpen={openWorkspace}
+                onEditRecipe={() => setRecipeProject(project)}
+                onNewPlot={() => setShowEnvironment(true)}
+                defaultHarness={defaultHarness}
+                onSetDefaultHarness={(id) => void setDefaultHarness(id)}
+                onRename={(workspaceId, name) =>
+                  window.silvic.renamePlot({ workspaceId, name })
+                }
+                onTeardown={setTeardownPlot}
               />
             )}
           </>
