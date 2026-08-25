@@ -96,6 +96,118 @@ describe("CommandSupervisor", () => {
     supervisor.stopAll();
   });
 
+  it("attaches a healthy external URL after its launcher has exited nonzero", async () => {
+    const logDirectory = await mkdtemp(join(tmpdir(), "silvic-supervisor-"));
+    temporaryDirectories.push(logDirectory);
+    let finishPublishing: (() => void) | undefined;
+    let announcedOutput: (() => string) | undefined;
+    const routePublisher: NamedRoutePublisher = {
+      publish: vi.fn(
+        ({ output }) =>
+          new Promise<{ port: number; ownership: "external" }>((resolve) => {
+            announcedOutput = output;
+            finishPublishing = () =>
+              resolve({ port: 4060, ownership: "external" });
+          }),
+      ),
+      improve: vi.fn().mockResolvedValue(undefined),
+      healthy: vi.fn().mockResolvedValue(true),
+      remove: vi.fn().mockResolvedValue(undefined),
+    };
+    const supervisor = new CommandSupervisor({
+      logDirectory,
+      onChange: () => {},
+      routePublisher,
+    });
+
+    await supervisor.start({
+      plotPath: logDirectory,
+      id: "web",
+      command: {
+        run: 'printf "Another server is already running. URL: http://127.0.0.1:4060\\n"; exit 1',
+        url: true,
+      },
+      routeName: "web-external",
+      environment: { PORT: "8691" },
+      canRoute: true,
+      detached: false,
+    });
+    const launcherPid = supervisor.list()[0]?.processId;
+
+    await vi.waitFor(() =>
+      expect(announcedOutput?.()).toContain("http://127.0.0.1:4060"),
+    );
+    await vi.waitFor(() =>
+      expect(() => process.kill(launcherPid!, 0)).toThrow(),
+    );
+    expect(supervisor.list()[0]?.status).toBe("starting");
+
+    finishPublishing?.();
+    await vi.waitFor(() =>
+      expect(supervisor.list()[0]).toMatchObject({
+        status: "running",
+        targetPort: 4060,
+        ownership: "external",
+        notice: expect.stringContaining("externally managed"),
+      }),
+    );
+    expect(supervisor.list()[0]).not.toHaveProperty("processId");
+    expect(supervisor.list()[0]).not.toHaveProperty("exitCode");
+
+    const kill = vi.spyOn(process, "kill");
+    try {
+      supervisor.stop(logDirectory, "web");
+      expect(kill).not.toHaveBeenCalled();
+    } finally {
+      kill.mockRestore();
+    }
+    expect(supervisor.list()).toEqual([]);
+    expect(routePublisher.remove).toHaveBeenCalledWith("web-external");
+  });
+
+  it("fails a nonzero launcher when its announced URL is unhealthy", async () => {
+    const logDirectory = await mkdtemp(join(tmpdir(), "silvic-supervisor-"));
+    temporaryDirectories.push(logDirectory);
+    const routePublisher: NamedRoutePublisher = {
+      publish: vi.fn(async ({ output }) => {
+        await vi.waitFor(() =>
+          expect(output()).toContain("http://127.0.0.1:4061"),
+        );
+        throw new Error("The announced URL did not serve a browser page.");
+      }),
+      improve: vi.fn().mockResolvedValue(undefined),
+      healthy: vi.fn().mockResolvedValue(false),
+      remove: vi.fn().mockResolvedValue(undefined),
+    };
+    const supervisor = new CommandSupervisor({
+      logDirectory,
+      onChange: () => {},
+      routePublisher,
+    });
+
+    await supervisor.start({
+      plotPath: logDirectory,
+      id: "web",
+      command: {
+        run: 'printf "URL: http://127.0.0.1:4061\\n"; exit 1',
+        url: true,
+      },
+      routeName: "web-unhealthy",
+      environment: { PORT: "8691" },
+      canRoute: true,
+      detached: false,
+    });
+
+    await vi.waitFor(() =>
+      expect(supervisor.list()[0]).toMatchObject({
+        status: "failed",
+        exitCode: 1,
+      }),
+    );
+    expect(supervisor.list()[0]).not.toHaveProperty("ownership");
+    expect(routePublisher.remove).toHaveBeenCalledWith("web-unhealthy");
+  });
+
   it("announces an empty list when persisted commands are all stale", async () => {
     const logDirectory = await mkdtemp(join(tmpdir(), "silvic-supervisor-"));
     temporaryDirectories.push(logDirectory);

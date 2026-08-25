@@ -184,10 +184,36 @@ describe("GateRoutePublisher", () => {
       timeoutMs: 10,
     });
 
-    expect(published).toEqual({ port: 4060 });
+    expect(published).toEqual({ port: 4060, ownership: "external" });
     expect(link.set).toHaveBeenCalledWith(
       expect.objectContaining({ name: "web-cmd-k-menu-mono", port: 4060 }),
     );
+  });
+
+  it("rejects an announced existing URL that does not serve a browser page", async () => {
+    let elapsed = 0;
+    const { link } = recordingLink();
+    const publisher = new GateRoutePublisher({
+      link,
+      inspect: async () => [],
+      probe: async () => undefined,
+      now: () => elapsed,
+      wait: async (milliseconds) => {
+        elapsed += milliseconds;
+      },
+    });
+
+    await expect(
+      publisher.publish({
+        routeName: "web-unhealthy-mono",
+        processId: 38207,
+        expectedPort: 8691,
+        output: () =>
+          "Another server is already running at http://127.0.0.1:4060",
+        timeoutMs: 500,
+      }),
+    ).rejects.toThrow(/has not served a page/);
+    expect(link.set).not.toHaveBeenCalled();
   });
 
   it("prefers a descendant web server to a stale announced server", async () => {

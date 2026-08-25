@@ -41,6 +41,8 @@ export interface PublishNamedRouteRequest {
 
 export interface PublishedNamedRoute {
   port: number;
+  /** The listener came from an announced URL outside the launched process tree. */
+  ownership?: "external";
 }
 
 export interface NamedRoutePublisher {
@@ -209,7 +211,12 @@ export class GateRoutePublisher implements NamedRoutePublisher {
               port: targetPort,
             })
           ) {
-            return { port: targetPort };
+            return {
+              port: targetPort,
+              ...(selected.listener.processId === 0
+                ? { ownership: "external" as const }
+                : {}),
+            };
           }
           latest = `The Silvic gate registered ${request.routeName}.localhost, but it did not reach localhost:${targetPort}.`;
           await this.wait(Math.min(150, Math.max(0, deadline - this.now())));
@@ -296,7 +303,12 @@ export class GateRoutePublisher implements NamedRoutePublisher {
       return undefined;
     }
     this.families.set(request.routeName, selected.hostname);
-    return { port: selected.listener.port };
+    return {
+      port: selected.listener.port,
+      ...(selected.listener.processId === 0
+        ? { ownership: "external" as const }
+        : {}),
+    };
   }
 
   /** The best listener the command tree offers right now, if any. */

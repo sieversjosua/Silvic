@@ -871,6 +871,8 @@ export interface PlotProcess {
   routeName?: string;
   /** HTTP listener currently answering behind the stable URL. */
   targetPort?: number;
+  /** The responding listener is not part of a process group Silvic owns. */
+  ownership?: "external";
   /** Stable plot port offered through PORT before listener discovery. */
   expectedPort?: number;
   startedAt?: string;

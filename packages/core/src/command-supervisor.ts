@@ -30,6 +30,8 @@ export interface SupervisedCommand {
   routeName?: string;
   /** The responding listener currently published under the named URL. */
   targetPort?: number;
+  /** The responding listener is not part of a process group Silvic owns. */
+  ownership?: "external";
   /** The stable plot port offered to commands that honour PORT. */
   expectedPort?: number;
   startedAt?: string;
@@ -77,6 +79,11 @@ export class CommandSupervisor {
     { request: StartRequest; routed: boolean }
   >();
   private readonly routeHealthTimers = new Map<string, NodeJS.Timeout>();
+  /** Nonzero exits waiting for their in-flight route discovery to settle. */
+  private readonly pendingRouteExits = new Map<
+    string,
+    { exitCode: number; processId: number }
+  >();
   private readonly routePublisher: NamedRoutePublisher;
 
   constructor(
@@ -327,17 +334,43 @@ export class CommandSupervisor {
       ) {
         return;
       }
-      const { advice: _recovered, ...healthy } = entry;
-      this.running.set(key, {
-        ...healthy,
-        status: "running",
-        targetPort: published.port,
-      });
+      const pendingExit = this.pendingRouteExits.get(key);
+      this.pendingRouteExits.delete(key);
+      const { advice: _recovered, exitCode: _exitCode, ...healthy } = entry;
+      if (published.ownership === "external") {
+        const { processId: _ended, ...external } = healthy;
+        this.running.set(key, {
+          ...external,
+          status: "running",
+          targetPort: published.port,
+          ownership: "external",
+          notice:
+            "Attached to an externally managed server. Stop detaches its Silvic route without stopping the server.",
+        });
+      } else {
+        this.running.set(key, {
+          ...healthy,
+          status: "running",
+          targetPort: published.port,
+        });
+      }
+      if (pendingExit) {
+        this.logs.get(key)?.end();
+        this.logs.delete(key);
+      }
       this.announce();
-      this.scheduleRouteHealth(key, processId);
+      if (published.ownership !== "external") {
+        this.scheduleRouteHealth(key, processId);
+      }
     } catch (error) {
       const entry = this.running.get(key);
       if (!entry || entry.processId !== processId) return;
+      const pendingExit = this.pendingRouteExits.get(key);
+      if (pendingExit) {
+        this.pendingRouteExits.delete(key);
+        this.settle(key, pendingExit.exitCode, pendingExit.processId, false);
+        return;
+      }
       // Whether the gate would not answer or no page was served yet, the
       // command itself is alive and doing something. Killing it would throw
       // away the only thing that works — and a dev server that needs four
@@ -625,7 +658,16 @@ export class CommandSupervisor {
   stop(plotPath: string, id: string): void {
     const key = keyFor(plotPath, id);
     const entry = this.running.get(key);
-    if (!entry?.processId || entry.status === "stopping") return;
+    if (!entry || entry.status === "stopping") return;
+    if (entry.ownership === "external") {
+      this.removeRoute(key, entry);
+      this.running.delete(key);
+      this.logs.get(key)?.end();
+      this.logs.delete(key);
+      this.announce();
+      return;
+    }
+    if (!entry.processId) return;
     this.recoveries.delete(key);
     this.stopping.add(key);
     this.removeRoute(key, entry);
@@ -666,12 +708,38 @@ export class CommandSupervisor {
     }
   }
 
-  private settle(key: string, exitCode: number, processId?: number): void {
+  private settle(
+    key: string,
+    exitCode: number,
+    processId?: number,
+    deferRoutedFailure = true,
+  ): void {
     const entry = this.running.get(key);
     if (!entry) return;
+    // Once an announced external listener is attached, the launcher exit is
+    // only the end of discovery. It does not own the server or its route.
+    if (entry.ownership === "external") {
+      this.logs.get(key)?.end();
+      this.logs.delete(key);
+      return;
+    }
     // A forced-stop watcher can settle the old process before its close event.
     // That late event must never settle the replacement using the same key.
     if (processId !== undefined && entry.processId !== processId) return;
+    // Duplicate-server launchers commonly exit before the asynchronous HTTP
+    // probe can confirm the URL they printed. Let that single in-flight
+    // decision win or fail before changing the public runtime state.
+    if (
+      deferRoutedFailure &&
+      exitCode !== 0 &&
+      processId !== undefined &&
+      entry.status === "starting" &&
+      entry.routeName
+    ) {
+      this.pendingRouteExits.set(key, { exitCode, processId });
+      return;
+    }
+    this.pendingRouteExits.delete(key);
     this.removeRoute(key, entry);
     const recovery = this.recoveries.get(key);
     if (recovery) {
