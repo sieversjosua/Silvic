@@ -49,6 +49,8 @@ import {
   plotRenameRequestSchema,
   plotCommandRequestSchema,
   plotProvisionRequestSchema,
+  plotAdoptionPlanRequestSchema,
+  plotAdoptionRunRequestSchema,
   testStepRequestSchema,
   recipeSaveRequestSchema,
   workspacePathRequestSchema,
@@ -61,6 +63,11 @@ import {
   type PlotProvisionRunResult,
   type PlotProvisioning,
   type PlotProvisionRequest,
+  type PlotAdoption,
+  type PlotAdoptionPlan,
+  type PlotAdoptionPlanRequest,
+  type PlotAdoptionRunRequest,
+  type PlotAdoptionRunResult,
   type PlotReadiness,
   type PlotRuntimeStart,
   type ProvisionResult,
@@ -71,6 +78,8 @@ import {
 } from "@silvic/contracts";
 import {
   CommandSupervisor,
+  buildAdoptionPlan,
+  executeAdoption,
   ConnectorRegistry,
   DeliveryService,
   EnvironmentService,
@@ -411,6 +420,20 @@ function registerIpc(): void {
     assertTrustedSender(event);
     return provisionPlot(plotProvisionRequestSchema.parse(request));
   });
+  ipcMain.handle(
+    ipcChannels.plotAdoptionPlan,
+    async (event, request: unknown) => {
+      assertTrustedSender(event);
+      return planPlotAdoption(plotAdoptionPlanRequestSchema.parse(request));
+    },
+  );
+  ipcMain.handle(
+    ipcChannels.plotAdoptionRun,
+    async (event, request: unknown) => {
+      assertTrustedSender(event);
+      return adoptPlots(plotAdoptionRunRequestSchema.parse(request));
+    },
+  );
   ipcMain.handle(ipcChannels.plotCommandsGet, (event) => {
     assertTrustedSender(event);
     return supervisor.list();
@@ -1080,6 +1103,11 @@ async function createEnvironment(
         branch: request.branch,
         parentWorkspaceId: source.workspaceId,
         displayName: request.branch,
+        adoption: {
+          status: "adopted",
+          at: new Date().toISOString(),
+          attempt: 1,
+        },
         ...(request.task
           ? { purpose: request.task.title, task: request.task }
           : {}),
@@ -1181,6 +1209,12 @@ async function provisionPlot(
   const port =
     storedPlotPort(workspace.path) ??
     plotPort(recipe.project, plot, takenPlotPorts());
+  // Adoption and a manual retry both claim the route before running anything.
+  // A crash or failed provider step therefore cannot change the address later.
+  settings.set("plotPorts", {
+    ...settings.get("plotPorts"),
+    [workspace.path]: port,
+  });
   const address = addressFor(recipe, plot, port);
   await requireNamedRouting(address);
   const autoCommands = Object.values(recipe.commands).filter(
@@ -1296,6 +1330,113 @@ async function provisionPlot(
   } finally {
     progress.settled();
   }
+}
+
+async function planPlotAdoption(
+  request: PlotAdoptionPlanRequest,
+): Promise<PlotAdoptionPlan> {
+  const project = latestSnapshot.projects.find((candidate) =>
+    candidate.workspaces.some(
+      (workspace) => workspace.workspaceId === request.workspaceId,
+    ),
+  );
+  if (!project) throw new Error("Choose a discovered worktree");
+  const recipe = await readRecipe(project.rootPath);
+  const claimed = takenPlotPorts();
+  return buildAdoptionPlan({
+    project,
+    selectedWorkspaceId: request.workspaceId,
+    scope: request.scope,
+    steps: recipe.provision,
+    member: (workspace) => {
+      const plot = plotNameIn(workspace.path, recipe.project, workspace.branch);
+      const stored = storedPlotPort(workspace.path);
+      const port = stored ?? plotPort(recipe.project, plot, claimed);
+      claimed.add(port);
+      return {
+        port,
+        url: addressFor(recipe, plot, port).url,
+      };
+    },
+  });
+}
+
+async function adoptPlots(
+  request: PlotAdoptionRunRequest,
+): Promise<PlotAdoptionRunResult> {
+  const plan = await planPlotAdoption(request);
+  if (plan.requiresProviderConfirmation && !request.confirmProviderChanges) {
+    throw new Error(
+      "Confirm the listed provider changes before adopting these plots",
+    );
+  }
+  const members = await executeAdoption({
+    members: plan.members,
+    state: workspaceAdoption,
+    persist: setWorkspaceAdoption,
+    run: async (member) => {
+      // Claim exactly the route shown in the preview before provisioning.
+      settings.set("plotPorts", {
+        ...settings.get("plotPorts"),
+        [member.path]: member.port,
+      });
+      const result = await provisionPlot({ path: member.path });
+      const failed = result.provision.find((step) => step.exitCode !== 0);
+      if (failed) throw new Error(`${failed.label} failed`);
+      if (result.runtime.status === "failed") {
+        throw new Error(
+          result.runtime.detail ?? "Plot runtimes failed to start",
+        );
+      }
+      if (result.readiness.status === "failed") {
+        throw new Error(
+          result.readiness.detail ?? "Plot preview did not become ready",
+        );
+      }
+      return {
+        provision: result.provision,
+        runtime: result.runtime,
+        readiness: result.readiness,
+      };
+    },
+  });
+  await paintFromGit(plan.members.map((member) => member.path));
+  void refreshSnapshot(true);
+  return { members };
+}
+
+function workspaceAdoption(workspaceId: string): PlotAdoption | undefined {
+  return settings
+    .get("workspaceRecords")
+    .find((record) => record.workspaceId === workspaceId)?.adoption;
+}
+
+function setWorkspaceAdoption(
+  workspaceId: string,
+  adoption: PlotAdoption,
+): void {
+  const records = settings.get("workspaceRecords");
+  if (!records.some((record) => record.workspaceId === workspaceId)) {
+    throw new Error("Unknown discovered worktree");
+  }
+  settings.set(
+    "workspaceRecords",
+    records.map((record) =>
+      record.workspaceId === workspaceId ? { ...record, adoption } : record,
+    ),
+  );
+  latestSnapshot = {
+    ...latestSnapshot,
+    projects: latestSnapshot.projects.map((project) => ({
+      ...project,
+      workspaces: project.workspaces.map((workspace) =>
+        workspace.workspaceId === workspaceId
+          ? { ...workspace, adoption }
+          : workspace,
+      ),
+    })),
+  };
+  mainWindow?.webContents.send(ipcChannels.snapshotChanged, latestSnapshot);
 }
 
 /**
@@ -2066,10 +2207,25 @@ function publishSnapshot(
   rawSnapshot: SilvicSnapshot,
   mode: "replace" | "merge",
 ): SilvicSnapshot {
-  const reconciled = workspaceRegistry.reconcile(
-    rawSnapshot,
-    settings.get("workspaceRecords"),
+  const provisionedPaths = new Set(
+    Object.keys(settings.get("plotProvisioning")).map(normalize),
   );
+  // Pre-adoption releases already persisted discovered workspaces. Preserve
+  // the meaning of those that have a provisioning record during migration;
+  // the registry marks every other external worktree as not adopted.
+  const existingRecords = settings.get("workspaceRecords").map((record) =>
+    !record.adoption && provisionedPaths.has(normalize(record.path))
+      ? {
+          ...record,
+          adoption: {
+            status: "adopted" as const,
+            at: new Date().toISOString(),
+            attempt: 1,
+          },
+        }
+      : record,
+  );
+  const reconciled = workspaceRegistry.reconcile(rawSnapshot, existingRecords);
   if (
     !workspaceRecordsEqual(settings.get("workspaceRecords"), reconciled.records)
   ) {

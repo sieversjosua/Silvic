@@ -19,6 +19,8 @@ import {
   type PlotProcess,
   type PlotProgress,
   type PlotProvisionRequest,
+  type PlotAdoptionPlanRequest,
+  type PlotAdoptionRunRequest,
   type TestStepRequest,
   type TeardownRequestPayload,
   type SilvicDesktopApi,
@@ -39,6 +41,10 @@ const api: SilvicDesktopApi = {
     ipcRenderer.invoke(ipcChannels.environmentCreate, request),
   provisionPlot: (request: PlotProvisionRequest) =>
     ipcRenderer.invoke(ipcChannels.plotProvision, request),
+  planPlotAdoption: (request: PlotAdoptionPlanRequest) =>
+    ipcRenderer.invoke(ipcChannels.plotAdoptionPlan, request),
+  adoptPlots: (request: PlotAdoptionRunRequest) =>
+    ipcRenderer.invoke(ipcChannels.plotAdoptionRun, request),
   getPlotProcesses: () => ipcRenderer.invoke(ipcChannels.plotCommandsGet),
   getKeepCommandsRunning: () => ipcRenderer.invoke(ipcChannels.keepRunningGet),
   setKeepCommandsRunning: (keep: boolean) =>

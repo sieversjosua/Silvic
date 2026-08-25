@@ -5,6 +5,25 @@ import type { SilvicSnapshot } from "@silvic/contracts";
 import { WorkspaceRegistry, renameWorkspaceRecord } from "./workspace-registry";
 
 describe("WorkspaceRegistry", () => {
+  it("marks an externally discovered worktree as not adopted and persists it", () => {
+    const registry = new WorkspaceRegistry();
+    const first = registry.reconcile(fixture("/projects/app-feature"), []);
+    const feature = first.snapshot.projects[0]?.workspaces.find(
+      (workspace) => !workspace.isPrimary,
+    );
+
+    expect(feature?.adoption).toEqual(
+      expect.objectContaining({ status: "not-adopted", attempt: 0 }),
+    );
+    expect(
+      registry
+        .reconcile(fixture("/projects/app-feature"), first.records)
+        .snapshot.projects[0]?.workspaces.find(
+          (workspace) => !workspace.isPrimary,
+        )?.adoption,
+    ).toEqual(feature?.adoption);
+  });
+
   it("keeps the Issue that explains why a Plot exists", () => {
     const registry = new WorkspaceRegistry();
     const snapshot = fixture("/projects/app-feature");

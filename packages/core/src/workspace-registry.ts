@@ -26,6 +26,7 @@ export interface WorkspaceRecord {
   observedName?: string;
   purpose?: string;
   task?: TaskContext;
+  adoption?: WorkspaceSnapshot["adoption"];
 }
 
 export interface ReconciledWorkspaces {
@@ -80,6 +81,15 @@ export class WorkspaceRegistry {
             projectId: project.id,
             path: workspace.path,
             branch: workspace.branch,
+            ...(!workspace.isPrimary
+              ? {
+                  adoption: {
+                    status: "not-adopted" as const,
+                    at: new Date().toISOString(),
+                    attempt: 0,
+                  },
+                }
+              : {}),
           };
         if (
           !records.some(
@@ -91,6 +101,13 @@ export class WorkspaceRegistry {
         record.projectId = project.id;
         record.path = workspace.path;
         record.branch = workspace.branch;
+        if (!workspace.isPrimary && !record.adoption) {
+          record.adoption = {
+            status: "not-adopted",
+            at: new Date().toISOString(),
+            attempt: 0,
+          };
+        }
         claimed.add(record.workspaceId);
         transientToStable.set(workspace.workspaceId, record.workspaceId);
         return { workspace, record };
@@ -155,7 +172,9 @@ function stableWorkspace(
 ): WorkspaceSnapshot {
   const stableId = record.workspaceId;
   const parentWorkspaceId =
-    record.parentWorkspaceId ?? (!workspace.isPrimary ? primaryId : undefined);
+    record.parentWorkspaceId ??
+    workspace.lineage?.parentWorkspaceId ??
+    (!workspace.isPrimary ? primaryId : undefined);
   // Written once and then left alone: a plot that has been called something
   // keeps being called that, however many threads are opened in it later.
   if (!workspace.isPrimary && record.observedName === undefined) {
@@ -174,6 +193,7 @@ function stableWorkspace(
     }),
     ...(record.purpose ? { purpose: record.purpose } : {}),
     ...(record.task ? { task: record.task } : {}),
+    ...(record.adoption ? { adoption: record.adoption } : {}),
     observations: workspace.observations.map((observation) => ({
       ...observation,
       workspaceId: stableId,
@@ -183,9 +203,7 @@ function stableWorkspace(
           lineage: {
             parentWorkspaceId:
               transientToStable.get(parentWorkspaceId) ?? parentWorkspaceId,
-            evidence: record.parentWorkspaceId
-              ? ("recorded" as const)
-              : ("inferred" as const),
+            evidence: record.parentWorkspaceId ? "recorded" : "inferred",
           },
         }
       : {}),

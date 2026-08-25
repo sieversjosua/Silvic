@@ -232,6 +232,8 @@ export interface WorkspaceSnapshot extends WorkspaceTarget {
   observations: readonly ConnectorObservation[];
   /** The last provisioning run, absent for plots made before it was recorded. */
   provisioning?: PlotProvisioning;
+  /** Explicit lifecycle for a worktree discovered outside Silvic. */
+  adoption?: PlotAdoption;
   lineage?: {
     parentWorkspaceId: string;
     evidence: "recorded" | "inferred";
@@ -750,6 +752,71 @@ export const plotProvisionRequestSchema = z
   .strict();
 export type PlotProvisionRequest = z.infer<typeof plotProvisionRequestSchema>;
 
+export type PlotAdoptionStatus =
+  "not-adopted" | "adopting" | "failed" | "adopted";
+
+export interface PlotAdoption {
+  status: PlotAdoptionStatus;
+  /** Last state transition, ISO 8601. */
+  at: string;
+  attempt: number;
+  error?: string;
+}
+
+export interface PlotAdoptionPlanMember {
+  workspaceId: string;
+  name: string;
+  branch: string;
+  path: string;
+  port: number;
+  url: string;
+  status: PlotAdoptionStatus;
+}
+
+export interface PlotAdoptionPlan {
+  projectId: string;
+  scope: "single" | "family";
+  members: readonly PlotAdoptionPlanMember[];
+  steps: readonly { label: string; providerChanging: boolean }[];
+  requiresProviderConfirmation: boolean;
+}
+
+export const plotAdoptionPlanRequestSchema = z
+  .object({
+    workspaceId: z.string().min(1).max(200),
+    scope: z.enum(["single", "family"]),
+  })
+  .strict();
+export type PlotAdoptionPlanRequest = z.infer<
+  typeof plotAdoptionPlanRequestSchema
+>;
+
+export const plotAdoptionRunRequestSchema = z
+  .object({
+    workspaceId: z.string().min(1).max(200),
+    scope: z.enum(["single", "family"]),
+    /** A literal acknowledgement; the main process independently enforces it. */
+    confirmProviderChanges: z.boolean().default(false),
+  })
+  .strict();
+export type PlotAdoptionRunRequest = z.infer<
+  typeof plotAdoptionRunRequestSchema
+>;
+
+export interface PlotAdoptionMemberResult {
+  workspaceId: string;
+  name: string;
+  status: "adopted" | "failed" | "already-adopted";
+  error?: string;
+  provision?: readonly ProvisionResult[];
+  runtime?: PlotRuntimeStart;
+  readiness?: PlotReadiness;
+}
+
+export interface PlotAdoptionRunResult {
+  members: readonly PlotAdoptionMemberResult[];
+}
+
 export const workspacePathRequestSchema = z
   .object({ path: z.string().min(1) })
   .strict();
@@ -977,6 +1044,8 @@ export interface SilvicDesktopApi {
   ): () => void;
   /** Runs the recipe in an existing plot, after a named repair when given. */
   provisionPlot(request: PlotProvisionRequest): Promise<PlotProvisionRunResult>;
+  planPlotAdoption(request: PlotAdoptionPlanRequest): Promise<PlotAdoptionPlan>;
+  adoptPlots(request: PlotAdoptionRunRequest): Promise<PlotAdoptionRunResult>;
   getChanges(request: WorkspacePathRequest): Promise<WorkspaceChanges>;
   draftDelivery(request: WorkspacePathRequest): Promise<DeliveryDraft>;
   executeDelivery(request: DeliveryExecuteRequest): Promise<DeliveryResult>;
@@ -1055,6 +1124,8 @@ export const ipcChannels = {
   namedRoutingSetup: "silvic:routing:setup",
   plotProgress: "silvic:plot:progress",
   plotProvision: "silvic:plot:provision",
+  plotAdoptionPlan: "silvic:plot:adoption:plan",
+  plotAdoptionRun: "silvic:plot:adoption:run",
   plotCommandsGet: "silvic:plot:commands:get",
   keepRunningGet: "silvic:commands:keep:get",
   keepRunningSet: "silvic:commands:keep:set",

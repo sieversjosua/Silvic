@@ -125,16 +125,82 @@ export async function readRepository(
   const workspaces = readWorkspaces.filter(
     (workspace) => workspace !== undefined,
   );
+  const graph = await runner.run({
+    executable: "git",
+    arguments: ["rev-list", "--all", "--parents"],
+    cwd: discoveryPath,
+    environment: { GIT_OPTIONAL_LOCKS: "0" },
+    ...(signal ? { signal } : {}),
+  });
+  const relatedWorkspaces =
+    graph.exitCode === 0
+      ? inferWorkspaceLineage(workspaces, graph.stdout)
+      : workspaces;
 
   return {
     name: basename(rootPath),
     rootPath,
     ...(origin ? { origin } : {}),
     projectId,
-    workspaces,
+    workspaces: relatedWorkspaces,
     branches,
     remoteBranches,
   };
+}
+
+/**
+ * Link each checked-out revision to the nearest other checked-out ancestor.
+ * One rev-list supplies the whole commit graph, avoiding an O(worktrees²)
+ * procession of merge-base commands for large Codex stacks.
+ */
+export function inferWorkspaceLineage(
+  workspaces: readonly WorkspaceSnapshot[],
+  graphOutput: string,
+): WorkspaceSnapshot[] {
+  const parents = new Map<string, readonly string[]>();
+  for (const line of graphOutput.trim().split(/\r?\n/)) {
+    const [revision, ...revisionParents] = line.trim().split(/\s+/);
+    if (revision) parents.set(revision, revisionParents);
+  }
+  const byRevision = new Map<string, WorkspaceSnapshot[]>();
+  for (const workspace of workspaces) {
+    const revision = workspace.git.revision;
+    if (!revision) continue;
+    byRevision.set(revision, [...(byRevision.get(revision) ?? []), workspace]);
+  }
+
+  return workspaces.map((workspace) => {
+    if (workspace.isPrimary || !workspace.git.revision) return workspace;
+    const queue = [...(parents.get(workspace.git.revision) ?? [])];
+    const seen = new Set(queue);
+    while (queue.length > 0) {
+      const revision = queue.shift();
+      if (!revision) break;
+      const candidates = (byRevision.get(revision) ?? [])
+        .filter((candidate) => candidate.workspaceId !== workspace.workspaceId)
+        .sort(
+          (left, right) =>
+            Number(left.isPrimary) - Number(right.isPrimary) ||
+            left.workspaceId.localeCompare(right.workspaceId),
+        );
+      const parent = candidates[0];
+      if (parent) {
+        return {
+          ...workspace,
+          lineage: {
+            parentWorkspaceId: parent.workspaceId,
+            evidence: "inferred",
+          },
+        };
+      }
+      for (const parentRevision of parents.get(revision) ?? []) {
+        if (seen.has(parentRevision)) continue;
+        seen.add(parentRevision);
+        queue.push(parentRevision);
+      }
+    }
+    return workspace;
+  });
 }
 
 async function mapWithConcurrency<Input, Output>(

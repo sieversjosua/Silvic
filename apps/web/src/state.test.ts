@@ -36,6 +36,30 @@ const commands = [
   ["convex", { run: "bunx convex dev" }],
 ] as const;
 
+describe("workspaceState adoption", () => {
+  it("calls a discovered external worktree not adopted even when a session is active", () => {
+    expect(
+      workspaceState({
+        ...workspace,
+        adoption: {
+          status: "not-adopted",
+          at: new Date(0).toISOString(),
+          attempt: 0,
+        },
+        observations: [
+          {
+            connectorId: "local-context",
+            workspaceId: workspace.workspaceId,
+            kind: "session",
+            state: "active",
+            label: "Codex task",
+          },
+        ],
+      }),
+    ).toEqual({ label: "Not adopted", tone: "attention" });
+  });
+});
+
 describe("cardRuntimeState", () => {
   it("offers one explicit Stop action when every Plot runtime is running", () => {
     expect(
