@@ -112,6 +112,10 @@ export interface GateRouteLink {
     commandId?: string;
   }): Promise<void>;
   suspend(name: string): Promise<void>;
+  /** Reads the daemon's route table without touching the upstream server. */
+  inspect?(
+    name: string,
+  ): Promise<{ host: "127.0.0.1" | "::1"; port: number } | undefined>;
 }
 
 interface RoutePublisherOptions {
@@ -253,13 +257,22 @@ export class GateRoutePublisher implements NamedRoutePublisher {
     routeName: string;
     port: number;
   }): Promise<RouteDiagnosis> {
+    if (this.link.inspect) {
+      const route = await this.link.inspect(routeName);
+      if (!route || route.port !== port) return { status: "unavailable" };
+      this.families.set(routeName, route.host);
+      return { status: "healthy" };
+    }
+
     const family = this.families.get(routeName) ?? "127.0.0.1";
     const directHost = family === "::1" ? "[::1]" : family;
-    const [direct, named] = await Promise.all([
-      this.probe(`http://${directHost}:${port}/`),
-      this.probe(`https://${routeName}.localhost/`),
-    ]);
-    if (!direct || !named) return { status: "unavailable" };
+    // These URLs terminate at the same application. Probing them together
+    // makes an SSR dev server render its root twice at once, which is
+    // needlessly invasive for a health check and can wedge a warm renderer.
+    const direct = await this.probe(`http://${directHost}:${port}/`);
+    if (!direct) return { status: "unavailable" };
+    const named = await this.probe(`https://${routeName}.localhost/`);
+    if (!named) return { status: "unavailable" };
     // The gate replaces this known broken upstream with its recovery page, so
     // its status and media type intentionally differ from the direct response.
     // The direct listener was selected and registered immediately above; its
@@ -367,18 +380,24 @@ async function selectListener({
       listenersByPort.set(port, { processId: 0, port });
     }
   }
-  const candidates = await Promise.all(
-    [...listenersByPort.values()].flatMap((listener) =>
-      (["127.0.0.1", "::1"] as const).map(async (hostname) => ({
+  const candidates: Array<{
+    listener: ProcessListener;
+    hostname: "127.0.0.1" | "::1";
+    response: RouteProbe | undefined;
+    settled: boolean;
+  }> = [];
+  for (const listener of listenersByPort.values()) {
+    for (const hostname of ["127.0.0.1", "::1"] as const) {
+      candidates.push({
         listener,
         hostname,
         response: await probe(
           `http://${hostname === "::1" ? `[${hostname}]` : hostname}:${listener.port}/`,
         ),
         settled: !internalPort(listener.port),
-      })),
-    ),
-  );
+      });
+    }
+  }
 
   return (
     candidates
@@ -519,7 +538,23 @@ async function inspectProcessListeners(
 const responsePrefixLimit = 16 * 1_024;
 
 /** @internal Exported so the real HTTP probe remains regression-testable. */
-export function probeUrl(url: string): Promise<RouteProbe | undefined> {
+export async function probeUrl(url: string): Promise<RouteProbe | undefined> {
+  const headers = await requestProbe(url, "HEAD", false);
+  if (!headers) return undefined;
+  if (headers.status < 500 || headers.status >= 600) return headers;
+
+  // A successful health check only needs status and media type. Fetch a body
+  // solely for the narrow infrastructure failure whose signature lives in
+  // the response text; normal probes must not render an SSR page just to see
+  // whether its listener and gate route are alive.
+  return (await requestProbe(url, "GET", true)) ?? headers;
+}
+
+function requestProbe(
+  url: string,
+  method: "HEAD" | "GET",
+  inspectFailureBody: boolean,
+): Promise<RouteProbe | undefined> {
   const target = new URL(url);
   const hostname = target.hostname.replace(/^\[|\]$/g, "");
   return new Promise((resolve) => {
@@ -530,7 +565,7 @@ export function probeUrl(url: string): Promise<RouteProbe | undefined> {
         hostname,
         ...(target.port ? { port: target.port } : {}),
         path: `${target.pathname}${target.search}`,
-        method: "GET",
+        method,
         headers: { connection: "close", "accept-encoding": "identity" },
         ...(target.protocol === "https:" && hostname.endsWith(".localhost")
           ? { rejectUnauthorized: false }
@@ -542,9 +577,10 @@ export function probeUrl(url: string): Promise<RouteProbe | undefined> {
           status: response.statusCode ?? 0,
           ...(typeof contentType === "string" ? { contentType } : {}),
         };
-        if (result.status < 500 || result.status >= 600) {
+        if (!inspectFailureBody) {
           response.resume();
-          resolve(result);
+          response.once("end", () => resolve(result));
+          response.once("error", () => resolve(undefined));
           return;
         }
 

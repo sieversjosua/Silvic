@@ -74,7 +74,14 @@ function forward(
       port,
       method: request.method,
       path: request.url,
-      headers: forwardedHeaders(request.headers, publicHost),
+      headers: {
+        ...forwardedHeaders(request.headers, publicHost),
+        // Hop-by-hop connection state belongs to the browser↔gate hop. A
+        // pooled upstream socket survived desktop restarts and could leave a
+        // warm Next dev server spinning forever after the client vanished.
+        connection: "close",
+      },
+      agent: false,
     },
     (upstreamResponse) => {
       forwardResponse(

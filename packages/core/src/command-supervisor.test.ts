@@ -51,6 +51,43 @@ describe("CommandSupervisor", () => {
     }
   });
 
+  it("gives persistent commands file-backed output instead of app-owned pipes", async () => {
+    const logDirectory = await mkdtemp(join(tmpdir(), "silvic-supervisor-"));
+    temporaryDirectories.push(logDirectory);
+    const supervisor = new CommandSupervisor({
+      logDirectory,
+      onChange: () => {},
+    });
+    const inspectDescriptors = [
+      'const fs = require("node:fs")',
+      'console.log("stdout-file=" + fs.fstatSync(1).isFile())',
+      'console.error("stderr-file=" + fs.fstatSync(2).isFile())',
+      "setInterval(() => {}, 1000)",
+    ].join(";");
+
+    await supervisor.start({
+      plotPath: logDirectory,
+      id: "web",
+      command: {
+        run: `${JSON.stringify(process.execPath)} -e ${JSON.stringify(inspectDescriptors)}`,
+      },
+      routeName: "web-persistent-log",
+      environment: {},
+      canRoute: false,
+      detached: true,
+    });
+
+    try {
+      await vi.waitFor(async () => {
+        const output = await supervisor.output(logDirectory, "web");
+        expect(output).toContain("stdout-file=true");
+        expect(output).toContain("stderr-file=true");
+      });
+    } finally {
+      supervisor.stopAll();
+    }
+  });
+
   it("publishes a routed command's real listener before calling it running", async () => {
     const logDirectory = await mkdtemp(join(tmpdir(), "silvic-supervisor-"));
     temporaryDirectories.push(logDirectory);
@@ -408,7 +445,7 @@ describe("CommandSupervisor", () => {
     expect(onChange).toHaveBeenLastCalledWith([]);
   });
 
-  it("rediscovers a persisted named route when Silvic reopens", async () => {
+  it("keeps a healthy persisted named route untouched when Silvic reopens", async () => {
     const logDirectory = await mkdtemp(join(tmpdir(), "silvic-supervisor-"));
     temporaryDirectories.push(logDirectory);
     const originalPublisher: NamedRoutePublisher = {
@@ -454,15 +491,12 @@ describe("CommandSupervisor", () => {
     await reopened.adopt(original.list());
 
     await vi.waitFor(() =>
-      expect(reopenedPublisher.publish).toHaveBeenCalledWith(
-        expect.objectContaining({
-          routeName: "web-persisted",
-          processId: original.list()[0]?.processId,
-          expectedPort: 8691,
-        }),
-      ),
+      expect(reopenedPublisher.healthy).toHaveBeenCalledWith({
+        routeName: "web-persisted",
+        port: 4321,
+      }),
     );
-    expect(reopenedPublisher.healthy).not.toHaveBeenCalled();
+    expect(reopenedPublisher.publish).not.toHaveBeenCalled();
     expect(reopened.list()[0]).toMatchObject({
       status: "running",
       targetPort: 4321,

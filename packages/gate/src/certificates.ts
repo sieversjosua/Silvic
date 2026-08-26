@@ -1,6 +1,12 @@
 import { execFile } from "node:child_process";
 import { X509Certificate } from "node:crypto";
-import { chmodSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -85,9 +91,8 @@ export class CertificateAuthority {
 
   /** Issued on demand from the TLS SNI callback; reissued near expiry. */
   certificateFor(host: string): Promise<HostCertificate> {
-    if (!/^[a-z0-9.-]{1,253}$/i.test(host)) {
-      return Promise.reject(new Error(`Refusing certificate for "${host}"`));
-    }
+    const invalid = invalidHost(host);
+    if (invalid) return Promise.reject(invalid);
     const cached = this.cache.get(host);
     if (cached) return cached;
     const issued = this.loadOrIssue(host).catch((error: unknown) => {
@@ -98,25 +103,59 @@ export class CertificateAuthority {
     return issued;
   }
 
+  /**
+   * Exact certificate for an SNI name that is not a durable route yet. The
+   * daemon keeps the resulting TLS context in a bounded memory cache; no
+   * attacker-controlled hostname is allowed to grow the certificate folder.
+   */
+  temporaryCertificateFor(host: string): Promise<HostCertificate> {
+    const invalid = invalidHost(host);
+    if (invalid) return Promise.reject(invalid);
+    return this.issueTemporarily(host);
+  }
+
   private async loadOrIssue(host: string): Promise<HostCertificate> {
     const certPath = join(this.certsDirectory, `${host}.pem`);
     const keyPath = join(this.certsDirectory, `${host}.key`);
-    if (this.validFor(certPath, 30)) {
+    if (this.validFor(certPath, 30, [host])) {
       return {
         key: readFileSync(keyPath, "utf8"),
         cert: readFileSync(certPath, "utf8"),
       };
     }
+    return this.issue(host, keyPath, certPath);
+  }
+
+  private async issueTemporarily(host: string): Promise<HostCertificate> {
+    const directory = mkdtempSync(join(tmpdir(), "silvic-gate-leaf-"));
+    try {
+      return await this.issue(
+        host,
+        join(directory, "leaf.key"),
+        join(directory, "leaf.pem"),
+      );
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }
+
+  private async issue(
+    host: string,
+    keyPath: string,
+    certPath: string,
+  ): Promise<HostCertificate> {
     await this.ensureRoot();
-    const request = join(tmpdir(), `silvic-gate-${host}.csr`);
-    const extensions = await temporaryFile(
-      `silvic-gate-${host}.cnf`,
-      [
+    const workDirectory = mkdtempSync(join(tmpdir(), "silvic-gate-issue-"));
+    const request = join(workDirectory, "leaf.csr");
+    const extensions = join(workDirectory, "extensions.cnf");
+    await writeFile(
+      extensions,
+      `${[
         "basicConstraints = CA:FALSE",
         "keyUsage = critical,digitalSignature,keyEncipherment",
         "extendedKeyUsage = serverAuth",
         `subjectAltName = DNS:${host}`,
-      ].join("\n"),
+      ].join("\n")}\n`,
     );
     try {
       await openssl("/usr/bin/openssl", [
@@ -152,8 +191,7 @@ export class CertificateAuthority {
         extensions,
       ]);
     } finally {
-      rmSync(request, { force: true });
-      rmSync(extensions, { force: true });
+      rmSync(workDirectory, { recursive: true, force: true });
     }
     chmodSync(keyPath, 0o600);
     return {
@@ -163,14 +201,35 @@ export class CertificateAuthority {
   }
 
   /** Whether the certificate exists and outlives the given number of days. */
-  private validFor(certPath: string, days: number): boolean {
+  private validFor(
+    certPath: string,
+    days: number,
+    names: readonly string[] = [],
+  ): boolean {
     try {
       const parsed = new X509Certificate(readFileSync(certPath));
-      return Date.parse(parsed.validTo) - Date.now() > days * 86_400_000;
+      const alternatives = parsed.subjectAltName ?? "";
+      return (
+        Date.parse(parsed.validTo) - Date.now() > days * 86_400_000 &&
+        names.every((name) =>
+          name.startsWith("*.")
+            ? alternatives
+                .split(",")
+                .map((alternative) => alternative.trim())
+                .includes(`DNS:${name}`)
+            : parsed.checkHost(name) !== undefined,
+        )
+      );
     } catch {
       return false;
     }
   }
+}
+
+function invalidHost(host: string): Error | undefined {
+  return /^[a-z0-9.-]{1,253}$/i.test(host)
+    ? undefined
+    : new Error(`Refusing certificate for "${host}"`);
 }
 
 async function temporaryFile(name: string, contents: string): Promise<string> {

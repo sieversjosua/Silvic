@@ -89,11 +89,16 @@ export async function startGate(options: GateOptions = {}): Promise<Gate> {
   };
 
   const contexts = new Map<string, Promise<SecureContext>>();
-  const secureContextFor = (servername: string): Promise<SecureContext> => {
+  const secureContextFor = (
+    servername: string,
+    persistent: boolean,
+  ): Promise<SecureContext> => {
     const existing = contexts.get(servername);
     if (existing) return existing;
-    const created = authority
-      .certificateFor(servername)
+    const certificate = persistent
+      ? authority.certificateFor(servername)
+      : authority.temporaryCertificateFor(servername);
+    const created = certificate
       .then((issued) =>
         createSecureContext({ key: issued.key, cert: issued.cert }),
       )
@@ -101,6 +106,10 @@ export async function startGate(options: GateOptions = {}): Promise<Gate> {
         contexts.delete(servername);
         throw error;
       });
+    if (contexts.size >= 128) {
+      const oldest = contexts.keys().next().value;
+      if (oldest !== undefined) contexts.delete(oldest);
+    }
     contexts.set(servername, created);
     return created;
   };
@@ -120,14 +129,12 @@ export async function startGate(options: GateOptions = {}): Promise<Gate> {
           : name;
         // Certificates are minted only for names the gate actually serves;
         // arbitrary SNI must not be able to grow the certificate directory.
-        if (
-          name !== GATE_HOST &&
-          !(validRouteName(label) && store.find(label))
-        ) {
+        const route = validRouteName(label) ? store.find(label) : undefined;
+        if (name !== GATE_HOST && !validRouteName(label)) {
           callback(null, undefined);
           return;
         }
-        secureContextFor(name).then(
+        secureContextFor(name, name === GATE_HOST || route !== undefined).then(
           (secureContext) => callback(null, secureContext),
           (error: unknown) =>
             callback(error instanceof Error ? error : new Error(String(error))),

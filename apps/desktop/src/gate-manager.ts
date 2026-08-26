@@ -37,6 +37,14 @@ export class GateManager {
     const link: GateRouteLink = {
       set: (route) => this.withDaemon(() => this.client.routeSet(route)),
       suspend: (name) => this.withDaemon(() => this.client.routeSuspend(name)),
+      inspect: async (name) => {
+        const route = (await this.client.status())?.routes.find(
+          (candidate) => candidate.name === name,
+        );
+        return route?.host && route.port
+          ? { host: route.host, port: route.port }
+          : undefined;
+      },
     };
     this.publisher = new GateRoutePublisher({ link });
   }

@@ -1,6 +1,6 @@
 import { execFile, spawn } from "node:child_process";
 import { once } from "node:events";
-import { createWriteStream, type WriteStream } from "node:fs";
+import { createWriteStream, readFileSync, type WriteStream } from "node:fs";
 import { access, mkdir, readFile, rm } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -16,6 +16,7 @@ import {
 import { routes } from "./plot-address";
 
 const executeFile = promisify(execFile);
+type OpenWriteStream = WriteStream & { fd: number };
 
 export interface SupervisedCommand {
   /** The plot this runs in. */
@@ -212,7 +213,6 @@ export class CommandSupervisor {
   ): Promise<void> {
     const key = keyFor(request.plotPath, request.id);
     const log = await this.openLog(key, state.appendLog ?? false);
-    let recent = "";
     const namedUrl = `https://${request.routeName}.localhost`;
     const environment: NodeJS.ProcessEnv = {
       ...process.env,
@@ -233,7 +233,11 @@ export class CommandSupervisor {
       env: environment,
       // Its own group, so stopping reaches everything it started.
       detached: true,
-      stdio: ["ignore", "pipe", "pipe"],
+      // The command may outlive this Electron process. Giving it app-owned
+      // pipes made the next log write hit EPIPE after a Silvic restart even
+      // though the detached server itself was still listening. An inherited
+      // file descriptor remains valid independently in the child process.
+      stdio: ["ignore", log.fd, log.fd],
     });
 
     const expectedPort = Number(environment["PORT"]);
@@ -264,15 +268,6 @@ export class CommandSupervisor {
     this.running.set(key, entry);
     this.announce();
 
-    const note = (chunk: Buffer) => {
-      log.write(chunk);
-      // Generous, because the dev server announces its URL once, early —
-      // a monorepo's build chatter must not scroll that anchor away before
-      // listener discovery reads it.
-      recent = `${recent}${chunk.toString("utf8")}`.slice(-20_000);
-    };
-    child.stdout?.on("data", note);
-    child.stderr?.on("data", note);
     child.once("error", (error) => {
       log.write(`\n${error.message}\n`);
       this.settle(key, 1, child.pid);
@@ -293,7 +288,7 @@ export class CommandSupervisor {
           processId: child.pid,
           routeName: request.routeName,
           expectedPort,
-          output: () => recent,
+          output: () => this.recentOutput(key),
         });
       }
     }
@@ -492,8 +487,31 @@ export class CommandSupervisor {
   ): Promise<void> {
     const current = this.running.get(key);
     if (!current || current.processId !== entry.processId) return;
+
+    // The gate and the detached runtime both outlive the desktop window. A
+    // healthy persisted route therefore needs no listener rediscovery at all.
+    // Rediscovering used to render the application root over both loopback
+    // families and then render it again through the gate. Reopening Silvic
+    // could consequently overwhelm a warm Next dev server even though its
+    // process, listener and named route had never stopped.
+    if (entry.targetPort) {
+      const diagnosis = await this.routeDiagnosis({
+        routeName: entry.routeName,
+        port: entry.targetPort,
+      });
+      const latest = this.running.get(key);
+      if (!latest || latest.processId !== entry.processId) return;
+      if (diagnosis.status === "healthy") {
+        const { advice: _staleAdvice, ...healthy } = latest;
+        this.running.set(key, { ...healthy, status: "running" });
+        this.announce();
+        this.scheduleRouteHealth(key, entry.processId);
+        return;
+      }
+    }
+
     this.running.set(key, {
-      ...current,
+      ...(this.running.get(key) ?? current),
       status: "starting",
       advice: "Silvic is rediscovering the preview after reopening.",
     });
@@ -947,7 +965,18 @@ export class CommandSupervisor {
     return join(this.options.logDirectory, `${key.replaceAll("/", "-")}.log`);
   }
 
-  private async openLog(key: string, append = false): Promise<WriteStream> {
+  private recentOutput(key: string): string {
+    try {
+      // Generous, because a dev server announces its URL once, early — a
+      // monorepo's build chatter must not scroll that anchor away before
+      // listener discovery reads it.
+      return readFileSync(this.logPath(key), "utf8").slice(-20_000);
+    } catch {
+      return "";
+    }
+  }
+
+  private async openLog(key: string, append = false): Promise<OpenWriteStream> {
     await mkdir(this.options.logDirectory, { recursive: true });
     this.logs.get(key)?.end();
     const stream = createWriteStream(this.logPath(key), {
@@ -964,7 +993,7 @@ export class CommandSupervisor {
       throw error;
     }
     this.logs.set(key, stream);
-    return stream;
+    return stream as OpenWriteStream;
   }
 }
 

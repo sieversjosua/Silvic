@@ -12,6 +12,32 @@ import {
 } from "./named-route";
 
 describe("probeUrl", () => {
+  it("uses HEAD for normal discovery rounds", async () => {
+    const methods: string[] = [];
+    const server = createServer((request, response) => {
+      methods.push(request.method ?? "");
+      response.writeHead(200, { "content-type": "text/html" });
+      response.end("<h1>ready</h1>");
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("no port");
+      const url = `http://127.0.0.1:${address.port}/`;
+
+      await Promise.all([probeUrl(url), probeUrl(url)]);
+      await Promise.all([probeUrl(url), probeUrl(url)]);
+
+      expect(methods).toEqual(["HEAD", "HEAD", "HEAD", "HEAD"]);
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      );
+    }
+  });
+
   it("recognizes Astro's stale Vite response without a Content-Type header", async () => {
     const server = createServer((_request, response) => {
       response.writeHead(500);
@@ -95,6 +121,77 @@ describe("descendantListenerPorts", () => {
 });
 
 describe("GateRoutePublisher", () => {
+  it("checks an established route without requesting the application", async () => {
+    const server = createServer();
+    let connections = 0;
+    server.on("connection", () => {
+      connections += 1;
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("no port");
+      const probe = vi.fn();
+      const link: GateRouteLink = {
+        set: vi.fn(async () => undefined),
+        suspend: vi.fn(async () => undefined),
+        inspect: vi.fn(async () => ({
+          host: "127.0.0.1" as const,
+          port: address.port,
+        })),
+      };
+      const publisher = new GateRoutePublisher({ link, probe });
+
+      await expect(
+        publisher.healthy({
+          routeName: "web-persisted-mono",
+          port: address.port,
+        }),
+      ).resolves.toBe(true);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(probe).not.toHaveBeenCalled();
+      expect(connections).toBe(0);
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      );
+    }
+  });
+
+  it("probes one route candidate at a time", async () => {
+    const { link, routes } = recordingLink();
+    let active = 0;
+    let maximumActive = 0;
+    const probe = vi.fn(async (url: string) => {
+      active += 1;
+      maximumActive = Math.max(maximumActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      active -= 1;
+      if (url.endsWith(".localhost/") && !routes.has("web-serial-mono")) {
+        return undefined;
+      }
+      return { status: 200, contentType: "text/html; charset=utf-8" };
+    });
+    const publisher = new GateRoutePublisher({
+      link,
+      probe,
+      inspect: async () => [{ processId: 201, port: 4321 }],
+      wait: async () => undefined,
+    });
+
+    await publisher.publish({
+      routeName: "web-serial-mono",
+      processId: 200,
+      expectedPort: 4321,
+      output: () => "Local: http://localhost:4321",
+      timeoutMs: 100,
+    });
+
+    expect(maximumActive).toBe(1);
+  });
+
   it("publishes the announced HTML listener when a monorepo ignores PORT", async () => {
     const { link } = recordingLink();
     const probe = vi.fn(async (url: string) => {

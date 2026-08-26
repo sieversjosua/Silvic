@@ -1,5 +1,11 @@
 import { X509Certificate } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import {
   createServer as createHttpServer,
   request as httpRequest,
@@ -294,6 +300,24 @@ describe("CertificateAuthority", () => {
       rmSync(directory, { recursive: true, force: true });
     }
   }, 30_000);
+
+  it("does not persist certificates for unpublished SNI names", async () => {
+    const directory = temporary();
+    try {
+      const authority = new CertificateAuthority(directory);
+      const issued = await authority.temporaryCertificateFor(
+        "web-not-yet-published.localhost",
+      );
+      expect(
+        new X509Certificate(issued.cert).checkHost(
+          "web-not-yet-published.localhost",
+        ),
+      ).toBe("web-not-yet-published.localhost");
+      expect(readdirSync(join(directory, "certs"))).toEqual([]);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }, 30_000);
 });
 
 describe("gate daemon", () => {
@@ -427,6 +451,7 @@ describe("gate daemon", () => {
       "web-live-shop.localhost",
     );
     expect(seenByUpstream?.host).toBe("web-live-shop.localhost");
+    expect(seenByUpstream?.connection).toBe("close");
     client.close();
   }, 30_000);
 
@@ -493,6 +518,12 @@ describe("gate daemon", () => {
     const reply = await get("silvic-gate.localhost");
     expect(reply.status).toBe(200);
     expect(JSON.parse(reply.body)).toMatchObject({ gate: "silvic" });
+  });
+
+  it("keeps TLS valid before a route has been registered", async () => {
+    const reply = await get("web-not-yet-published.localhost");
+    expect(reply.status).toBe(404);
+    expect(reply.body).toContain("is not registered");
   });
 
   it("wakes a connected app instead of launching one", async () => {
