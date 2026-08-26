@@ -1,6 +1,6 @@
 {
   "name": "@silvic/desktop",
-  "version": "0.1.44",
+  "version": "0.1.45",
   "description": "Local-first control plane for parallel development environments",
   "repository": "https://github.com/sieversjosua/Silvic",
   "author": "Josua Sievers",
