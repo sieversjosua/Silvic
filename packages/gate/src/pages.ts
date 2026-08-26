@@ -51,6 +51,27 @@ export function holdingPage(route: GateRoute): string {
   );
 }
 
+/** Served while Silvic repairs a known broken upstream. */
+export function recoveryPage(route: GateRoute): string {
+  return page(
+    "Repairing…",
+    `<div class="spin"></div>
+<h1>Repairing <code>${escapeHtml(route.name)}</code></h1>
+<p>Silvic is rebuilding the preview cache. The page reloads by itself.</p>
+<script>
+  const poll = async () => {
+    try {
+      const reply = await fetch("/__silvic/route-status", { cache: "no-store" });
+      const status = await reply.json();
+      if (status.ready) { location.reload(); return; }
+    } catch {}
+    setTimeout(poll, 1200);
+  };
+  poll();
+</script>`,
+  );
+}
+
 export function unknownRoutePage(
   host: string,
   routes: readonly GateRoute[],

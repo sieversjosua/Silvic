@@ -204,7 +204,9 @@ export function cardRuntimeState({
     tone: failed ? "attention" : running.length > 0 ? "waiting" : "quiet",
     label:
       running.length > 0
-        ? `${running.length}/${ids.length} running`
+        ? missing.length === 1 && !failed
+          ? `${runtimeName(missing[0]!)} stopped`
+          : `${running.length}/${ids.length} running`
         : failed
           ? "Failed"
           : "Stopped",
@@ -212,6 +214,14 @@ export function cardRuntimeState({
     stopIds: running,
     ...(advice ? { advice } : {}),
   };
+}
+
+function runtimeName(id: string): string {
+  return id
+    .split(/[-_]/g)
+    .filter(Boolean)
+    .map((part) => `${part[0]?.toUpperCase() ?? ""}${part.slice(1)}`)
+    .join(" ");
 }
 
 const severity: Record<ConnectorObservation["state"], number> = {

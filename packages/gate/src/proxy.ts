@@ -7,7 +7,12 @@ import {
 import { connect as connectTcp, type Socket } from "node:net";
 
 import { GATE_HOST } from "./constants";
-import { holdingPage, unknownRoutePage, upstreamFailedPage } from "./pages";
+import {
+  holdingPage,
+  recoveryPage,
+  unknownRoutePage,
+  upstreamFailedPage,
+} from "./pages";
 import type { GateRoute, RouteStore } from "./route-store";
 
 export interface ProxyContext {
@@ -72,15 +77,14 @@ function forward(
       headers: forwardedHeaders(request.headers, publicHost),
     },
     (upstreamResponse) => {
-      response.writeHead(
-        upstreamResponse.statusCode ?? 502,
-        upstreamResponse.statusMessage,
-        rewriteLocation(upstreamResponse.headers, publicHost, port),
+      forwardResponse(
+        route,
+        port,
+        publicHost,
+        upstreamResponse,
+        response,
+        context,
       );
-      inspectFailurePrefix(upstreamResponse, (failure) =>
-        context.recover(route, failure),
-      );
-      upstreamResponse.pipe(response);
     },
   );
   upstream.once("error", (error: NodeJS.ErrnoException) => {
@@ -103,39 +107,65 @@ function forward(
 
 const failurePrefixLimit = 16 * 1_024;
 
-/** Observes a bounded prefix while the unchanged upstream response streams. */
-function inspectFailurePrefix(
+/** Buffers only candidate errors so a known broken page never reaches users. */
+function forwardResponse(
+  route: GateRoute,
+  port: number,
+  publicHost: string,
   upstream: IncomingMessage,
-  report: (failure: "vite-stale-optimized-dependency") => void,
+  response: ServerResponse,
+  context: ProxyContext,
 ): void {
   const status = upstream.statusCode ?? 0;
-  if (
-    status < 500 ||
-    status >= 600 ||
-    mediaType(upstream.headers["content-type"]) !== "text/html"
-  ) {
+  if (status < 500 || status >= 600) {
+    writeUpstreamHead(response, upstream, publicHost, port);
+    upstream.pipe(response);
     return;
   }
+
   const chunks: Buffer[] = [];
   let length = 0;
-  let inspected = false;
-  const inspect = () => {
-    if (inspected) return;
-    inspected = true;
-    const prefix = Buffer.concat(chunks, length).toString("utf8");
-    chunks.length = 0;
+  let decided = false;
+  const decide = (ended: boolean) => {
+    if (decided) return;
+    decided = true;
+    const buffered = Buffer.concat(chunks, length);
+    const prefix = buffered.subarray(0, failurePrefixLimit).toString("utf8");
     if (viteOptimizerFailure(prefix)) {
-      report("vite-stale-optimized-dependency");
+      context.recover(route, "vite-stale-optimized-dependency");
+      upstream.destroy();
+      respondHtml(response, 503, recoveryPage(route));
+      return;
     }
+    writeUpstreamHead(response, upstream, publicHost, port);
+    if (ended) {
+      response.end(buffered);
+      return;
+    }
+    response.write(buffered);
+    upstream.pipe(response);
   };
   upstream.on("data", (chunk: Buffer) => {
-    if (inspected) return;
-    const bounded = chunk.subarray(0, failurePrefixLimit - length);
-    chunks.push(bounded);
-    length += bounded.length;
-    if (length >= failurePrefixLimit) inspect();
+    if (decided) return;
+    chunks.push(chunk);
+    length += chunk.length;
+    if (length >= failurePrefixLimit) decide(false);
   });
-  upstream.once("end", inspect);
+  upstream.once("end", () => decide(true));
+  upstream.once("error", () => decide(true));
+}
+
+function writeUpstreamHead(
+  response: ServerResponse,
+  upstream: IncomingMessage,
+  publicHost: string,
+  port: number,
+): void {
+  response.writeHead(
+    upstream.statusCode ?? 502,
+    upstream.statusMessage,
+    rewriteLocation(upstream.headers, publicHost, port),
+  );
 }
 
 function viteOptimizerFailure(prefix: string): boolean {
@@ -147,10 +177,6 @@ function viteOptimizerFailure(prefix: string): boolean {
     ) &&
     normalized.includes("which is in the optimize deps directory")
   );
-}
-
-function mediaType(contentType: string | undefined): string {
-  return contentType?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
 }
 
 /** WebSocket upgrades pass through as raw TCP once the handshake is sent. */

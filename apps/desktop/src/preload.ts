@@ -4,6 +4,7 @@ import {
   ipcChannels,
   type AppUpdateState,
   type AppearancePreference,
+  type CodexEnvironmentRequest,
   type CreateEnvironmentRequest,
   type DeliveryExecuteRequest,
   type HarnessId,
@@ -99,6 +100,10 @@ const api: SilvicDesktopApi = {
   getActiveProjects: () => ipcRenderer.invoke(ipcChannels.projectsActiveGet),
   setProjectActive: (request: ProjectActivationRequest) =>
     ipcRenderer.invoke(ipcChannels.projectsActiveSet, request),
+  getCodexEnvironment: (projectId: string) =>
+    ipcRenderer.invoke(ipcChannels.codexEnvironmentGet, projectId),
+  setCodexEnvironment: (request: CodexEnvironmentRequest) =>
+    ipcRenderer.invoke(ipcChannels.codexEnvironmentSet, request),
   copyText: (text: string) =>
     ipcRenderer.invoke(ipcChannels.clipboardWrite, text),
   inspectProject: (projectId: string) =>

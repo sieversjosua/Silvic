@@ -1,8 +1,8 @@
 import { execFile, spawn } from "node:child_process";
 import { once } from "node:events";
 import { createWriteStream, type WriteStream } from "node:fs";
-import { mkdir, readFile } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { mkdir, readFile, rm } from "node:fs/promises";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 
 import type { PlotCommand } from "@silvic/contracts";
@@ -334,6 +334,49 @@ export class CommandSupervisor {
       ) {
         return;
       }
+      if (
+        published.ownership === "external" &&
+        published.failure === "vite-stale-optimized-dependency"
+      ) {
+        this.pendingRouteExits.delete(key);
+        const {
+          processId: _ended,
+          advice: _oldAdvice,
+          exitCode: _oldExitCode,
+          ...failed
+        } = entry;
+        this.running.set(key, {
+          ...failed,
+          status: "failed",
+          targetPort: published.port,
+          ownership: "external",
+          advice: externalViteRecoveryAdvice,
+        });
+        this.logs.get(key)?.end();
+        this.logs.delete(key);
+        await this.routePublisher.remove(routeName);
+        this.announce();
+        return;
+      }
+      if (published.failure === "vite-stale-optimized-dependency") {
+        const {
+          advice: _oldAdvice,
+          exitCode: _oldExitCode,
+          ...healthy
+        } = entry;
+        const running: SupervisedCommand & {
+          routeName: string;
+          targetPort: number;
+        } = {
+          ...healthy,
+          status: "running",
+          routeName,
+          targetPort: published.port,
+        };
+        this.running.set(key, running);
+        this.recoverStaleViteRoute(key, processId, running);
+        return;
+      }
       const pendingExit = this.pendingRouteExits.get(key);
       this.pendingRouteExits.delete(key);
       const { advice: _recovered, exitCode: _exitCode, ...healthy } = entry;
@@ -530,7 +573,7 @@ export class CommandSupervisor {
       : { status: "unavailable" };
   }
 
-  /** One automatic restart, then an explicit human decision for this episode. */
+  /** One cache rebuild and automatic restart, then a human decision. */
   private recoverStaleViteRoute(
     key: string,
     processId: number,
@@ -567,11 +610,13 @@ export class CommandSupervisor {
       status: "starting",
       recoveryAttempts: 1,
       notice:
-        "Silvic is restarting this preview after a stale Vite dependency failure.",
+        "Silvic is rebuilding the Vite cache and restarting this preview.",
     });
     this.logs
       .get(key)
-      ?.write("\n[Silvic] Stale Vite dependency detected; restarting once.\n");
+      ?.write(
+        "\n[Silvic] Stale Vite dependency detected; rebuilding its cache and restarting once.\n",
+      );
     this.announce();
     void this.routePublisher.remove(entry.routeName);
     try {
@@ -746,17 +791,7 @@ export class CommandSupervisor {
       this.recoveries.delete(key);
       this.logs.get(key)?.end();
       this.logs.delete(key);
-      void this.spawn(recovery.request, recovery.routed, {
-        notice:
-          "Silvic restarted this preview after a stale Vite dependency failure.",
-        recoveryAttempts: 1,
-        appendLog: true,
-      }).catch((error) => {
-        this.refuse(
-          recovery.request,
-          `Silvic could not restart the preview: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      });
+      void this.restartAfterViteRecovery(recovery);
       return;
     }
     const forcedFailure = this.forcedFailures.get(key);
@@ -794,6 +829,26 @@ export class CommandSupervisor {
     this.logs.get(key)?.end();
     this.logs.delete(key);
     this.announce();
+  }
+
+  private async restartAfterViteRecovery(recovery: {
+    request: StartRequest;
+    routed: boolean;
+  }): Promise<void> {
+    try {
+      await clearViteCaches(recovery.request);
+      await this.spawn(recovery.request, recovery.routed, {
+        notice:
+          "Silvic rebuilt the Vite cache and restarted this preview after a stale dependency failure.",
+        recoveryAttempts: 1,
+        appendLog: true,
+      });
+    } catch (error) {
+      this.refuse(
+        recovery.request,
+        `Silvic could not rebuild the Vite cache and restart the preview: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 
   /**
@@ -865,7 +920,29 @@ export const proxyAdvice =
   "The named HTTPS URL needs Silvic's local gate. Approve the one-time HTTPS setup prompt when it appears, then press Start again. Or disable Named HTTPS URL in the recipe to use the stable localhost port.";
 
 export const viteRecoveryAdvice =
-  "The preview still has a stale Vite optimized dependency after Silvic restarted it once. Rebuild the Vite cache, then press Start. Silvic did not delete source files or dependency caches.";
+  "The preview still has a stale Vite optimized dependency after Silvic rebuilt its generated Vite cache and restarted it once. Check the preview log, then press Start to try again.";
+
+export const externalViteRecoveryAdvice =
+  "The externally managed preview has a stale Vite cache. Stop that external server, then press Start so Silvic can rebuild the generated cache safely.";
+
+/** Generated Vite caches from the command directory up to the plot root. */
+async function clearViteCaches(request: StartRequest): Promise<void> {
+  const root = resolve(request.plotPath);
+  let directory = commandWorkingDirectory(
+    request.plotPath,
+    request.command.cwd,
+  );
+  const caches = new Set<string>();
+  while (true) {
+    caches.add(join(directory, "node_modules", ".vite"));
+    caches.add(join(directory, "node_modules", ".cache", "vite"));
+    if (directory === root) break;
+    directory = dirname(directory);
+  }
+  await Promise.all(
+    [...caches].map((cache) => rm(cache, { recursive: true, force: true })),
+  );
+}
 
 function keyFor(plotPath: string, id: string): string {
   return `${plotPath}::${id}`;

@@ -317,7 +317,8 @@ describe("gate daemon", () => {
         return;
       }
       if (request.url === "/vite-stale") {
-        response.writeHead(500, { "content-type": "text/html" });
+        // Astro's optimizer error omits Content-Type in the real failure.
+        response.writeHead(500);
         response.end(
           `The file does not exist at "/tmp/plot/node_modules/.vite/deps_ssr/clsx.js?v=123" which is in the optimize deps directory.`,
         );
@@ -437,17 +438,25 @@ describe("gate daemon", () => {
     );
   });
 
-  it("reports only the known Vite failure while preserving the response", async () => {
+  it("hides a stale Vite failure behind a self-refreshing recovery page", async () => {
     const failed = vi.fn();
     const listener = new GateClient({
       socketPath: controlSocketPath(directory),
       onFailure: failed,
     });
     await listener.status();
+    await listener.routeSet({
+      name: "web-live-shop",
+      host: "127.0.0.1",
+      port: upstreamPort,
+      plotPath: "/tmp/plot",
+      commandId: "web",
+    });
 
     const stale = await get("web-live-shop.localhost", "/vite-stale");
-    expect(stale.status).toBe(500);
-    expect(stale.body).toContain("node_modules/.vite/deps_ssr/clsx.js");
+    expect(stale.status).toBe(503);
+    expect(stale.body).toContain("The page reloads by itself");
+    expect(stale.body).not.toContain("node_modules/.vite/deps_ssr/clsx.js");
     await vi.waitFor(() =>
       expect(failed).toHaveBeenCalledWith({
         route: "web-live-shop",
@@ -456,8 +465,20 @@ describe("gate daemon", () => {
         failure: "vite-stale-optimized-dependency",
       }),
     );
+    expect(
+      (await listener.status())?.routes.find(
+        (route) => route.name === "web-live-shop",
+      ),
+    ).not.toHaveProperty("port");
 
     failed.mockClear();
+    await listener.routeSet({
+      name: "web-live-shop",
+      host: "127.0.0.1",
+      port: upstreamPort,
+      plotPath: "/tmp/plot",
+      commandId: "web",
+    });
     const unrelated = await get(
       "web-live-shop.localhost",
       "/application-error",

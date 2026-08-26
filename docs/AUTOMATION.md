@@ -27,9 +27,10 @@ pnpm --filter @silvic/cli build
 apps/cli/dist/silvic.mjs --help
 ```
 
-Silvic must be running. Commands never show a picker, focus the desktop window,
-or trigger an administrator prompt. If named HTTPS setup is missing, start
-reports an actionable diagnostic and leaves gate setup to the desktop UI.
+On macOS the CLI launches Silvic in the background when its control socket is
+not available. Commands never show a picker, focus the desktop window, or
+trigger an administrator prompt. If named HTTPS setup is missing, start reports
+an actionable diagnostic and leaves gate setup to the desktop UI.
 
 ## Preview lifecycle
 
@@ -41,6 +42,7 @@ silvic plots --json
 # Inspect, start, wait, then stop.
 silvic status --plot plot_123 --json
 silvic start --plot plot_123 --json
+silvic preview --plot plot_123 --timeout 60000 --open
 silvic wait --plot plot_123 --timeout 60000 --json
 silvic logs --plot plot_123 --runtime web --limit 20000 --json
 silvic stop --plot plot_123 --json
@@ -56,8 +58,26 @@ top-level result sets `partialFailure: true`. Stopping a runtime with
 `ownership: "external"` returns `detached`: Silvic removes its route and local
 attachment without signalling the external process.
 
-`wait` has no start side effect. It waits until every serving runtime reports
-running and the canonical preview URL answers, then prints that canonical URL.
+`preview` combines start and wait, prints the canonical URL, and optionally
+opens it with `--open`. `wait` has no start side effect. It waits until every
+serving runtime reports running and the canonical preview URL answers, then
+prints that canonical URL.
+
+## Codex environment actions
+
+Open a Project's overflow menu in Silvic and choose **Add Codex actions**. Silvic
+adds a managed block to `.codex/environments/environment.toml` with three local
+environment actions:
+
+- **Silvic Start** starts every runtime declared for the current Codex worktree.
+- **Silvic Preview** starts, waits for readiness, and opens the canonical URL.
+- **Silvic Stop** stops Silvic-owned runtimes and detaches external ones.
+
+The commands pass Codex's current working directory as the Plot selector, so the
+same checked-in actions work from every Codex worktree. Silvic preserves any
+existing setup script and unrelated actions in the environment document. The
+same menu updates or removes only Silvic's marked block; conflicts are reported
+without rewriting the file.
 
 ## Output and exit codes
 

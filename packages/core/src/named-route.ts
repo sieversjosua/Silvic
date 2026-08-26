@@ -18,7 +18,7 @@ export interface ProcessListener {
 export interface RouteProbe {
   status: number;
   contentType?: string;
-  /** A narrowly recognised failure found in a bounded HTML response prefix. */
+  /** A narrowly recognised failure found in a bounded 5xx response prefix. */
   failure?: "vite-stale-optimized-dependency";
 }
 
@@ -43,6 +43,8 @@ export interface PublishedNamedRoute {
   port: number;
   /** The listener came from an announced URL outside the launched process tree. */
   ownership?: "external";
+  /** The listener answered, but only with a failure Silvic can identify. */
+  failure?: "vite-stale-optimized-dependency";
 }
 
 export interface NamedRoutePublisher {
@@ -216,6 +218,9 @@ export class GateRoutePublisher implements NamedRoutePublisher {
               ...(selected.listener.processId === 0
                 ? { ownership: "external" as const }
                 : {}),
+              ...(selected.response.failure
+                ? { failure: selected.response.failure }
+                : {}),
             };
           }
           latest = `The Silvic gate registered ${request.routeName}.localhost, but it did not reach localhost:${targetPort}.`;
@@ -255,6 +260,13 @@ export class GateRoutePublisher implements NamedRoutePublisher {
       this.probe(`https://${routeName}.localhost/`),
     ]);
     if (!direct || !named) return { status: "unavailable" };
+    // The gate replaces this known broken upstream with its recovery page, so
+    // its status and media type intentionally differ from the direct response.
+    // The direct listener was selected and registered immediately above; its
+    // narrow failure signature is enough to begin recovery.
+    if (direct.failure === "vite-stale-optimized-dependency") {
+      return { status: "recoverable", failure: direct.failure };
+    }
     if (!browserFacing(direct) || !browserFacing(named)) {
       return { status: "unavailable" };
     }
@@ -267,15 +279,6 @@ export class GateRoutePublisher implements NamedRoutePublisher {
     // The gate preserves the upstream status. Exact agreement lets a real
     // browser error overlay through while rejecting the gate's own 404/503.
     if (direct.status !== named.status) return { status: "unavailable" };
-    if (
-      direct.failure === "vite-stale-optimized-dependency" &&
-      named.failure === "vite-stale-optimized-dependency"
-    ) {
-      return {
-        status: "recoverable",
-        failure: "vite-stale-optimized-dependency",
-      };
-    }
     return { status: "healthy", httpStatus: direct.status };
   }
 
@@ -422,6 +425,7 @@ function describe(error: unknown): string {
 function browserFacing(response: RouteProbe): boolean {
   const type = mediaType(response.contentType);
   return (
+    response.failure === "vite-stale-optimized-dependency" ||
     type === "text/html" ||
     type === "application/xhtml+xml" ||
     (response.status >= 300 && response.status < 400)
@@ -514,7 +518,8 @@ async function inspectProcessListeners(
 
 const responsePrefixLimit = 16 * 1_024;
 
-function probeUrl(url: string): Promise<RouteProbe | undefined> {
+/** @internal Exported so the real HTTP probe remains regression-testable. */
+export function probeUrl(url: string): Promise<RouteProbe | undefined> {
   const target = new URL(url);
   const hostname = target.hostname.replace(/^\[|\]$/g, "");
   return new Promise((resolve) => {
@@ -537,11 +542,7 @@ function probeUrl(url: string): Promise<RouteProbe | undefined> {
           status: response.statusCode ?? 0,
           ...(typeof contentType === "string" ? { contentType } : {}),
         };
-        if (
-          result.status < 500 ||
-          result.status >= 600 ||
-          mediaType(result.contentType) !== "text/html"
-        ) {
+        if (result.status < 500 || result.status >= 600) {
           response.resume();
           resolve(result);
           return;

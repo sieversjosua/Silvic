@@ -40,6 +40,7 @@ import { harnessById } from "@silvic/connector-harnesses";
 import { createLocalContextConnector } from "@silvic/connector-local";
 import {
   appearancePreferenceSchema,
+  codexEnvironmentRequestSchema,
   createEnvironmentRequestSchema,
   harnessIdSchema,
   deliveryExecuteRequestSchema,
@@ -85,6 +86,7 @@ import {
 import {
   CommandSupervisor,
   buildAdoptionPlan,
+  configureCodexEnvironment,
   executeAdoption,
   ConnectorRegistry,
   DeliveryService,
@@ -94,6 +96,7 @@ import {
   Provisioner,
   TeardownService,
   inspectRepository,
+  inspectCodexEnvironment,
   planTeardown,
   suggestedCommands,
   suggestRecipe,
@@ -573,6 +576,23 @@ function registerIpc(): void {
     if (active) void refreshConnectorObservations();
     return next;
   });
+  ipcMain.handle(
+    ipcChannels.codexEnvironmentGet,
+    async (event, projectId: unknown) => {
+      assertTrustedSender(event);
+      if (typeof projectId !== "string") throw new Error("Invalid project");
+      return inspectCodexEnvironment(knownProjectRoot(projectId));
+    },
+  );
+  ipcMain.handle(
+    ipcChannels.codexEnvironmentSet,
+    async (event, request: unknown) => {
+      assertTrustedSender(event);
+      const { projectId, enabled } =
+        codexEnvironmentRequestSchema.parse(request);
+      return configureCodexEnvironment(knownProjectRoot(projectId), enabled);
+    },
+  );
   ipcMain.handle(ipcChannels.clipboardWrite, (event, text: unknown) => {
     assertTrustedSender(event);
     if (typeof text !== "string" || text.length > 8_000) {

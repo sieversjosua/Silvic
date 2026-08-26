@@ -6,7 +6,10 @@ var __export = (target, all) => {
 };
 
 // src/main.ts
-import { parseArgs } from "node:util";
+import { execFile } from "node:child_process";
+import { platform as platform2 } from "node:os";
+import { setTimeout as delay } from "node:timers/promises";
+import { parseArgs, promisify } from "node:util";
 
 // ../../node_modules/.pnpm/@modelcontextprotocol+server@2.0.0/node_modules/@modelcontextprotocol/server/dist/chunk-Br0eD_fh.mjs
 var __create = Object.create;
@@ -29354,6 +29357,7 @@ var package_default = {
 // src/main.ts
 var version2 = package_default.version;
 var client = new AutomationClient();
+var executeFile = promisify(execFile);
 async function main(argv) {
   const command = argv[0];
   if (!command || command === "help" || command === "--help" || command === "-h") {
@@ -29380,6 +29384,7 @@ async function main(argv) {
       runtime: { type: "string" },
       timeout: { type: "string" },
       limit: { type: "string" },
+      open: { type: "boolean", default: false },
       help: { type: "boolean", short: "h", default: false }
     }
   });
@@ -29390,7 +29395,7 @@ async function main(argv) {
   switch (command) {
     case "projects": {
       rejectOptions(values, ["json", "help"]);
-      const snapshot = await client.call("snapshot");
+      const snapshot = await automationCall("snapshot");
       output(
         {
           roots: snapshot.roots,
@@ -29405,7 +29410,7 @@ async function main(argv) {
     }
     case "plots": {
       rejectOptions(values, ["json", "help", "project"]);
-      const snapshot = await client.call("snapshot", {
+      const snapshot = await automationCall("snapshot", {
         ...values.project ? { projectId: values.project } : {}
       });
       const plots = snapshot.projects.flatMap((project) => project.plots);
@@ -29420,7 +29425,7 @@ async function main(argv) {
     }
     case "status": {
       rejectOptions(values, ["json", "help", "plot"]);
-      const plot = await client.call("status", {
+      const plot = await automationCall("status", {
         plot: requireOption(values.plot, "--plot")
       });
       output(plot, values.json, formatStatus(plot));
@@ -29429,7 +29434,7 @@ async function main(argv) {
     case "start":
     case "stop": {
       rejectOptions(values, ["json", "help", "plot", "runtime"]);
-      const result = await client.call(command, {
+      const result = await automationCall(command, {
         plot: requireOption(values.plot, "--plot"),
         ...values.runtime ? { runtime: values.runtime } : {}
       });
@@ -29443,9 +29448,32 @@ async function main(argv) {
       if (result.partialFailure) process.exitCode = 6;
       return;
     }
+    case "preview": {
+      rejectOptions(values, ["json", "help", "plot", "timeout", "open"]);
+      const plot = requireOption(values.plot, "--plot");
+      const started = await automationCall("start", { plot });
+      if (started.partialFailure) {
+        output(
+          { start: started },
+          values.json,
+          started.results.map(
+            (entry) => `${entry.runtimeId}	${entry.action}${entry.message ? `	${entry.message}` : ""}`
+          )
+        );
+        process.exitCode = 6;
+        return;
+      }
+      const preview = await automationCall("wait", {
+        plot,
+        ...values.timeout ? { timeoutMs: positiveInteger(values.timeout, "--timeout") } : {}
+      });
+      if (values.open) await openPreview(preview.url);
+      output({ start: started, preview }, values.json, [preview.url]);
+      return;
+    }
     case "wait": {
       rejectOptions(values, ["json", "help", "plot", "timeout"]);
-      const result = await client.call("wait", {
+      const result = await automationCall("wait", {
         plot: requireOption(values.plot, "--plot"),
         ...values.timeout ? { timeoutMs: positiveInteger(values.timeout, "--timeout") } : {}
       });
@@ -29454,7 +29482,7 @@ async function main(argv) {
     }
     case "logs": {
       rejectOptions(values, ["json", "help", "plot", "runtime", "limit"]);
-      const result = await client.call("logs", {
+      const result = await automationCall("logs", {
         plot: requireOption(values.plot, "--plot"),
         ...values.runtime ? { runtime: values.runtime } : {},
         ...values.limit ? { limit: positiveInteger(values.limit, "--limit") } : {}
@@ -29523,12 +29551,14 @@ Usage:
   silvic plots [--project ID] [--json]
   silvic status --plot ID [--json]
   silvic start --plot ID [--runtime ID] [--json]
+  silvic preview --plot ID [--timeout MS] [--open] [--json]
   silvic stop --plot ID [--runtime ID] [--json]
   silvic wait --plot ID [--timeout MS] [--json]
   silvic logs --plot ID [--runtime ID] [--limit BYTES] [--json]
 
 Plot selectors accept a stable Plot id or an absolute Plot path. Start and stop
-without --runtime apply to every declared runtime and are idempotent.
+without --runtime apply to every declared runtime and are idempotent. Preview
+starts all runtimes, waits for readiness, and returns the canonical URL.
 `
   );
 }
@@ -29688,7 +29718,7 @@ function buildMcpServer() {
 async function mcpCall(method, params, transform2 = (value) => value, signal) {
   try {
     const result = transform2(
-      await client.call(method, params, signal ? { signal } : {})
+      await automationCall(method, params, signal ? { signal } : {})
     );
     return {
       structuredContent: { result },
@@ -29713,6 +29743,53 @@ async function mcpCall(method, params, transform2 = (value) => value, signal) {
       ]
     };
   }
+}
+async function automationCall(method, params = {}, options = {}) {
+  try {
+    return await client.call(method, params, options);
+  } catch (error51) {
+    if (!(error51 instanceof AutomationError) || error51.code !== "SILVIC_UNAVAILABLE" || platform2() !== "darwin" || process.env["SILVIC_AUTOMATION_DIR"]) {
+      throw error51;
+    }
+  }
+  try {
+    await executeFile("open", ["-gj", "-b", "dev.silvic.app"]);
+  } catch {
+    throw new AutomationError(
+      "SILVIC_UNAVAILABLE",
+      "Silvic is not running and could not be launched. Install or open Silvic and try again."
+    );
+  }
+  const deadline = Date.now() + 15e3;
+  while (true) {
+    if (options.signal?.aborted) {
+      throw new AutomationError("CANCELLED", "Operation was cancelled.");
+    }
+    try {
+      return await client.call(method, params, options);
+    } catch (error51) {
+      if (!(error51 instanceof AutomationError) || error51.code !== "SILVIC_UNAVAILABLE" || Date.now() >= deadline) {
+        throw error51;
+      }
+      try {
+        await delay(250, void 0, { signal: options.signal });
+      } catch {
+        if (options.signal?.aborted) {
+          throw new AutomationError("CANCELLED", "Operation was cancelled.");
+        }
+        throw new AutomationError(
+          "SILVIC_UNAVAILABLE",
+          "Silvic did not become available after launch."
+        );
+      }
+    }
+  }
+}
+async function openPreview(url2) {
+  if (platform2() !== "darwin") {
+    throw new CliUsageError("--open is currently supported on macOS only.");
+  }
+  await executeFile("open", [url2]);
 }
 void main(process.argv.slice(2)).catch((error51) => {
   const usage = error51 instanceof CliUsageError;

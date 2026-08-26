@@ -71,6 +71,10 @@ export async function startGate(options: GateOptions = {}): Promise<Gate> {
       route: Parameters<Waker["wake"]>[0],
       failure: "vite-stale-optimized-dependency",
     ) => {
+      // Stop new requests from reaching the known-broken process while the
+      // desktop app clears its cache and replaces it. The route identity stays
+      // available so the recovery page can poll until it is published again.
+      store.clearUpstream(route.name);
       const event = {
         type: "route-failure" as const,
         route: route.name,

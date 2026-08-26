@@ -121,6 +121,36 @@ it("uses exit 6 for a parseable partial runtime result", async () => {
   });
 });
 
+it("starts a Plot, waits for readiness, and prints its preview URL", async () => {
+  const methods: string[] = [];
+  const directory = await serve(async (request) => {
+    methods.push(request.method);
+    if (request.method === "start") {
+      return {
+        results: [{ runtimeId: "web", action: "started" }],
+        plot: { id: "plot_123" },
+        partialFailure: false,
+      };
+    }
+    return {
+      ready: true,
+      url: "http://silvic.test",
+      durationMs: 12,
+      plot: { id: "plot_123" },
+    };
+  });
+
+  const result = await executeFile(
+    executable,
+    ["preview", "--plot", "/projects/Silvic/.worktrees/codex"],
+    { env: { ...process.env, SILVIC_AUTOMATION_DIR: directory } },
+  );
+
+  expect(result.stderr).toBe("");
+  expect(result.stdout).toBe("http://silvic.test\n");
+  expect(methods).toEqual(["start", "wait"]);
+});
+
 async function serve(
   handle: (request: AutomationRequest) => Promise<unknown>,
 ): Promise<string> {

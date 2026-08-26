@@ -31,6 +31,7 @@ import {
 
 import type {
   AppearancePreference,
+  CodexEnvironmentIntegration,
   ConnectorFailure,
   ConnectorObservation,
   CreateEnvironmentRequest,
@@ -324,6 +325,7 @@ export function App() {
                 onCloseMenu={() => setMenuProjectId(undefined)}
                 onRemove={() => void setProjectActive(candidate.id, false)}
                 onEditRecipe={() => setRecipeProject(candidate)}
+                onFailure={reportFailure}
               />
             ))}
             {activeProjects.length === 0 && !loading && (
@@ -578,6 +580,7 @@ function ProjectButton({
   onCloseMenu,
   onRemove,
   onEditRecipe,
+  onFailure,
 }: {
   project: ProjectSnapshot;
   active: boolean;
@@ -587,6 +590,7 @@ function ProjectButton({
   onCloseMenu(): void;
   onRemove(): void;
   onEditRecipe(): void;
+  onFailure(message: string): void;
 }) {
   const tone = projectTone(project.workspaces);
   const row = useRef<HTMLDivElement>(null);
@@ -595,6 +599,8 @@ function ProjectButton({
     left: number;
     width: number;
   }>();
+  const [codexEnvironment, setCodexEnvironment] =
+    useState<CodexEnvironmentIntegration>();
 
   const open = () => {
     const rect = row.current?.getBoundingClientRect();
@@ -616,6 +622,23 @@ function ProjectButton({
       window.removeEventListener("resize", close);
     };
   }, [menuOpen, onCloseMenu]);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    let current = true;
+    setCodexEnvironment(undefined);
+    void window.silvic
+      .getCodexEnvironment(project.id)
+      .then((integration) => {
+        if (current) setCodexEnvironment(integration);
+      })
+      .catch((error: unknown) => {
+        if (current) onFailure(failureMessage(error));
+      });
+    return () => {
+      current = false;
+    };
+  }, [menuOpen, onFailure, project.id]);
 
   return (
     <div
@@ -685,6 +708,34 @@ function ProjectButton({
             <button
               type="button"
               role="menuitem"
+              disabled={!codexEnvironment}
+              title={codexEnvironment?.detail}
+              onClick={() => {
+                if (!codexEnvironment) return;
+                if (codexEnvironment.state === "conflict") {
+                  onCloseMenu();
+                  onFailure(
+                    codexEnvironment.detail ??
+                      "The Codex environment needs manual attention.",
+                  );
+                  return;
+                }
+                const enabled = codexEnvironment.state !== "installed";
+                void window.silvic
+                  .setCodexEnvironment({ projectId: project.id, enabled })
+                  .then((integration) => {
+                    setCodexEnvironment(integration);
+                    onCloseMenu();
+                  })
+                  .catch((error: unknown) => onFailure(failureMessage(error)));
+              }}
+            >
+              <CodexMark size={14} />
+              {codexEnvironmentLabel(codexEnvironment)}
+            </button>
+            <button
+              type="button"
+              role="menuitem"
               onClick={() => {
                 onCloseMenu();
                 void window.silvic.openWorkspace({
@@ -714,6 +765,22 @@ function ProjectButton({
       )}
     </div>
   );
+}
+
+function codexEnvironmentLabel(
+  integration: CodexEnvironmentIntegration | undefined,
+): string {
+  if (!integration) return "Checking Codex actions…";
+  switch (integration.state) {
+    case "absent":
+      return "Add Codex actions";
+    case "installed":
+      return "Remove Codex actions";
+    case "outdated":
+      return "Update Codex actions";
+    case "conflict":
+      return "Codex actions need attention";
+  }
 }
 
 const suggestionPreviewCount = 5;

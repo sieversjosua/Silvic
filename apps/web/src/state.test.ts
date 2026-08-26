@@ -97,6 +97,32 @@ describe("cardRuntimeState", () => {
     });
   });
 
+  it("names the stopped runtime instead of showing an ambiguous fraction", () => {
+    expect(
+      cardRuntimeState({
+        workspace,
+        commands: [
+          ["web", { run: "bun run dev", url: true }],
+          ["livekit-agent", { run: "bun run agent:dev" }],
+          ["convex", { run: "bunx convex dev" }],
+        ],
+        processes: [
+          {
+            plotPath: workspace.path,
+            id: "livekit-agent",
+            status: "running",
+          },
+          { plotPath: workspace.path, id: "convex", status: "running" },
+        ],
+      }),
+    ).toMatchObject({
+      tone: "waiting",
+      label: "Web stopped",
+      startIds: ["web"],
+      stopIds: ["livekit-agent", "convex"],
+    });
+  });
+
   it("shows Stopped and starts every declared runtime when none is running", () => {
     expect(cardRuntimeState({ workspace, commands, processes: [] })).toEqual({
       tone: "quiet",

@@ -1,12 +1,43 @@
+import { createServer } from "node:http";
+
 import { describe, expect, it, vi } from "vitest";
 
 import {
   GateRoutePublisher,
   GateUnreachable,
   descendantListenerPorts,
+  probeUrl,
   viteOptimizerFailure,
   type GateRouteLink,
 } from "./named-route";
+
+describe("probeUrl", () => {
+  it("recognizes Astro's stale Vite response without a Content-Type header", async () => {
+    const server = createServer((_request, response) => {
+      response.writeHead(500);
+      response.end(
+        'The file does not exist at "/tmp/plot/node_modules/.vite/deps_ssr/astro_app_entrypoint_dev.js?v=123" which is in the optimize deps directory.',
+      );
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("no port");
+      await expect(
+        probeUrl(`http://127.0.0.1:${address.port}/`),
+      ).resolves.toEqual({
+        status: 500,
+        failure: "vite-stale-optimized-dependency",
+      });
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      );
+    }
+  });
+});
 
 const recordingLink = () => {
   const routes = new Map<string, { host: string; port: number }>();
@@ -105,6 +136,48 @@ describe("GateRoutePublisher", () => {
       port: 4321,
       plotPath: "/plots/mono-cmd-k-menu",
       commandId: "web",
+    });
+  });
+
+  it("returns a known stale failure from an announced external listener", async () => {
+    let elapsed = 0;
+    const { link, routes } = recordingLink();
+    const publisher = new GateRoutePublisher({
+      link,
+      inspect: async () => [],
+      probe: async (url) => {
+        if (url === "http://127.0.0.1:4060/") {
+          return {
+            status: 500,
+            failure: "vite-stale-optimized-dependency",
+          };
+        }
+        if (
+          url === "https://web-stale-mono.localhost/" &&
+          routes.get("web-stale-mono")?.port === 4060
+        ) {
+          return { status: 503, contentType: "text/html; charset=utf-8" };
+        }
+        return undefined;
+      },
+      now: () => elapsed,
+      wait: async (milliseconds) => {
+        elapsed += milliseconds;
+      },
+    });
+
+    await expect(
+      publisher.publish({
+        routeName: "web-stale-mono",
+        processId: 38207,
+        expectedPort: 8691,
+        output: () => "URL: http://127.0.0.1:4060",
+        timeoutMs: 500,
+      }),
+    ).resolves.toEqual({
+      port: 4060,
+      ownership: "external",
+      failure: "vite-stale-optimized-dependency",
     });
   });
 

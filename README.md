@@ -84,6 +84,8 @@ See [docs/PLOTS.md](docs/PLOTS.md) for the model and the decisions behind it.
 
 - Codex, Claude Code, T3 Code, OpenCode, VS Code, Terminal or Finder, with the
   default pinned from the menu
+- Project-level Codex environment actions for Start, Preview and Stop, managed
+  from Silvic and available in every Codex worktree
 
 ## What does not work yet
 

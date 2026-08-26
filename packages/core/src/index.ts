@@ -1,6 +1,7 @@
 export * from "./command-runner";
 export * from "./adoption";
 export * from "./command-supervisor";
+export * from "./codex-environment";
 export * from "./connector-registry";
 export * from "./convex-provisioner";
 export * from "./delivery-service";

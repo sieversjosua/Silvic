@@ -1021,6 +1021,22 @@ export type ProjectActivationRequest = z.infer<
   typeof projectActivationRequestSchema
 >;
 
+export const codexEnvironmentRequestSchema = z
+  .object({
+    projectId: z.string().min(1).max(400),
+    enabled: z.boolean(),
+  })
+  .strict();
+export type CodexEnvironmentRequest = z.infer<
+  typeof codexEnvironmentRequestSchema
+>;
+
+export interface CodexEnvironmentIntegration {
+  path: string;
+  state: "absent" | "installed" | "outdated" | "conflict";
+  detail?: string;
+}
+
 export interface SilvicDesktopApi {
   getSnapshot(): Promise<SilvicSnapshot>;
   getRoots(): Promise<readonly string[]>;
@@ -1071,6 +1087,10 @@ export interface SilvicDesktopApi {
   setProjectActive(
     request: ProjectActivationRequest,
   ): Promise<readonly string[]>;
+  getCodexEnvironment(projectId: string): Promise<CodexEnvironmentIntegration>;
+  setCodexEnvironment(
+    request: CodexEnvironmentRequest,
+  ): Promise<CodexEnvironmentIntegration>;
   copyText(text: string): Promise<void>;
   getDefaultHarness(): Promise<HarnessId>;
   setDefaultHarness(id: HarnessId): Promise<HarnessId>;
@@ -1116,6 +1136,8 @@ export const ipcChannels = {
   updateStateChanged: "silvic:update:state:changed",
   projectsActiveGet: "silvic:projects:active:get",
   projectsActiveSet: "silvic:projects:active:set",
+  codexEnvironmentGet: "silvic:codex-environment:get",
+  codexEnvironmentSet: "silvic:codex-environment:set",
   clipboardWrite: "silvic:clipboard:write",
   defaultHarnessGet: "silvic:harness:default:get",
   defaultHarnessSet: "silvic:harness:default:set",

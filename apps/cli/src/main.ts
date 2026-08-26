@@ -1,4 +1,7 @@
-import { parseArgs } from "node:util";
+import { execFile } from "node:child_process";
+import { platform } from "node:os";
+import { setTimeout as delay } from "node:timers/promises";
+import { parseArgs, promisify } from "node:util";
 
 import { McpServer } from "@modelcontextprotocol/server";
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
@@ -14,6 +17,7 @@ import packageMetadata from "../package.json" with { type: "json" };
 
 const version = packageMetadata.version;
 const client = new AutomationClient();
+const executeFile = promisify(execFile);
 
 interface SnapshotResult {
   roots: readonly string[];
@@ -52,6 +56,7 @@ async function main(argv: readonly string[]): Promise<void> {
       runtime: { type: "string" },
       timeout: { type: "string" },
       limit: { type: "string" },
+      open: { type: "boolean", default: false },
       help: { type: "boolean", short: "h", default: false },
     },
   });
@@ -63,7 +68,7 @@ async function main(argv: readonly string[]): Promise<void> {
   switch (command) {
     case "projects": {
       rejectOptions(values, ["json", "help"]);
-      const snapshot = await client.call<SnapshotResult>("snapshot");
+      const snapshot = await automationCall<SnapshotResult>("snapshot");
       output(
         {
           roots: snapshot.roots,
@@ -78,7 +83,7 @@ async function main(argv: readonly string[]): Promise<void> {
     }
     case "plots": {
       rejectOptions(values, ["json", "help", "project"]);
-      const snapshot = await client.call<SnapshotResult>("snapshot", {
+      const snapshot = await automationCall<SnapshotResult>("snapshot", {
         ...(values.project ? { projectId: values.project } : {}),
       });
       const plots = snapshot.projects.flatMap((project) => project.plots);
@@ -94,7 +99,7 @@ async function main(argv: readonly string[]): Promise<void> {
     }
     case "status": {
       rejectOptions(values, ["json", "help", "plot"]);
-      const plot = await client.call<AutomationPlot>("status", {
+      const plot = await automationCall<AutomationPlot>("status", {
         plot: requireOption(values.plot, "--plot"),
       });
       output(plot, values.json, formatStatus(plot));
@@ -103,7 +108,7 @@ async function main(argv: readonly string[]): Promise<void> {
     case "start":
     case "stop": {
       rejectOptions(values, ["json", "help", "plot", "runtime"]);
-      const result = await client.call<OperationResult>(command, {
+      const result = await automationCall<OperationResult>(command, {
         plot: requireOption(values.plot, "--plot"),
         ...(values.runtime ? { runtime: values.runtime } : {}),
       });
@@ -118,9 +123,35 @@ async function main(argv: readonly string[]): Promise<void> {
       if (result.partialFailure) process.exitCode = 6;
       return;
     }
+    case "preview": {
+      rejectOptions(values, ["json", "help", "plot", "timeout", "open"]);
+      const plot = requireOption(values.plot, "--plot");
+      const started = await automationCall<OperationResult>("start", { plot });
+      if (started.partialFailure) {
+        output(
+          { start: started },
+          values.json,
+          started.results.map(
+            (entry) =>
+              `${entry.runtimeId}\t${entry.action}${entry.message ? `\t${entry.message}` : ""}`,
+          ),
+        );
+        process.exitCode = 6;
+        return;
+      }
+      const preview = await automationCall<WaitResult>("wait", {
+        plot,
+        ...(values.timeout
+          ? { timeoutMs: positiveInteger(values.timeout, "--timeout") }
+          : {}),
+      });
+      if (values.open) await openPreview(preview.url);
+      output({ start: started, preview }, values.json, [preview.url]);
+      return;
+    }
     case "wait": {
       rejectOptions(values, ["json", "help", "plot", "timeout"]);
-      const result = await client.call<WaitResult>("wait", {
+      const result = await automationCall<WaitResult>("wait", {
         plot: requireOption(values.plot, "--plot"),
         ...(values.timeout
           ? { timeoutMs: positiveInteger(values.timeout, "--timeout") }
@@ -131,7 +162,7 @@ async function main(argv: readonly string[]): Promise<void> {
     }
     case "logs": {
       rejectOptions(values, ["json", "help", "plot", "runtime", "limit"]);
-      const result = await client.call<LogsResult>("logs", {
+      const result = await automationCall<LogsResult>("logs", {
         plot: requireOption(values.plot, "--plot"),
         ...(values.runtime ? { runtime: values.runtime } : {}),
         ...(values.limit
@@ -234,7 +265,7 @@ function positiveInteger(value: string, name: string): number {
 
 function writeHelp(): void {
   process.stdout.write(
-    `Silvic ${version}\n\nUsage:\n  silvic projects [--json]\n  silvic plots [--project ID] [--json]\n  silvic status --plot ID [--json]\n  silvic start --plot ID [--runtime ID] [--json]\n  silvic stop --plot ID [--runtime ID] [--json]\n  silvic wait --plot ID [--timeout MS] [--json]\n  silvic logs --plot ID [--runtime ID] [--limit BYTES] [--json]\n\nPlot selectors accept a stable Plot id or an absolute Plot path. Start and stop\nwithout --runtime apply to every declared runtime and are idempotent.\n`,
+    `Silvic ${version}\n\nUsage:\n  silvic projects [--json]\n  silvic plots [--project ID] [--json]\n  silvic status --plot ID [--json]\n  silvic start --plot ID [--runtime ID] [--json]\n  silvic preview --plot ID [--timeout MS] [--open] [--json]\n  silvic stop --plot ID [--runtime ID] [--json]\n  silvic wait --plot ID [--timeout MS] [--json]\n  silvic logs --plot ID [--runtime ID] [--limit BYTES] [--json]\n\nPlot selectors accept a stable Plot id or an absolute Plot path. Start and stop\nwithout --runtime apply to every declared runtime and are idempotent. Preview\nstarts all runtimes, waits for readiness, and returns the canonical URL.\n`,
   );
 }
 
@@ -415,7 +446,7 @@ async function mcpCall<T>(
 ) {
   try {
     const result = transform(
-      await client.call<T>(method, params, signal ? { signal } : {}),
+      await automationCall<T>(method, params, signal ? { signal } : {}),
     );
     return {
       structuredContent: { result },
@@ -443,6 +474,69 @@ async function mcpCall<T>(
       ],
     };
   }
+}
+
+async function automationCall<T>(
+  method: "snapshot" | "status" | "start" | "stop" | "wait" | "logs",
+  params: Record<string, unknown> = {},
+  options: { signal?: AbortSignal } = {},
+): Promise<T> {
+  try {
+    return await client.call<T>(method, params, options);
+  } catch (error) {
+    if (
+      !(error instanceof AutomationError) ||
+      error.code !== "SILVIC_UNAVAILABLE" ||
+      platform() !== "darwin" ||
+      process.env["SILVIC_AUTOMATION_DIR"]
+    ) {
+      throw error;
+    }
+  }
+
+  try {
+    await executeFile("open", ["-gj", "-b", "dev.silvic.app"]);
+  } catch {
+    throw new AutomationError(
+      "SILVIC_UNAVAILABLE",
+      "Silvic is not running and could not be launched. Install or open Silvic and try again.",
+    );
+  }
+  const deadline = Date.now() + 15_000;
+  while (true) {
+    if (options.signal?.aborted) {
+      throw new AutomationError("CANCELLED", "Operation was cancelled.");
+    }
+    try {
+      return await client.call<T>(method, params, options);
+    } catch (error) {
+      if (
+        !(error instanceof AutomationError) ||
+        error.code !== "SILVIC_UNAVAILABLE" ||
+        Date.now() >= deadline
+      ) {
+        throw error;
+      }
+      try {
+        await delay(250, undefined, { signal: options.signal });
+      } catch {
+        if (options.signal?.aborted) {
+          throw new AutomationError("CANCELLED", "Operation was cancelled.");
+        }
+        throw new AutomationError(
+          "SILVIC_UNAVAILABLE",
+          "Silvic did not become available after launch.",
+        );
+      }
+    }
+  }
+}
+
+async function openPreview(url: string): Promise<void> {
+  if (platform() !== "darwin") {
+    throw new CliUsageError("--open is currently supported on macOS only.");
+  }
+  await executeFile("open", [url]);
 }
 
 void main(process.argv.slice(2)).catch((error: unknown) => {

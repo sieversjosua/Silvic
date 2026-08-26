@@ -1,5 +1,5 @@
-import { readdirSync } from "node:fs";
-import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
+import { existsSync, readdirSync } from "node:fs";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -165,6 +165,104 @@ describe("CommandSupervisor", () => {
     expect(routePublisher.remove).toHaveBeenCalledWith("web-external");
   });
 
+  it("fails clearly instead of attaching a stale external Vite server", async () => {
+    const logDirectory = await mkdtemp(join(tmpdir(), "silvic-supervisor-"));
+    temporaryDirectories.push(logDirectory);
+    const routePublisher: NamedRoutePublisher = {
+      publish: vi.fn().mockResolvedValue({
+        port: 4060,
+        ownership: "external",
+        failure: "vite-stale-optimized-dependency",
+      }),
+      improve: vi.fn().mockResolvedValue(undefined),
+      healthy: vi.fn().mockResolvedValue(true),
+      remove: vi.fn().mockResolvedValue(undefined),
+    };
+    const supervisor = new CommandSupervisor({
+      logDirectory,
+      onChange: () => {},
+      routePublisher,
+    });
+
+    await supervisor.start({
+      plotPath: logDirectory,
+      id: "web",
+      command: {
+        run: 'printf "URL: http://127.0.0.1:4060\\n"; exit 1',
+        url: true,
+      },
+      routeName: "web-stale-external",
+      environment: { PORT: "8691" },
+      canRoute: true,
+      detached: false,
+    });
+
+    await vi.waitFor(() =>
+      expect(supervisor.list()[0]).toMatchObject({
+        status: "failed",
+        ownership: "external",
+        targetPort: 4060,
+        advice: expect.stringContaining("externally managed"),
+      }),
+    );
+    expect(supervisor.list()[0]).not.toHaveProperty("processId");
+    expect(routePublisher.remove).toHaveBeenCalledWith("web-stale-external");
+  });
+
+  it("rebuilds immediately when initial route discovery finds stale Vite", async () => {
+    const logDirectory = await mkdtemp(join(tmpdir(), "silvic-supervisor-"));
+    temporaryDirectories.push(logDirectory);
+    const cache = join(logDirectory, "node_modules", ".vite", "deps_ssr");
+    await mkdir(cache, { recursive: true });
+    await writeFile(join(cache, "astro-entry.js"), "stale");
+    const publish = vi
+      .fn()
+      .mockResolvedValueOnce({
+        port: 4321,
+        failure: "vite-stale-optimized-dependency",
+      })
+      .mockResolvedValue({ port: 4321 });
+    const routePublisher: NamedRoutePublisher = {
+      publish,
+      improve: vi.fn().mockResolvedValue(undefined),
+      healthy: vi.fn().mockResolvedValue(true),
+      diagnose: vi
+        .fn()
+        .mockResolvedValue({ status: "healthy", httpStatus: 200 }),
+      remove: vi.fn().mockResolvedValue(undefined),
+    };
+    const supervisor = new CommandSupervisor({
+      logDirectory,
+      onChange: () => {},
+      routePublisher,
+      routeHealthIntervalMs: 60_000,
+    });
+
+    await supervisor.start({
+      plotPath: logDirectory,
+      id: "web",
+      command: { run: "sleep 10", url: true },
+      routeName: "web-stale-initial",
+      environment: { PORT: "4321" },
+      canRoute: true,
+      detached: false,
+    });
+
+    await vi.waitFor(() => expect(publish).toHaveBeenCalledTimes(2), {
+      timeout: 5_000,
+    });
+    await vi.waitFor(
+      () =>
+        expect(supervisor.list()[0]).toMatchObject({
+          status: "running",
+          notice: expect.stringContaining("rebuilt the Vite cache"),
+        }),
+      { timeout: 5_000 },
+    );
+    expect(existsSync(join(logDirectory, "node_modules", ".vite"))).toBe(false);
+    supervisor.stopAll();
+  });
+
   it("fails a nonzero launcher when its announced URL is unhealthy", async () => {
     const logDirectory = await mkdtemp(join(tmpdir(), "silvic-supervisor-"));
     temporaryDirectories.push(logDirectory);
@@ -326,9 +424,31 @@ describe("CommandSupervisor", () => {
     supervisor.stopAll();
   });
 
-  it("restarts once and returns to running after a stale Vite failure", async () => {
+  it("clears Vite caches before restarting after a stale dependency failure", async () => {
     const logDirectory = await mkdtemp(join(tmpdir(), "silvic-supervisor-"));
     temporaryDirectories.push(logDirectory);
+    const commandDirectory = join(logDirectory, "apps", "web");
+    const rootViteCache = join(logDirectory, "node_modules", ".vite");
+    const commandViteCache = join(
+      commandDirectory,
+      "node_modules",
+      ".cache",
+      "vite",
+    );
+    const dependencyMarker = join(
+      logDirectory,
+      "node_modules",
+      "kept-package.txt",
+    );
+    await Promise.all([
+      mkdir(join(rootViteCache, "deps_ssr"), { recursive: true }),
+      mkdir(join(commandViteCache, "deps"), { recursive: true }),
+    ]);
+    await Promise.all([
+      writeFile(join(rootViteCache, "deps_ssr", "astro-entry.js"), "stale"),
+      writeFile(join(commandViteCache, "deps", "react.js"), "stale"),
+      writeFile(dependencyMarker, "keep"),
+    ]);
     const onChange = vi.fn();
     const publish = vi.fn().mockResolvedValue({ port: 4321 });
     const diagnose = vi
@@ -351,7 +471,7 @@ describe("CommandSupervisor", () => {
     await supervisor.start({
       plotPath: logDirectory,
       id: "web",
-      command: { run: "sleep 10", url: true },
+      command: { run: "sleep 10", cwd: "apps/web", url: true },
       routeName: "web-vite-recovery",
       environment: { PORT: "4321" },
       canRoute: true,
@@ -378,6 +498,9 @@ describe("CommandSupervisor", () => {
       { timeout: 5_000 },
     );
     expect(supervisor.list()[0]?.processId).not.toBe(originalProcessId);
+    expect(existsSync(rootViteCache)).toBe(false);
+    expect(existsSync(commandViteCache)).toBe(false);
+    expect(existsSync(dependencyMarker)).toBe(true);
     expect(supervisor.list()[0]).not.toHaveProperty("recoveryAttempts");
     expect(onChange).toHaveBeenCalledWith([
       expect.objectContaining({ recoveryAttempts: 1 }),
@@ -438,7 +561,7 @@ describe("CommandSupervisor", () => {
       () =>
         expect(supervisor.list()[0]).toMatchObject({
           status: "failed",
-          advice: expect.stringContaining("Rebuild the Vite cache"),
+          advice: expect.stringContaining("rebuilt its generated Vite cache"),
         }),
       { timeout: 5_000 },
     );
