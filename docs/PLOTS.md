@@ -232,25 +232,24 @@ with is _what this Plot still holds, and what releasing it costs_:
 | Provider deployment | **money**            | provision again          |
 | Branch              | nothing, once pushed | only if it was pushed    |
 
-So teardown is a ladder rather than a state, each rung reversible at increasing
-cost:
+Stopping is an operational action of its own. Teardown therefore has one clear
+meaning in the interface: **remove the Plot**. Silvic first plans the fullest
+safe cleanup, then removes the worktree and deletes the branch only when doing
+so loses no branch-only work. If the branch still owns commits, it is kept
+automatically instead of blocking removal.
 
-- **Stop** — end processes. Free, instant, nothing lost.
-- **Archive** — release what the Plot holds, keeping its files and branch.
-- **Remove** — delete the worktree. The branch is a separate, explicit choice.
-
-Nothing runs without showing the exact ordered plan first, including what
-survives. A plan is refused outright rather than partially applied when it would
-lose work: uncommitted changes, unpushed commits, or a branch with no upstream
-all block it. The primary checkout can never be torn down — it is the project.
+The confirmation says exactly what will disappear. Because removal itself is
+the destructive confirmation, uncommitted work in the disposable worktree is
+discarded without a second checkbox. The primary checkout can never be torn
+down — it is the project.
 
 ### Steps Silvic cannot perform
 
-A plan lists these too, with the reason, rather than dropping them. Two matter
-today:
+A compact follow-up list calls these out without presenting them as steps Silvic
+will run. Two matter today:
 
 - **Convex deployments cannot be deleted.** The CLI offers `select`, `create`
-  and `token`, and nothing that removes a deployment. Archiving a Plot therefore
+  and `token`, and nothing that removes a deployment. Removing a Plot therefore
   cannot stop it costing money; Silvic says so and links to the dashboard.
 - **Processes Silvic did not start cannot be stopped safely**, because Silvic
   does not own their process identity or logs.

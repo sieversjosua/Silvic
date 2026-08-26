@@ -148,7 +148,7 @@ export function PlotRuntimeActions({
         <button
           type="button"
           className="plot-teardown"
-          aria-label={`Tear down ${workspace.name}`}
+          aria-label={`Remove plot ${workspace.name}`}
           title={
             conclusion === "merged"
               ? "The pull request is merged — remove the worktree and branch"
@@ -160,7 +160,7 @@ export function PlotRuntimeActions({
           }}
         >
           <Trash2 size={11} />
-          <span className="plot-action-label">Tear down…</span>
+          <span className="plot-action-label">Remove…</span>
         </button>
       )}
       {actions.stop && runtime && (
@@ -397,7 +397,7 @@ export function PlotMenu({
               onClick={run(() => onTeardown(workspace))}
             >
               <Trash2 size={14} />
-              Tear down…
+              Remove plot…
             </button>
           </>
         )}

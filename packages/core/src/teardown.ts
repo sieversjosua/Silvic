@@ -177,6 +177,13 @@ export function planTeardown({
         detail:
           "Its pull request merged this exact tip; a squash hides that from Git, so the deletion is forced",
       });
+    } else if (heldOnlyHere === 0) {
+      steps.push({
+        id: "branch:safe-force",
+        label: `Delete the branch ${workspace.branch}`,
+        detail:
+          "Every commit remains reachable from another local or remote branch",
+      });
     } else {
       if (heldOnlyHere === undefined) {
         blockers.push(
@@ -187,11 +194,13 @@ export function planTeardown({
           `${heldOnlyHere} commit${heldOnlyHere === 1 ? "" : "s"} exist only on ${workspace.branch}. Push or merge them first, or deleting the branch is the end of them.`,
         );
       }
-      steps.push({
-        id: "branch",
-        label: `Delete the branch ${workspace.branch}`,
-        detail: "Refused by Git if it holds unmerged work",
-      });
+      if (heldOnlyHere !== undefined) {
+        steps.push({
+          id: "branch",
+          label: `Delete the branch ${workspace.branch}`,
+          detail: "Refused by Git if it holds unmerged work",
+        });
+      }
     }
   } else {
     keeps.push(`The branch ${workspace.branch}`);
@@ -288,9 +297,12 @@ export class TeardownService {
             arguments: ["branch", "-d", context.branch],
             cwd: context.projectRoot,
           });
-        } else if (step.id === "branch:force") {
-          // Forced only when the plan proved the pull request merged this
-          // exact tip — Git cannot see a squash, but GitHub recorded it.
+        } else if (
+          step.id === "branch:force" ||
+          step.id === "branch:safe-force"
+        ) {
+          // Forced only after the plan proves every commit survives elsewhere:
+          // either GitHub merged this exact tip, or another ref reaches it.
           await requireSuccess(this.runner, {
             executable: "git",
             arguments: ["branch", "-D", context.branch],

@@ -2647,25 +2647,31 @@ button.plot-list-deployment:hover {
 /* --- recipe editor -------------------------------------------------------- */
 
 .dialog.teardown {
-  width: min(600px, 100%);
+  width: min(520px, 100%);
 }
 
-.teardown-scopes {
-  grid-template-columns: 1fr;
-  gap: 6px;
+.teardown-summary {
+  color: var(--ink-muted);
+  font-size: 13px;
+  line-height: 1.5;
 }
 
-.teardown-branch {
+.teardown-warning {
   display: flex;
   gap: 8px;
-  align-items: center;
-  color: var(--ink-muted);
-  font-size: 12.5px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--tone-attention) 40%, transparent);
+  border-radius: var(--r-md);
+  color: var(--tone-attention);
+  background: color-mix(in srgb, var(--tone-attention) 8%, transparent);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
-.teardown-branch code {
-  font-family: var(--font-mono);
-  font-size: 11px;
+.teardown-warning svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
 }
 
 .teardown-blockers {
@@ -2692,59 +2698,63 @@ button.plot-list-deployment:hover {
   margin-top: 2px;
 }
 
-.teardown-plan {
+.teardown-outcome {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 12px;
+  border: 1px solid var(--rule);
+  border-radius: var(--r-md);
+  font-size: 12px;
+}
+
+.teardown-outcome span {
+  color: var(--ink-muted);
+}
+
+.teardown-manual-list {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
 }
 
-.teardown-plan li {
-  padding: 9px 11px;
-  border: 1px solid var(--rule);
-  border-radius: var(--r-md);
-}
-
-.teardown-plan li[data-manual] {
-  border-style: dashed;
-}
-
-.teardown-manual {
+.teardown-manual-list > .micro {
   display: inline-flex;
   gap: 4px;
   align-items: center;
-  color: var(--ink-faint);
-  font-family: var(--font-mono);
-  font-size: 9.5px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
 }
 
-.teardown-plan code {
-  display: block;
-  margin-top: 3px;
-  overflow-wrap: anywhere;
+.teardown-manual-item {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 11px;
+  border: 1px dashed var(--rule);
+  border-radius: var(--r-md);
+}
+
+.teardown-manual-item span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.teardown-manual-item strong {
+  font-size: 12px;
+}
+
+.teardown-manual-item small {
   color: var(--ink-faint);
   font-size: 10.5px;
+  line-height: 1.4;
 }
 
 .teardown-link {
+  flex: 0 0 auto;
   height: 24px;
-  margin-top: 7px;
   padding: 0 9px;
   font-size: 11px;
-}
-
-.teardown-keeps {
-  color: var(--ink-muted);
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-.teardown-keeps strong {
-  color: var(--ink);
 }
 
 .primary-button.danger {

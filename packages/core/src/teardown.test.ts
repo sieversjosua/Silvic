@@ -5,7 +5,12 @@ import type {
   WorkspaceSnapshot,
 } from "@silvic/contracts";
 
-import { planTeardown } from "./teardown";
+import type {
+  CommandRequest,
+  CommandResult,
+  CommandRunner,
+} from "./command-runner";
+import { planTeardown, TeardownService } from "./teardown";
 
 function plot(overrides: Partial<WorkspaceSnapshot> = {}): WorkspaceSnapshot {
   return {
@@ -162,7 +167,9 @@ describe("planTeardown", () => {
     });
 
     expect(plan.blockers).toEqual([]);
-    expect(plan.steps.some((step) => step.id === "branch")).toBe(true);
+    expect(plan.steps.some((step) => step.id === "branch:safe-force")).toBe(
+      true,
+    );
   });
 
   it("refuses rather than guesses when the count could not be taken", () => {
@@ -286,5 +293,37 @@ describe("discarding uncommitted work", () => {
     });
 
     expect(plan.steps.some((step) => step.id === "discard")).toBe(false);
+  });
+});
+
+describe("TeardownService", () => {
+  it("force-deletes a branch only after the plan proves its commits survive", async () => {
+    const requests: CommandRequest[] = [];
+    const runner: CommandRunner = {
+      async run(request): Promise<CommandResult> {
+        requests.push(request);
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+    };
+    const workspace = plot();
+    const plan = planTeardown({
+      workspace,
+      scope: "remove",
+      deleteBranch: true,
+      heldOnlyHere: 0,
+    });
+
+    const results = await new TeardownService(runner).execute(plan, {
+      path: workspace.path,
+      branch: workspace.branch,
+      projectRoot: "/plots",
+    });
+
+    expect(results.every((step) => step.status === "done")).toBe(true);
+    expect(requests.at(-1)?.arguments).toEqual([
+      "branch",
+      "-D",
+      "feature/auth",
+    ]);
   });
 });
