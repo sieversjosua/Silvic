@@ -1,7 +1,7 @@
 import { execFile, spawn } from "node:child_process";
 import { once } from "node:events";
 import { createWriteStream, type WriteStream } from "node:fs";
-import { mkdir, readFile, rm } from "node:fs/promises";
+import { access, mkdir, readFile, rm } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 
@@ -76,7 +76,7 @@ export class CommandSupervisor {
   private readonly startRequests = new Map<string, StartRequest>();
   private readonly recoveries = new Map<
     string,
-    { request: StartRequest; routed: boolean }
+    { request: StartRequest; routed: boolean; externalAstro?: boolean }
   >();
   private readonly routeHealthTimers = new Map<string, NodeJS.Timeout>();
   /** Nonzero exits waiting for their in-flight route discovery to settle. */
@@ -338,24 +338,68 @@ export class CommandSupervisor {
         published.ownership === "external" &&
         published.failure === "vite-stale-optimized-dependency"
       ) {
-        this.pendingRouteExits.delete(key);
-        const {
-          processId: _ended,
-          advice: _oldAdvice,
-          exitCode: _oldExitCode,
-          ...failed
-        } = entry;
+        const request = this.startRequests.get(key);
+        if (
+          !request ||
+          entry.recoveryAttempts ||
+          !astroDuplicateServer(output())
+        ) {
+          this.pendingRouteExits.delete(key);
+          const {
+            processId: _ended,
+            advice: _oldAdvice,
+            exitCode: _oldExitCode,
+            ...failed
+          } = entry;
+          this.running.set(key, {
+            ...failed,
+            status: "failed",
+            targetPort: published.port,
+            ownership: "external",
+            advice: externalViteRecoveryAdvice,
+          });
+          this.logs.get(key)?.end();
+          this.logs.delete(key);
+          await this.routePublisher.remove(routeName);
+          this.announce();
+          return;
+        }
+        const recovery = {
+          request,
+          routed: routes(request.command),
+          externalAstro: true,
+        };
+        this.recoveries.set(key, recovery);
         this.running.set(key, {
-          ...failed,
-          status: "failed",
+          ...entry,
+          status: "starting",
           targetPort: published.port,
           ownership: "external",
-          advice: externalViteRecoveryAdvice,
+          recoveryAttempts: 1,
+          notice:
+            "Silvic is stopping the stale external Astro server and rebuilding the Vite cache.",
         });
-        this.logs.get(key)?.end();
-        this.logs.delete(key);
+        this.logs
+          .get(key)
+          ?.write(
+            "\n[Silvic] Stale external Astro server detected; stopping it, rebuilding the Vite cache and restarting once.\n",
+          );
         await this.routePublisher.remove(routeName);
         this.announce();
+        const pendingExit = this.pendingRouteExits.get(key);
+        if (pendingExit) {
+          this.pendingRouteExits.delete(key);
+          this.logs.get(key)?.end();
+          this.logs.delete(key);
+          void this.restartAfterViteRecovery(recovery);
+          return;
+        }
+        try {
+          process.kill(-processId, "SIGTERM");
+          this.ensureStopped(key, processId);
+        } catch {
+          this.settle(key, 0, processId);
+        }
         return;
       }
       if (published.failure === "vite-stale-optimized-dependency") {
@@ -834,12 +878,20 @@ export class CommandSupervisor {
   private async restartAfterViteRecovery(recovery: {
     request: StartRequest;
     routed: boolean;
+    externalAstro?: boolean;
   }): Promise<void> {
     try {
+      if (recovery.externalAstro) {
+        await stopExternalAstroServer(recovery.request);
+      }
       await clearViteCaches(recovery.request);
+      const key = keyFor(recovery.request.plotPath, recovery.request.id);
+      const current = this.running.get(key);
+      if (!current || current.status === "stopping") return;
       await this.spawn(recovery.request, recovery.routed, {
-        notice:
-          "Silvic rebuilt the Vite cache and restarted this preview after a stale dependency failure.",
+        notice: recovery.externalAstro
+          ? "Silvic stopped the stale external Astro server, rebuilt the Vite cache and restarted this preview."
+          : "Silvic rebuilt the Vite cache and restarted this preview after a stale dependency failure.",
         recoveryAttempts: 1,
         appendLog: true,
       });
@@ -923,7 +975,50 @@ export const viteRecoveryAdvice =
   "The preview still has a stale Vite optimized dependency after Silvic rebuilt its generated Vite cache and restarted it once. Check the preview log, then press Start to try again.";
 
 export const externalViteRecoveryAdvice =
-  "The externally managed preview has a stale Vite cache. Stop that external server, then press Start so Silvic can rebuild the generated cache safely.";
+  "The externally managed preview has a stale Vite cache, and Silvic could not stop its Astro server automatically. Stop that external server, then press Start so Silvic can rebuild the generated cache safely.";
+
+function astroDuplicateServer(output: string): boolean {
+  return (
+    output.includes("Another astro dev server is already running") &&
+    output.includes("astro dev stop")
+  );
+}
+
+async function stopExternalAstroServer(request: StartRequest): Promise<void> {
+  const root = resolve(request.plotPath);
+  const workingDirectory = commandWorkingDirectory(
+    request.plotPath,
+    request.command.cwd,
+  );
+  let directory = workingDirectory;
+  let executable: string | undefined;
+  while (true) {
+    const candidate = join(directory, "node_modules", ".bin", "astro");
+    try {
+      await access(candidate);
+      executable = candidate;
+      break;
+    } catch {}
+    if (directory === root) break;
+    directory = dirname(directory);
+  }
+  if (!executable) {
+    throw new Error(
+      "Silvic could not find Astro's safe stop command inside this plot.",
+    );
+  }
+  try {
+    await executeFile(executable, ["dev", "stop"], {
+      cwd: workingDirectory,
+      env: { ...process.env, PATH: resolvedCommandPath() },
+      timeout: 15_000,
+    });
+  } catch (error) {
+    throw new Error(
+      `Silvic could not run Astro's safe stop command: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
 
 /** Generated Vite caches from the command directory up to the plot root. */
 async function clearViteCaches(request: StartRequest): Promise<void> {
