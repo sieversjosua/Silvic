@@ -488,6 +488,10 @@ function registerIpc(): void {
     const parsed = plotCommandRequestSchema.parse(request);
     supervisor.stop(knownWorkspacePath(parsed.path), parsed.id);
   });
+  ipcMain.handle(ipcChannels.plotCommandsStopAll, (event) => {
+    assertTrustedSender(event);
+    supervisor.stopAll();
+  });
   ipcMain.handle(ipcChannels.plotCommandOutput, (event, request) => {
     assertTrustedSender(event);
     const parsed = plotCommandRequestSchema.parse(request);

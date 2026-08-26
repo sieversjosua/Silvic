@@ -84,6 +84,7 @@ import { plotResources } from "./plot-resources";
 import { pullRequestReference } from "./pull-request";
 import { PlotList } from "./PlotList";
 import { useAccelerator, useKeyLayer } from "./shortcuts";
+import { StopAllPlotsButton } from "./StopAllPlotsButton";
 import { useSilvic } from "./store";
 import {
   applyProvisionRun,
@@ -344,6 +345,7 @@ export function App() {
         </div>
 
         <div className="rail-foot">
+          <StopAllPlotsButton processes={processes} onFailure={reportFailure} />
           <AppUpdater />
           {snapshot.connectorFailures.some(
             (failure) => failure.connectorId === "github",

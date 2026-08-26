@@ -1054,6 +1054,8 @@ export interface SilvicDesktopApi {
   setKeepCommandsRunning(keep: boolean): Promise<boolean>;
   startPlotCommand(request: PlotCommandRequest): Promise<void>;
   stopPlotCommand(request: PlotCommandRequest): Promise<void>;
+  /** Stops every runtime currently managed by Silvic, across all plots. */
+  stopAllPlotCommands(): Promise<void>;
   readPlotCommandOutput(request: PlotCommandRequest): Promise<string>;
   onPlotProcesses(
     listener: (processes: readonly PlotProcess[]) => void,
@@ -1153,6 +1155,7 @@ export const ipcChannels = {
   keepRunningSet: "silvic:commands:keep:set",
   plotCommandStart: "silvic:plot:command:start",
   plotCommandStop: "silvic:plot:command:stop",
+  plotCommandsStopAll: "silvic:plot:commands:stop-all",
   plotCommandOutput: "silvic:plot:command:output",
   plotCommandsChanged: "silvic:plot:commands:changed",
   stepTest: "silvic:step:test",

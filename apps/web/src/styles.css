@@ -665,6 +665,31 @@ button.app-update[aria-disabled="true"] {
   background: var(--surface-hover);
 }
 
+.stop-all-plots {
+  width: 100%;
+  border: 1px solid color-mix(in srgb, var(--tone-attention) 28%, var(--rule));
+  color: var(--tone-attention);
+  text-align: left;
+}
+
+.stop-all-plots:hover:not(:disabled) {
+  color: var(--tone-attention);
+  border-color: color-mix(in srgb, var(--tone-attention) 48%, var(--rule));
+  background: color-mix(in srgb, var(--tone-attention) 8%, transparent);
+}
+
+.stop-all-plots:disabled {
+  cursor: default;
+  opacity: 0.42;
+}
+
+.stop-all-count {
+  min-width: 18px;
+  margin-left: auto;
+  font-size: 9.5px;
+  text-align: right;
+}
+
 /* Watched locations and connector health share one quiet status corner. */
 .rail-status {
   position: relative;
