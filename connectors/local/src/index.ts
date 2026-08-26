@@ -34,6 +34,8 @@ export interface AgentSession {
   title: string;
   updatedAtMs: number;
   harness: SessionHarness;
+  /** The harness still holds this exact session open. */
+  active?: boolean;
 }
 
 const harnessDetail: Record<SessionHarness, string> = {
@@ -57,6 +59,8 @@ interface Shelf<T> {
  */
 const listenerShelfLifeMs = 60_000;
 const taskShelfLifeMs = 30_000;
+/** Harnesses expose activity timestamps, not a durable open/closed flag. */
+const activeSessionWindowMs = 2 * 60_000;
 
 /** Where the other harnesses keep their session records, for tests. */
 export interface LocalContextSources {
@@ -98,9 +102,13 @@ export function createLocalContextConnector(
       kind: "service",
       capabilities: ["observe"],
     },
-    invalidate: () => {
-      listeners = undefined;
-      sessions = undefined;
+    invalidate: (scope) => {
+      if (!scope?.observationKind || scope.observationKind === "runtime") {
+        listeners = undefined;
+      }
+      if (!scope?.observationKind || scope.observationKind === "session") {
+        sessions = undefined;
+      }
     },
     observe: async (target) => {
       const context = await readContext();
@@ -230,19 +238,26 @@ async function readCodexSessions(
       id,
       cwd,
       COALESCE(NULLIF(title, ''), 'Untitled') AS title,
-      COALESCE(updated_at_ms, updated_at * 1000) AS updatedAtMs
+      COALESCE(updated_at_ms, updated_at * 1000) AS updatedAtMs,
+      rollout_path AS rolloutPath
     FROM threads
     WHERE archived = 0 AND cwd <> ''
     ORDER BY COALESCE(updated_at_ms, updated_at * 1000) DESC
     LIMIT 500;
   `;
-  const result = await runner.run({
-    executable: "sqlite3",
-    arguments: ["-json", database, query],
-  });
+  const [result, openFiles] = await Promise.all([
+    runner.run({
+      executable: "sqlite3",
+      arguments: ["-json", database, query],
+    }),
+    runner.run({
+      executable: "lsof",
+      arguments: ["-nP", "-c", "codex", "-Fn"],
+    }),
+  ]);
   if (result.exitCode !== 0) return [];
   try {
-    return parseCodexSessions(result.stdout);
+    return parseCodexSessions(result.stdout, openFilePaths(openFiles.stdout));
   } catch {
     return [];
   }
@@ -468,8 +483,39 @@ function modifiedAt(path: string): number {
   }
 }
 
-export function parseCodexSessions(output: string): readonly AgentSession[] {
-  return parseSessions(output, "codex");
+export function parseCodexSessions(
+  output: string,
+  openRollouts: ReadonlySet<string> = new Set(),
+): readonly AgentSession[] {
+  const value: unknown = JSON.parse(output);
+  const activeIds = new Set(
+    Array.isArray(value)
+      ? value
+          .filter(
+            (task): task is { id: string; rolloutPath: string } =>
+              typeof task === "object" &&
+              task !== null &&
+              "id" in task &&
+              "rolloutPath" in task &&
+              typeof task.id === "string" &&
+              typeof task.rolloutPath === "string" &&
+              openRollouts.has(task.rolloutPath),
+          )
+          .map((task) => task.id)
+      : [],
+  );
+  return parseSessions(output, "codex").map((session) =>
+    activeIds.has(session.id) ? { ...session, active: true } : session,
+  );
+}
+
+function openFilePaths(output: string): ReadonlySet<string> {
+  return new Set(
+    output
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith("n/"))
+      .map((line) => line.slice(1)),
+  );
 }
 
 export function parseSessions(
@@ -577,12 +623,16 @@ function processLineage(
 export function sessionObservation(
   target: WorkspaceTarget,
   session: AgentSession,
+  now = Date.now(),
 ): ConnectorObservation {
   return {
     connectorId: "local-context",
     workspaceId: target.workspaceId,
     kind: "session",
-    state: "ready",
+    state:
+      session.active || session.updatedAtMs >= now - activeSessionWindowMs
+        ? "active"
+        : "ready",
     label: session.title,
     detail: harnessDetail[session.harness],
     metadata: { taskId: session.id, updatedAtMs: session.updatedAtMs },

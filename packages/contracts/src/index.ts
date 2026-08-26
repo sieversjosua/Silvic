@@ -95,6 +95,8 @@ export interface ConnectorContext {
 export interface ConnectorInvalidation {
   projectId?: string;
   workspacePath?: string;
+  /** Let a mixed connector discard only the observation class being refreshed. */
+  observationKind?: ConnectorObservation["kind"];
 }
 
 export interface Connector {

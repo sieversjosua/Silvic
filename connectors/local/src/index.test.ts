@@ -306,4 +306,50 @@ describe("createLocalContextConnector", () => {
       ).metadata,
     ).toEqual({ taskId: "task-1", updatedAtMs: 1_786_610_000_123 });
   });
+
+  it("recognises a Codex thread whose rollout is held open", () => {
+    const [task] = parseCodexSessions(
+      JSON.stringify([
+        {
+          id: "task-1",
+          cwd: "/plots/app",
+          title: "Make the grove readable",
+          updatedAtMs: 1_786_610_000_123,
+          rolloutPath: "/codex/sessions/task-1.jsonl",
+        },
+      ]),
+      new Set(["/codex/sessions/task-1.jsonl"]),
+    );
+
+    expect(task?.active).toBe(true);
+  });
+
+  it("marks open or recently moving harness sessions as active", () => {
+    const now = 1_786_610_300_000;
+    const target = {
+      workspaceId: "workspace-1",
+      projectId: "project-1",
+      path: "/plots/app",
+      repositoryName: "app",
+      branch: "agent/grove",
+    };
+    const session = (updatedAtMs: number, active?: boolean) => ({
+      id: "task-1",
+      cwd: "/plots/app",
+      title: "Make the grove readable",
+      updatedAtMs,
+      harness: "codex" as const,
+      ...(active === undefined ? {} : { active }),
+    });
+
+    expect(sessionObservation(target, session(now - 30_000), now).state).toBe(
+      "active",
+    );
+    expect(
+      sessionObservation(target, session(now - 10 * 60_000), now).state,
+    ).toBe("ready");
+    expect(
+      sessionObservation(target, session(now - 10 * 60_000, true), now).state,
+    ).toBe("active");
+  });
 });

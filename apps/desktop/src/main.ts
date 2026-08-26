@@ -63,6 +63,7 @@ import {
   type AppearancePreference,
   type AppUpdateState,
   type CreateEnvironmentRequest,
+  type ConnectorObservation,
   type HarnessId,
   type PlotCreationResult,
   type PlotCommand,
@@ -137,6 +138,7 @@ import {
   type UpdateMenuAction,
 } from "./application-menu";
 import { DesktopUpdater } from "./updater";
+import { startSessionRefreshLoop } from "./session-refresh";
 
 interface Settings {
   roots: string[];
@@ -185,6 +187,7 @@ const provisioner = new Provisioner(runner);
 const teardownService = new TeardownService(runner);
 const workspaceRegistry = new WorkspaceRegistry();
 let runtimeObservationRefreshTimer: NodeJS.Timeout | undefined;
+let stopSessionRefreshLoop: (() => void) | undefined;
 let lastSupervisedPaths = new Set<string>();
 const pendingRuntimeObservationPaths = new Set<string>();
 const gate = new GateManager(
@@ -312,6 +315,10 @@ if (!app.requestSingleInstanceLock()) {
     scheduleAutomaticUpdateChecks();
     await paintFromGit(settings.get("roots"), "replace");
     void refreshConnectorObservations();
+    stopSessionRefreshLoop = startSessionRefreshLoop({
+      isVisible: () => rendererVisible,
+      refresh: refreshSessionObservations,
+    });
     handleWakeArguments(process.argv);
     void revivePlotCommands(leftRunning);
 
@@ -330,6 +337,8 @@ app.on("before-quit", () => {
     clearTimeout(runtimeObservationRefreshTimer);
     runtimeObservationRefreshTimer = undefined;
   }
+  stopSessionRefreshLoop?.();
+  stopSessionRefreshLoop = undefined;
   if (!settings.get("keepCommandsRunning")) supervisor.stopAll();
 });
 
@@ -2077,32 +2086,57 @@ function scheduleRuntimeObservationRefresh(): void {
 async function refreshRuntimeObservations(): Promise<void> {
   const paths = new Set(pendingRuntimeObservationPaths);
   pendingRuntimeObservationPaths.clear();
-  if (paths.size === 0 || latestSnapshot.projects.length === 0) return;
+  if (paths.size === 0) return;
+  await refreshLocalContextObservations(paths);
+}
+
+async function refreshSessionObservations(): Promise<void> {
+  localContextRegistry.invalidate("local-context", {
+    observationKind: "session",
+  });
+  await refreshLocalContextObservations();
+}
+
+async function refreshLocalContextObservations(
+  paths?: ReadonlySet<string>,
+): Promise<void> {
+  if (latestSnapshot.projects.length === 0) return;
+  const activeProjects = new Set(settings.get("activeProjects"));
   const failures: { connectorId: string; message: string }[] = [];
-  const projects = await Promise.all(
-    latestSnapshot.projects.map(async (project) => ({
-      ...project,
-      workspaces: await Promise.all(
-        project.workspaces.map(async (workspace) => {
-          if (!paths.has(normalize(workspace.path))) return workspace;
-          const result = await localContextRegistry.observe({
-            ...workspace,
-            ...(project.origin ? { origin: project.origin } : {}),
-          });
-          failures.push(...result.failures);
-          return {
-            ...workspace,
-            observations: [
-              ...workspace.observations.filter(
-                (observation) => observation.connectorId !== "local-context",
-              ),
-              ...result.observations,
-            ],
-          };
-        }),
-      ),
-    })),
+  const observations = new Map<string, readonly ConnectorObservation[]>();
+  const targets = latestSnapshot.projects.flatMap((project) =>
+    activeProjects.has(project.id)
+      ? project.workspaces
+          .filter((workspace) => !paths || paths.has(normalize(workspace.path)))
+          .map((workspace) => ({ project, workspace }))
+      : [],
   );
+  await Promise.all(
+    targets.map(async ({ project, workspace }) => {
+      const result = await localContextRegistry.observe({
+        ...workspace,
+        ...(project.origin ? { origin: project.origin } : {}),
+      });
+      failures.push(...result.failures);
+      observations.set(workspace.workspaceId, result.observations);
+    }),
+  );
+  const projects = latestSnapshot.projects.map((project) => ({
+    ...project,
+    workspaces: project.workspaces.map((workspace) => {
+      const local = observations.get(workspace.workspaceId);
+      if (!local) return workspace;
+      return {
+        ...workspace,
+        observations: [
+          ...workspace.observations.filter(
+            (observation) => observation.connectorId !== "local-context",
+          ),
+          ...local,
+        ],
+      };
+    }),
+  }));
   publishSnapshot(
     {
       projects,
