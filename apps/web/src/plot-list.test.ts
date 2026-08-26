@@ -31,7 +31,7 @@ function plot(overrides: Partial<WorkspaceSnapshot>): WorkspaceSnapshot {
 
 function session(
   workspaceId: string,
-  state: "active" | "quiet",
+  state: "active" | "quiet" | "ready",
   updatedAtMs: number,
 ) {
   return {
@@ -118,6 +118,71 @@ describe("plotListRows", () => {
     });
     expect(rows.map((row) => row.workspace.name)).toEqual(["running", "idle"]);
     expect(rows[0]?.runtime?.label).toBe("Running");
+  });
+
+  it("does not demote current work when session history enriches the first paint", () => {
+    const common = {
+      ...empty,
+      commands: [["web", { run: "bun run dev" }]] as const,
+      processes: [
+        {
+          plotPath: "/plots/current",
+          id: "web",
+          status: "running" as const,
+        },
+      ],
+    };
+    const startup = steadyRows(
+      plotListRows({
+        ...common,
+        workspaces: [plot({ name: "old" }), plot({ name: "current" })],
+      }),
+      undefined,
+    );
+    expect(startup.rows.map((row) => row.workspace.name)).toEqual([
+      "current",
+      "old",
+    ]);
+
+    const enriched = plotListRows({
+      ...common,
+      workspaces: [
+        plot({
+          name: "old",
+          observations: [session("old", "ready", 200)],
+        }),
+        plot({
+          name: "current",
+          observations: [session("current", "ready", 100)],
+        }),
+      ],
+    });
+    expect(
+      steadyRows(enriched, startup.order).rows.map((row) => row.workspace.name),
+    ).toEqual(["current", "old"]);
+  });
+
+  it("keeps not-adopted plots below adopted work", () => {
+    const rows = plotListRows({
+      ...empty,
+      workspaces: [
+        plot({
+          name: "external",
+          adoption: {
+            status: "not-adopted",
+            at: "2026-08-26T00:00:00.000Z",
+            attempt: 1,
+          },
+          observations: [session("external", "active", 200)],
+        }),
+        plot({ name: "adopted" }),
+      ],
+    });
+
+    expect(rows.map((row) => row.workspace.name)).toEqual([
+      "adopted",
+      "external",
+    ]);
   });
 
   it("orders equally urgent plots by most recent session activity", () => {

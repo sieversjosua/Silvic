@@ -36,8 +36,8 @@ export interface PlotListRow {
 /**
  * The list answers "what is going on right now" ordered by how much each plot
  * deserves attention, so it cannot share the canvas's spatial lineage order.
- * The latest Codex work comes first. Primary checkout and operational urgency
- * only break ties between plots with the same session activity.
+ * Current work comes first, while not-adopted plots stay in a lower block.
+ * Historical session activity only breaks ties between equally current plots.
  */
 export function plotListRows({
   workspaces,
@@ -93,9 +93,10 @@ export interface RowOrder {
 }
 
 /**
- * Reordering is allowed when the latest session activity or a plot's standing
- * changes. Runtime tone still changes every few seconds, so the signature keeps
- * ignoring that jitter unless it moves the plot to another rank.
+ * Reordering is allowed when current work, adoption, session activity or a
+ * plot's standing changes. Runtime tone still changes every few seconds, so the
+ * signature keeps ignoring that jitter unless it moves the plot to another
+ * rank.
  */
 export function steadyRows(
   rows: readonly PlotListRow[],
@@ -104,7 +105,7 @@ export function steadyRows(
   const signature = rows
     .map(
       (row) =>
-        `${row.workspace.workspaceId}:${row.activityAt ?? 0}:${activeSessionRank(row)}:${rowRank(row)}`,
+        `${row.workspace.workspaceId}:${adoptionRank(row)}:${activeSessionRank(row)}:${currentWorkRank(row)}:${row.activityAt ?? 0}:${rowRank(row)}`,
     )
     .toSorted()
     .join("|");
@@ -147,17 +148,34 @@ function activeSessionRank(row: PlotListRow): number {
   return row.activeSessions > 0 ? 0 : 1;
 }
 
+function adoptionRank(row: PlotListRow): number {
+  return row.workspace.adoption?.status === "not-adopted" ? 1 : 0;
+}
+
+function currentWorkRank(row: PlotListRow): number {
+  const supervised = row.runtime?.tone === "active";
+  const external = row.workspace.observations.some(
+    (observation) =>
+      observation.kind === "runtime" && observation.state === "active",
+  );
+  return supervised || external ? 0 : 1;
+}
+
 function compareRows(left: PlotListRow, right: PlotListRow): number {
-  const latestActivity = (right.activityAt ?? 0) - (left.activityAt ?? 0);
-  if (latestActivity !== 0) return latestActivity;
+  const adoptionStanding = adoptionRank(left) - adoptionRank(right);
+  if (adoptionStanding !== 0) return adoptionStanding;
   const sessionStanding = activeSessionRank(left) - activeSessionRank(right);
   if (sessionStanding !== 0) return sessionStanding;
+  const currentStanding = currentWorkRank(left) - currentWorkRank(right);
+  if (currentStanding !== 0) return currentStanding;
+  const operationalStanding = rowRank(left) - rowRank(right);
+  if (operationalStanding !== 0) return operationalStanding;
   if (left.workspace.isPrimary !== right.workspace.isPrimary) {
     return left.workspace.isPrimary ? -1 : 1;
   }
+  const latestActivity = (right.activityAt ?? 0) - (left.activityAt ?? 0);
   return (
-    rowRank(left) - rowRank(right) ||
-    left.workspace.name.localeCompare(right.workspace.name)
+    latestActivity || left.workspace.name.localeCompare(right.workspace.name)
   );
 }
 
