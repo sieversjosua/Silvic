@@ -3,6 +3,13 @@ import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 
 import { resolvedCommandPath } from "./command-runner";
+import {
+  astroDuplicateServerEvidence,
+  identifyExternalServer,
+  type ExternalServerEvidence,
+  type ExternalServerIdentity,
+  type LoopbackFamily,
+} from "./external-runtime";
 
 interface CommandResult {
   exitCode: number;
@@ -37,12 +44,27 @@ export interface PublishNamedRouteRequest {
   /** Who owns the route, so the gate can wake it from a URL visit. */
   plotPath?: string;
   commandId?: string;
+  /**
+   * Whether the launched command has already exited without serving. While it
+   * is alive, discovery keeps waiting for it; once it is gone, a duplicate
+   * server whose identity cannot be proven is a final answer, not a phase.
+   */
+  abandoned?(): boolean;
 }
 
 export interface PublishedNamedRoute {
   port: number;
   /** The listener came from an announced URL outside the launched process tree. */
   ownership?: "external";
+  /** The verified process serving an externally managed route. */
+  externalProcessId?: number;
+  /**
+   * What the attach-time probe answered on an external route; 0 when the
+   * listener accepted the connection but never answered HTTP. Attachment and
+   * application readiness are separate facts: a verified runtime is routed
+   * even while its application currently fails.
+   */
+  httpStatus?: number;
   /** The listener answered, but only with a failure Silvic can identify. */
   failure?: "vite-stale-optimized-dependency";
 }
@@ -71,8 +93,9 @@ export interface NamedRoutePublisher {
 
 interface ListenerSelection {
   listener: ProcessListener;
-  hostname: "127.0.0.1" | "::1";
-  response: RouteProbe;
+  hostname: LoopbackFamily;
+  /** Absent only on a verified external listener that ignored the probe. */
+  response: RouteProbe | undefined;
   /**
    * Whether this is the kind of listener a person is meant to visit. An
    * OS-assigned port belongs to an internal runtime — Cloudflare's workerd,
@@ -80,6 +103,8 @@ interface ListenerSelection {
    * server that owns the assets has yet to bind its own port.
    */
   settled: boolean;
+  /** Set when the listener is a verified externally managed server. */
+  external?: { processId: number };
 }
 
 /**
@@ -89,6 +114,15 @@ interface ListenerSelection {
  * time. Only the address is missing, so nothing should be killed over it.
  */
 export class GateUnreachable extends Error {}
+
+/**
+ * A launcher reported an already-running server, and its identity could not
+ * be verified for this plot: the process is gone, holds a different port, or
+ * runs another worktree's code. Routing it anyway would publish the wrong
+ * application under the plot's canonical URL, so this failure carries the
+ * explicit remedies instead. Replacement stays a human decision.
+ */
+export class ExternalRuntimeConflict extends Error {}
 
 /** macOS hands these out to whoever asks; nobody configures one. */
 const firstEphemeralPort = 49_152;
@@ -122,6 +156,11 @@ interface RoutePublisherOptions {
   link: GateRouteLink;
   inspect?(rootProcessId: number): Promise<readonly ProcessListener[]>;
   probe?(url: string): Promise<RouteProbe | undefined>;
+  /** Proves whether a reported duplicate server belongs to the plot. */
+  identify?(
+    evidence: ExternalServerEvidence,
+    plotPath: string,
+  ): Promise<ExternalServerIdentity>;
   wait?(milliseconds: number): Promise<void>;
   now?(): number;
   /** How long an internal listener is held back before it is settled for. */
@@ -144,6 +183,7 @@ export class GateRoutePublisher implements NamedRoutePublisher {
   private readonly link: GateRouteLink;
   private readonly inspect: NonNullable<RoutePublisherOptions["inspect"]>;
   private readonly probe: NonNullable<RoutePublisherOptions["probe"]>;
+  private readonly identify: NonNullable<RoutePublisherOptions["identify"]>;
   private readonly wait: NonNullable<RoutePublisherOptions["wait"]>;
   private readonly now: NonNullable<RoutePublisherOptions["now"]>;
   private readonly settleMs: number;
@@ -154,6 +194,7 @@ export class GateRoutePublisher implements NamedRoutePublisher {
     this.link = options.link;
     this.inspect = options.inspect ?? inspectProcessListeners;
     this.probe = options.probe ?? probeUrl;
+    this.identify = options.identify ?? identifyExternalServer;
     this.wait = options.wait ?? pause;
     this.now = options.now ?? Date.now;
     this.settleMs = options.settleMs ?? 10_000;
@@ -175,7 +216,14 @@ export class GateRoutePublisher implements NamedRoutePublisher {
     let unreachable: string | undefined;
 
     while (true) {
-      const selected = await this.choose(request);
+      const { selection: selected, conflict } = await this.choose(request);
+      if (conflict && !selected) {
+        latest = conflict;
+        // While the launched command is alive it may still bind a listener of
+        // its own; once it has exited, an unverifiable duplicate server is a
+        // final answer, and waiting out the deadline would only delay it.
+        if (request.abandoned?.()) throw new ExternalRuntimeConflict(conflict);
+      }
       if (selected && !selected.settled) {
         // Cloudflare's Vite plugin has workerd serving the app's SSR HTML a
         // second or two before Astro binds the port that serves the assets.
@@ -210,6 +258,22 @@ export class GateRoutePublisher implements NamedRoutePublisher {
         unreachable = undefined;
         this.families.set(request.routeName, selected.hostname);
 
+        if (selected.external) {
+          // Identity, not content, authorised this attachment: the verified
+          // runtime keeps its route even while the application answers
+          // 4xx/5xx or nothing at all. Whether the page is healthy is
+          // reported alongside the attachment, never in place of it.
+          return {
+            port: targetPort,
+            ownership: "external" as const,
+            externalProcessId: selected.external.processId,
+            httpStatus: selected.response?.status ?? 0,
+            ...(selected.response?.failure
+              ? { failure: selected.response.failure }
+              : {}),
+          };
+        }
+
         while (this.now() < deadline) {
           if (
             await this.healthy({
@@ -219,10 +283,7 @@ export class GateRoutePublisher implements NamedRoutePublisher {
           ) {
             return {
               port: targetPort,
-              ...(selected.listener.processId === 0
-                ? { ownership: "external" as const }
-                : {}),
-              ...(selected.response.failure
+              ...(selected.response?.failure
                 ? { failure: selected.response.failure }
                 : {}),
             };
@@ -304,7 +365,7 @@ export class GateRoutePublisher implements NamedRoutePublisher {
   async improve(
     request: PublishNamedRouteRequest,
   ): Promise<PublishedNamedRoute | undefined> {
-    const selected = await this.choose(request);
+    const { selection: selected } = await this.choose(request);
     if (!selected?.settled) return undefined;
     try {
       await this.link.set({
@@ -321,22 +382,65 @@ export class GateRoutePublisher implements NamedRoutePublisher {
     this.families.set(request.routeName, selected.hostname);
     return {
       port: selected.listener.port,
-      ...(selected.listener.processId === 0
-        ? { ownership: "external" as const }
+      ...(selected.external
+        ? {
+            ownership: "external" as const,
+            externalProcessId: selected.external.processId,
+          }
         : {}),
     };
   }
 
-  /** The best listener the command tree offers right now, if any. */
-  private async choose(
-    request: PublishNamedRouteRequest,
-  ): Promise<ListenerSelection | undefined> {
-    return selectListener({
-      listeners: await this.inspect(request.processId),
+  /**
+   * The best listener the command tree offers right now, if any — plus the
+   * reason no external one was eligible, when a launcher reported a duplicate
+   * server whose identity could not be verified for this plot.
+   */
+  private async choose(request: PublishNamedRouteRequest): Promise<{
+    selection?: ListenerSelection;
+    conflict?: string;
+  }> {
+    const output = request.output();
+    const listeners = await this.inspect(request.processId);
+    const evidence = astroDuplicateServerEvidence(output);
+    let external: ExternalListenerCandidate | undefined;
+    let conflict: string | undefined;
+    // A reported port the supervised tree itself holds needs no external
+    // evidence: the tree listener is the stronger identity and attaches as
+    // Silvic's own.
+    if (
+      evidence &&
+      !listeners.some((listener) => listener.port === evidence.port)
+    ) {
+      if (request.plotPath) {
+        const identity = await this.identify(evidence, request.plotPath);
+        if (identity.verdict === "verified") {
+          external = { ...evidence, families: identity.families };
+        } else {
+          conflict = conflictAdvice(evidence, identity, request.routeName);
+        }
+      } else {
+        conflict = conflictAdvice(
+          evidence,
+          {
+            verdict: "foreign",
+            detail: "Silvic has no plot to verify it against",
+          },
+          request.routeName,
+        );
+      }
+    }
+    const selection = await selectListener({
+      listeners,
       expectedPort: request.expectedPort,
-      output: request.output(),
+      output,
       probe: this.probe,
+      ...(external ? { external } : {}),
     });
+    return {
+      ...(selection ? { selection } : {}),
+      ...(conflict ? { conflict } : {}),
+    };
   }
 
   /** Stopping suspends rather than deletes: the URL keeps waking the plot. */
@@ -348,16 +452,24 @@ export class GateRoutePublisher implements NamedRoutePublisher {
   }
 }
 
+interface ExternalListenerCandidate extends ExternalServerEvidence {
+  /** Loopback families the verified process actually listens on. */
+  families: readonly LoopbackFamily[];
+}
+
 async function selectListener({
   listeners,
   expectedPort,
   output,
   probe,
+  external,
 }: {
   listeners: readonly ProcessListener[];
   expectedPort: number;
   output: string;
   probe(url: string): Promise<RouteProbe | undefined>;
+  /** An already-identity-verified duplicate server, when a launcher named one. */
+  external?: ExternalListenerCandidate;
 }): Promise<ListenerSelection | undefined> {
   const announced = new Set(
     [
@@ -368,24 +480,15 @@ async function selectListener({
       .map((match) => Number(match[1]))
       .filter((port) => port > 0 && port <= 65_535),
   );
-  // A dev server may report that another instance already owns its port and
-  // then exit. Keep explicit localhost URLs as fallback candidates, but mark
-  // them as synthetic: a browser listener that actually belongs to the newly
-  // supervised process tree is stronger evidence than retained console text.
+  // Retained console text stays a ranking signal for the tree's own
+  // listeners — never a listener by itself. A bare URL in a log tail can
+  // point at a port that another worktree's server has since taken; only a
+  // launcher's verified duplicate-server evidence may add a candidate from
+  // outside the supervised process tree.
   const listenersByPort = new Map(
     listeners.map((listener) => [listener.port, listener]),
   );
-  for (const port of announced) {
-    if (!listenersByPort.has(port)) {
-      listenersByPort.set(port, { processId: 0, port });
-    }
-  }
-  const candidates: Array<{
-    listener: ProcessListener;
-    hostname: "127.0.0.1" | "::1";
-    response: RouteProbe | undefined;
-    settled: boolean;
-  }> = [];
+  const candidates: ListenerSelection[] = [];
   for (const listener of listenersByPort.values()) {
     for (const hostname of ["127.0.0.1", "::1"] as const) {
       candidates.push({
@@ -398,33 +501,74 @@ async function selectListener({
       });
     }
   }
+  if (external) {
+    const families: readonly LoopbackFamily[] = external.families.length
+      ? external.families
+      : ["127.0.0.1"];
+    let answered = false;
+    for (const hostname of families) {
+      const response = await probe(
+        `http://${hostname === "::1" ? `[${hostname}]` : hostname}:${external.port}/`,
+      );
+      if (!response) continue;
+      candidates.push({
+        listener: { processId: external.processId, port: external.port },
+        hostname,
+        response,
+        settled: !internalPort(external.port),
+        external: { processId: external.processId },
+      });
+      answered = true;
+      break;
+    }
+    if (!answered) {
+      // Identity was proven even though HTTP never answered; the attachment
+      // stands so the route shows the real server's state, not a fresh race.
+      candidates.push({
+        listener: { processId: external.processId, port: external.port },
+        hostname: families[0] ?? "127.0.0.1",
+        response: undefined,
+        settled: !internalPort(external.port),
+        external: { processId: external.processId },
+      });
+    }
+  }
 
   return (
     candidates
-      .filter(
-        (candidate): candidate is ListenerSelection =>
-          candidate.response !== undefined,
-      )
       // A route marked as a web preview must actually render in a browser.
       // Health checks and API sidecars commonly answer 200 with `OK` or JSON;
       // publishing either would make a broken web runtime look successful.
-      .filter((candidate) => browserFacing(candidate.response))
+      // A verified external server is exempt: its identity is the proof, and
+      // its current answer — even a 500 without a Content-Type — is exactly
+      // what the route must show.
+      .filter(
+        (candidate) =>
+          candidate.external !== undefined ||
+          (candidate.response !== undefined &&
+            browserFacing(candidate.response)),
+      )
       .sort((left, right) => {
         const score = (candidate: ListenerSelection) =>
           // PORT is an offered address, not proof of identity. A monorepo can
           // hand it to a health/API sidecar while its browser app chooses another
           // listener, so browser-facing and announced listeners rank above it.
-          (candidate.response.contentType?.toLowerCase().includes("text/html")
+          (candidate.response?.contentType?.toLowerCase().includes("text/html")
             ? 10_000
             : 0) +
-          (candidate.listener.processId !== 0 ? 2_000 : 0) +
+          // The tree's own listener outranks even a verified external one:
+          // when the supervised command did manage to serve, that is the
+          // runtime that was asked for.
+          (candidate.external === undefined ? 2_000 : 0) +
           (announced.has(candidate.listener.port) ? 1_000 : 0) +
           // Internal runtimes (Cloudflare's workerd, inspector bridges)
           // bind OS-assigned ephemeral ports and can still serve HTML; a
           // dev server people are meant to visit sits on a configured port.
           (candidate.settled ? 500 : 0) +
           (candidate.listener.port === expectedPort ? 100 : 0) +
-          (candidate.response.status >= 200 && candidate.response.status < 400
+          (candidate.response !== undefined &&
+          candidate.response.status >= 200 &&
+          candidate.response.status < 400
             ? 10
             : 0) +
           // Avoid an unnecessary bridge when both loopback families serve the
@@ -435,6 +579,23 @@ async function selectListener({
         );
       })[0]
   );
+}
+
+/**
+ * The explicit remedies the issue demands when identity cannot be proven.
+ * Silvic never kills or replaces a process it has not verified as this
+ * plot's own; both remain deliberate human actions.
+ */
+function conflictAdvice(
+  evidence: ExternalServerEvidence,
+  identity: { verdict: "gone" | "foreign"; detail: string },
+  routeName: string,
+): string {
+  const reported = `The launcher reported an already-running dev server at http://${evidence.hostname}:${evidence.port} (PID ${evidence.processId})`;
+  if (identity.verdict === "gone") {
+    return `${reported}, but ${identity.detail}. That report is stale; press Start to launch a fresh preview.`;
+  }
+  return `${reported}, but ${identity.detail}, so Silvic refused to give it ${routeName}.localhost. Open http://${evidence.hostname}:${evidence.port} to see what it serves, stop that process if it is yours, or run \`astro dev --force\` in this plot to replace it — then press Start.`;
 }
 
 function describe(error: unknown): string {

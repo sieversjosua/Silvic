@@ -8,9 +8,12 @@ import { promisify } from "node:util";
 import type { PlotCommand } from "@silvic/contracts";
 
 import { resolvedCommandPath } from "./command-runner";
+import { astroDuplicateServerEvidence } from "./external-runtime";
 import {
+  ExternalRuntimeConflict,
   internalPort,
   type NamedRoutePublisher,
+  type PublishedNamedRoute,
   type RouteDiagnosis,
 } from "./named-route";
 import { routes } from "./plot-address";
@@ -33,6 +36,8 @@ export interface SupervisedCommand {
   targetPort?: number;
   /** The responding listener is not part of a process group Silvic owns. */
   ownership?: "external";
+  /** The identity-verified process behind an externally managed route. */
+  externalProcessId?: number;
   /** The stable plot port offered to commands that honour PORT. */
   expectedPort?: number;
   startedAt?: string;
@@ -317,6 +322,7 @@ export class CommandSupervisor {
         processId,
         expectedPort,
         output,
+        abandoned: () => this.pendingRouteExits.has(key),
         ...(timeoutMs === undefined ? {} : { timeoutMs }),
         ...(owner ? { plotPath: owner.plotPath, commandId: owner.id } : {}),
       });
@@ -421,13 +427,21 @@ export class CommandSupervisor {
       const { advice: _recovered, exitCode: _exitCode, ...healthy } = entry;
       if (published.ownership === "external") {
         const { processId: _ended, ...external } = healthy;
+        // Attachment and readiness are separate facts. The runtime exists and
+        // owns the route either way; whether its application currently serves
+        // a page is reported beside it rather than erasing it.
+        const readiness = externalReadinessAdvice(published);
         this.running.set(key, {
           ...external,
           status: "running",
           targetPort: published.port,
           ownership: "external",
+          ...(published.externalProcessId === undefined
+            ? {}
+            : { externalProcessId: published.externalProcessId }),
           notice:
             "Attached to an externally managed server. Stop detaches its Silvic route without stopping the server.",
+          ...(readiness ? { advice: readiness } : {}),
         });
       } else {
         this.running.set(key, {
@@ -450,6 +464,12 @@ export class CommandSupervisor {
       const pendingExit = this.pendingRouteExits.get(key);
       if (pendingExit) {
         this.pendingRouteExits.delete(key);
+        // The publisher proved why the reported server must not be attached;
+        // that reasoning and its remedies belong on the failure the exit is
+        // about to become, not in a discarded rejection.
+        if (error instanceof ExternalRuntimeConflict) {
+          this.forcedFailures.set(key, error.message);
+        }
         this.settle(key, pendingExit.exitCode, pendingExit.processId, false);
         return;
       }
@@ -565,6 +585,26 @@ export class CommandSupervisor {
       !entry.routeName ||
       !entry.targetPort
     ) {
+      return;
+    }
+    // An adopted process has no close event to settle it: when it dies, only
+    // this check notices. Repairing the route from its stale log tail instead
+    // used to hunt for whatever now sits on the old port — the door through
+    // which another worktree's server once received this plot's URL.
+    if (!(await stillRunning(processId, entry.startedAt))) {
+      const latest = this.running.get(key);
+      if (
+        !latest ||
+        latest.processId !== processId ||
+        latest.status !== "running"
+      ) {
+        return;
+      }
+      this.forcedFailures.set(
+        key,
+        "The preview process is gone — it stopped without telling Silvic. Press Start to launch it again.",
+      );
+      this.settle(key, 1, processId, false);
       return;
     }
     const diagnosis = await this.routeDiagnosis({
@@ -1007,10 +1047,26 @@ export const externalViteRecoveryAdvice =
   "The externally managed preview has a stale Vite cache, and Silvic could not stop its Astro server automatically. Stop that external server, then press Start so Silvic can rebuild the generated cache safely.";
 
 function astroDuplicateServer(output: string): boolean {
-  return (
-    output.includes("Another astro dev server is already running") &&
-    output.includes("astro dev stop")
-  );
+  return astroDuplicateServerEvidence(output) !== undefined;
+}
+
+/**
+ * Readiness for an attached external runtime, kept apart from its status: a
+ * 500 degrades the page, not the attachment. Advice reaches the plot's
+ * diagnostics, so the failing response is visible instead of a silent
+ * `running` that pretends the application is fine.
+ */
+function externalReadinessAdvice(
+  published: PublishedNamedRoute,
+): string | undefined {
+  if (published.httpStatus === undefined) return undefined;
+  if (published.httpStatus === 0) {
+    return "The attached external server holds its port but did not answer an HTTP probe. The plot URL may hang or fail until it recovers; check that server's own output.";
+  }
+  if (published.httpStatus >= 400) {
+    return `The attached external server currently answers HTTP ${published.httpStatus}. The plot URL shows its error page; check that server's own output for the failure.`;
+  }
+  return undefined;
 }
 
 async function stopExternalAstroServer(request: StartRequest): Promise<void> {

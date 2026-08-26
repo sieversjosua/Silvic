@@ -8,6 +8,7 @@ export * from "./delivery-service";
 export * from "./detect";
 export * from "./environment-files";
 export * from "./environment-service";
+export * from "./external-runtime";
 export * from "./git";
 export * from "./named-route";
 export * from "./plot-address";

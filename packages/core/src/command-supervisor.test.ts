@@ -12,8 +12,13 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { CommandSupervisor } from "./command-supervisor";
-import { GateUnreachable, type NamedRoutePublisher } from "./named-route";
+import { CommandSupervisor, type StartRequest } from "./command-supervisor";
+import {
+  ExternalRuntimeConflict,
+  GateUnreachable,
+  type NamedRoutePublisher,
+  type PublishNamedRouteRequest,
+} from "./named-route";
 
 const temporaryDirectories: string[] = [];
 
@@ -207,6 +212,196 @@ describe("CommandSupervisor", () => {
     }
     expect(supervisor.list()).toEqual([]);
     expect(routePublisher.remove).toHaveBeenCalledWith("web-external");
+  });
+
+  it("attaches a degraded external server and keeps Start idempotent", async () => {
+    const logDirectory = await mkdtemp(join(tmpdir(), "silvic-supervisor-"));
+    temporaryDirectories.push(logDirectory);
+    let finishPublishing: (() => void) | undefined;
+    let publishRequest: PublishNamedRouteRequest | undefined;
+    const routePublisher: NamedRoutePublisher = {
+      publish: vi.fn(
+        (request: PublishNamedRouteRequest) =>
+          new Promise<{
+            port: number;
+            ownership: "external";
+            externalProcessId: number;
+            httpStatus: number;
+          }>((resolve) => {
+            publishRequest = request;
+            finishPublishing = () =>
+              resolve({
+                port: 4375,
+                ownership: "external",
+                externalProcessId: 16056,
+                httpStatus: 500,
+              });
+          }),
+      ),
+      improve: vi.fn().mockResolvedValue(undefined),
+      healthy: vi.fn().mockResolvedValue(true),
+      remove: vi.fn().mockResolvedValue(undefined),
+    };
+    const supervisor = new CommandSupervisor({
+      logDirectory,
+      onChange: () => {},
+      routePublisher,
+    });
+    const request: StartRequest = {
+      plotPath: logDirectory,
+      id: "web",
+      command: {
+        run: 'printf "Another astro dev server is already running.\\nURL: http://127.0.0.1:4375\\nPID: 16056\\n"; exit 1',
+        url: true,
+      },
+      routeName: "web-degraded",
+      environment: { PORT: "8691" },
+      canRoute: true,
+      detached: false,
+    };
+
+    await supervisor.start(request);
+    // The regression's exact race: the launcher exits nonzero while route
+    // discovery is still deciding. `abandoned` observing the pending exit is
+    // the supervisor's own signal that the exit has been parked.
+    await vi.waitFor(() => expect(publishRequest?.abandoned?.()).toBe(true));
+    finishPublishing?.();
+
+    await vi.waitFor(() =>
+      expect(supervisor.list()[0]).toMatchObject({
+        status: "running",
+        ownership: "external",
+        externalProcessId: 16056,
+        targetPort: 4375,
+        // Attachment and readiness are separate: the runtime is attached
+        // while the HTTP 500 stays visible as a diagnostic.
+        advice: expect.stringContaining("HTTP 500"),
+        notice: expect.stringContaining("externally managed"),
+      }),
+    );
+    expect(supervisor.list()[0]).not.toHaveProperty("processId");
+
+    // Start again: an attached runtime is already running, so nothing may
+    // launch a second, competing process.
+    await supervisor.start(request);
+    expect(routePublisher.publish).toHaveBeenCalledTimes(1);
+    expect(supervisor.list()).toHaveLength(1);
+
+    supervisor.stop(logDirectory, "web");
+    expect(supervisor.list()).toEqual([]);
+    expect(routePublisher.remove).toHaveBeenCalledWith("web-degraded");
+  });
+
+  it("turns an unverifiable duplicate server into an actionable failure", async () => {
+    const logDirectory = await mkdtemp(join(tmpdir(), "silvic-supervisor-"));
+    temporaryDirectories.push(logDirectory);
+    let refusePublishing: ((error: Error) => void) | undefined;
+    let publishRequest: PublishNamedRouteRequest | undefined;
+    const routePublisher: NamedRoutePublisher = {
+      publish: vi.fn(
+        (request: PublishNamedRouteRequest) =>
+          new Promise<never>((_resolve, reject) => {
+            publishRequest = request;
+            refusePublishing = reject;
+          }),
+      ),
+      improve: vi.fn().mockResolvedValue(undefined),
+      healthy: vi.fn().mockResolvedValue(true),
+      remove: vi.fn().mockResolvedValue(undefined),
+    };
+    const supervisor = new CommandSupervisor({
+      logDirectory,
+      onChange: () => {},
+      routePublisher,
+    });
+
+    await supervisor.start({
+      plotPath: logDirectory,
+      id: "web",
+      command: {
+        run: 'printf "Another astro dev server is already running.\\nURL: http://[::1]:4328\\nPID: 90210\\n"; exit 1',
+        url: true,
+      },
+      routeName: "web-foreign",
+      environment: { PORT: "8691" },
+      canRoute: true,
+      detached: false,
+    });
+    await vi.waitFor(() => expect(publishRequest?.abandoned?.()).toBe(true));
+    refusePublishing?.(
+      new ExternalRuntimeConflict(
+        "The launcher reported an already-running dev server at http://[::1]:4328 (PID 90210), but process 90210 runs in /worktrees/prototype-grow-v1-owner-flow, which is not inside this plot, so Silvic refused to give it web-foreign.localhost.",
+      ),
+    );
+
+    await vi.waitFor(() =>
+      expect(supervisor.list()[0]).toMatchObject({
+        status: "failed",
+        exitCode: 1,
+        advice: expect.stringContaining("refused to give it"),
+      }),
+    );
+    expect(supervisor.list()[0]).not.toHaveProperty("ownership");
+    expect(supervisor.list()[0]).not.toHaveProperty("processId");
+  });
+
+  it("settles an adopted preview whose process died instead of rerouting it", async () => {
+    const logDirectory = await mkdtemp(join(tmpdir(), "silvic-supervisor-"));
+    temporaryDirectories.push(logDirectory);
+    const routePublisher: NamedRoutePublisher = {
+      publish: vi.fn().mockResolvedValue({ port: 4321 }),
+      improve: vi.fn().mockResolvedValue(undefined),
+      healthy: vi.fn().mockResolvedValue(true),
+      diagnose: vi.fn().mockResolvedValue({ status: "healthy" }),
+      remove: vi.fn().mockResolvedValue(undefined),
+    };
+    const original = new CommandSupervisor({
+      logDirectory,
+      onChange: () => {},
+      routePublisher,
+    });
+    await original.start({
+      plotPath: logDirectory,
+      id: "web",
+      command: { run: "sleep 30", url: true },
+      routeName: "web-adopted-dead",
+      environment: { PORT: "8691" },
+      canRoute: true,
+      detached: true,
+    });
+    await vi.waitFor(() =>
+      expect(original.list()[0]).toMatchObject({
+        status: "running",
+        targetPort: 4321,
+      }),
+    );
+    const entries = original.list();
+    const processId = entries[0]!.processId!;
+
+    const reopened = new CommandSupervisor({
+      logDirectory,
+      onChange: () => {},
+      routePublisher,
+      routeHealthIntervalMs: 50,
+    });
+    await reopened.adopt(entries);
+    await vi.waitFor(() => expect(reopened.list()[0]?.status).toBe("running"));
+
+    process.kill(-processId, "SIGKILL");
+
+    // An adopted process has no close event; only the health check can see
+    // its death. It must settle the runtime — never go hunting for whatever
+    // now sits on the old port with a stale log tail.
+    await vi.waitFor(
+      () =>
+        expect(reopened.list()[0]).toMatchObject({
+          status: "failed",
+          advice: expect.stringContaining("gone"),
+        }),
+      { timeout: 5_000 },
+    );
+    expect(routePublisher.publish).toHaveBeenCalledTimes(1);
+    expect(routePublisher.remove).toHaveBeenCalledWith("web-adopted-dead");
   });
 
   it("stops a stale external Astro server, rebuilds, and starts again", async () => {

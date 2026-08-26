@@ -236,27 +236,20 @@ describe("GateRoutePublisher", () => {
     });
   });
 
-  it("returns a known stale failure from an announced external listener", async () => {
+  it("returns a known stale failure from a verified external listener", async () => {
     let elapsed = 0;
-    const { link, routes } = recordingLink();
+    const { link } = recordingLink();
     const publisher = new GateRoutePublisher({
       link,
       inspect: async () => [],
-      probe: async (url) => {
-        if (url === "http://127.0.0.1:4060/") {
-          return {
-            status: 500,
-            failure: "vite-stale-optimized-dependency",
-          };
-        }
-        if (
-          url === "https://web-stale-mono.localhost/" &&
-          routes.get("web-stale-mono")?.port === 4060
-        ) {
-          return { status: 503, contentType: "text/html; charset=utf-8" };
-        }
-        return undefined;
-      },
+      identify: async () => ({
+        verdict: "verified",
+        families: ["127.0.0.1"],
+      }),
+      probe: async (url) =>
+        url === "http://127.0.0.1:4060/"
+          ? { status: 500, failure: "vite-stale-optimized-dependency" as const }
+          : undefined,
       now: () => elapsed,
       wait: async (milliseconds) => {
         elapsed += milliseconds;
@@ -268,12 +261,20 @@ describe("GateRoutePublisher", () => {
         routeName: "web-stale-mono",
         processId: 38207,
         expectedPort: 8691,
-        output: () => "URL: http://127.0.0.1:4060",
+        plotPath: "/plots/mono-stale",
+        output: () =>
+          [
+            "Another astro dev server is already running.",
+            "URL: http://127.0.0.1:4060",
+            "PID: 4567",
+          ].join("\n"),
         timeoutMs: 500,
       }),
     ).resolves.toEqual({
       port: 4060,
       ownership: "external",
+      externalProcessId: 4567,
+      httpStatus: 500,
       failure: "vite-stale-optimized-dependency",
     });
   });
@@ -317,7 +318,7 @@ describe("GateRoutePublisher", () => {
   });
 
   it("adopts an announced existing web server instead of a descendant health check", async () => {
-    const { link, routes } = recordingLink();
+    const { link } = recordingLink();
     const probe = vi.fn(async (url: string) => {
       if (url === "http://127.0.0.1:49731/") {
         return { status: 200 };
@@ -325,16 +326,17 @@ describe("GateRoutePublisher", () => {
       if (url === "http://127.0.0.1:4060/") {
         return { status: 200, contentType: "text/html; charset=utf-8" };
       }
-      if (url === "https://web-cmd-k-menu-mono.localhost/") {
-        return routes.get("web-cmd-k-menu-mono")?.port === 4060
-          ? { status: 200, contentType: "text/html; charset=utf-8" }
-          : { status: 200 };
-      }
       return undefined;
     });
+    const identify = vi.fn(async () => ({
+      verdict: "verified" as const,
+      families: ["127.0.0.1" as const],
+      workingDirectory: "/plots/mono-cmd-k-menu/apps/web",
+    }));
     const publisher = new GateRoutePublisher({
       link,
       probe,
+      identify,
       // The existing Astro server is outside the newly started command tree;
       // only LiveKit's health listener is a descendant.
       inspect: async () => [{ processId: 38304, port: 49731 }],
@@ -345,19 +347,223 @@ describe("GateRoutePublisher", () => {
       routeName: "web-cmd-k-menu-mono",
       processId: 38207,
       expectedPort: 8691,
+      plotPath: "/plots/mono-cmd-k-menu",
       output: () =>
         [
           "[livekit] Server is listening on port 49731",
           "[astro] Another astro dev server is already running.",
           "[astro] URL: http://127.0.0.1:4060",
+          "[astro] PID: 16056",
         ].join("\n"),
       timeoutMs: 10,
     });
 
-    expect(published).toEqual({ port: 4060, ownership: "external" });
+    expect(published).toEqual({
+      port: 4060,
+      ownership: "external",
+      externalProcessId: 16056,
+      httpStatus: 200,
+    });
+    expect(identify).toHaveBeenCalledWith(
+      { hostname: "127.0.0.1", port: 4060, processId: 16056 },
+      "/plots/mono-cmd-k-menu",
+    );
     expect(link.set).toHaveBeenCalledWith(
       expect.objectContaining({ name: "web-cmd-k-menu-mono", port: 4060 }),
     );
+  });
+
+  it("attaches a verified duplicate server even when it answers 500 without a Content-Type", async () => {
+    const { link } = recordingLink();
+    const publisher = new GateRoutePublisher({
+      link,
+      inspect: async () => [],
+      identify: async () => ({
+        verdict: "verified",
+        families: ["127.0.0.1"],
+      }),
+      // The live Astro error page: HTTP 500, no Content-Type header at all.
+      probe: async (url) =>
+        url === "http://127.0.0.1:4375/" ? { status: 500 } : undefined,
+      wait: async () => undefined,
+    });
+
+    await expect(
+      publisher.publish({
+        routeName: "web-tags-upgrade-mono",
+        processId: 38207,
+        expectedPort: 8691,
+        plotPath: "/plots/mono-tags-upgrade",
+        output: () =>
+          [
+            "Another astro dev server is already running.",
+            "URL: http://127.0.0.1:4375",
+            "PID: 16056",
+            "Run `astro dev stop` to stop it, or use `astro dev --force` to replace it.",
+          ].join("\n"),
+        timeoutMs: 10,
+      }),
+    ).resolves.toEqual({
+      port: 4375,
+      ownership: "external",
+      externalProcessId: 16056,
+      httpStatus: 500,
+    });
+    expect(link.set).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "web-tags-upgrade-mono",
+        host: "127.0.0.1",
+        port: 4375,
+      }),
+    );
+  });
+
+  it("never routes a duplicate server that belongs to another worktree", async () => {
+    const { link } = recordingLink();
+    const publisher = new GateRoutePublisher({
+      link,
+      inspect: async () => [],
+      identify: async () => ({
+        verdict: "foreign",
+        detail:
+          "process 90210 runs in /worktrees/prototype-grow-v1-owner-flow, which is not inside this plot",
+      }),
+      // The foreign server serves perfectly healthy HTML — content must not
+      // be able to overrule identity.
+      probe: async () => ({
+        status: 200,
+        contentType: "text/html; charset=utf-8",
+      }),
+      wait: async () => undefined,
+    });
+
+    await expect(
+      publisher.publish({
+        routeName: "web-tags-upgrade-mono",
+        processId: 38207,
+        expectedPort: 8691,
+        plotPath: "/plots/mono-tags-upgrade",
+        abandoned: () => true,
+        output: () =>
+          [
+            "Another astro dev server is already running.",
+            "URL: http://[::1]:4328",
+            "PID: 90210",
+          ].join("\n"),
+        timeoutMs: 10_000,
+      }),
+    ).rejects.toThrow(/not inside this plot.*astro dev --force/s);
+    expect(link.set).not.toHaveBeenCalled();
+  });
+
+  it("reports a stale duplicate-server PID as an actionable failure", async () => {
+    const { link } = recordingLink();
+    const publisher = new GateRoutePublisher({
+      link,
+      inspect: async () => [],
+      identify: async () => ({
+        verdict: "gone",
+        detail: "the reported process 16056 is not running any more",
+      }),
+      probe: async () => undefined,
+      wait: async () => undefined,
+    });
+
+    await expect(
+      publisher.publish({
+        routeName: "web-tags-upgrade-mono",
+        processId: 38207,
+        expectedPort: 8691,
+        plotPath: "/plots/mono-tags-upgrade",
+        abandoned: () => true,
+        output: () =>
+          [
+            "Another astro dev server is already running.",
+            "URL: http://127.0.0.1:4375",
+            "PID: 16056",
+          ].join("\n"),
+        timeoutMs: 10_000,
+      }),
+    ).rejects.toThrow(/not running any more.*press Start/s);
+    expect(link.set).not.toHaveBeenCalled();
+  });
+
+  it("ignores a bare URL retained in output without duplicate-server evidence", async () => {
+    let elapsed = 0;
+    const { link } = recordingLink();
+    const identify = vi.fn();
+    const publisher = new GateRoutePublisher({
+      link,
+      inspect: async () => [],
+      identify,
+      // Another worktree's server answers healthy HTML on the retained port.
+      // Before identity verification existed, this is exactly how a foreign
+      // branch ended up published under this plot's canonical URL.
+      probe: async () => ({
+        status: 200,
+        contentType: "text/html; charset=utf-8",
+      }),
+      now: () => elapsed,
+      wait: async (milliseconds) => {
+        elapsed += milliseconds;
+      },
+    });
+
+    await expect(
+      publisher.publish({
+        routeName: "web-tags-upgrade-mono",
+        processId: 38207,
+        expectedPort: 8691,
+        plotPath: "/plots/mono-tags-upgrade",
+        output: () => "┃ Local    http://localhost:4328/",
+        timeoutMs: 500,
+      }),
+    ).rejects.toThrow(/has not served a page/);
+    expect(identify).not.toHaveBeenCalled();
+    expect(link.set).not.toHaveBeenCalled();
+  });
+
+  it("prefers the tree's own listener over a verified duplicate server", async () => {
+    const { link, routes } = recordingLink();
+    const publisher = new GateRoutePublisher({
+      link,
+      inspect: async () => [{ processId: 52002, port: 4322 }],
+      identify: async () => ({
+        verdict: "verified",
+        families: ["127.0.0.1"],
+      }),
+      probe: async (url) => {
+        if (
+          url === "http://127.0.0.1:4322/" ||
+          url === "http://127.0.0.1:4060/"
+        ) {
+          return { status: 200, contentType: "text/html; charset=utf-8" };
+        }
+        if (url === "https://web-color-scheme-mono.localhost/") {
+          return routes.get("web-color-scheme-mono")?.port === 4322
+            ? { status: 200, contentType: "text/html; charset=utf-8" }
+            : undefined;
+        }
+        return undefined;
+      },
+      wait: async () => undefined,
+    });
+
+    await expect(
+      publisher.publish({
+        routeName: "web-color-scheme-mono",
+        processId: 52000,
+        expectedPort: 8691,
+        plotPath: "/plots/mono-color-scheme",
+        output: () =>
+          [
+            "Another astro dev server is already running.",
+            "URL: http://127.0.0.1:4060",
+            "PID: 4567",
+          ].join("\n"),
+        timeoutMs: 10,
+      }),
+    ).resolves.toEqual({ port: 4322 });
   });
 
   it("rejects an announced existing URL that does not serve a browser page", async () => {
