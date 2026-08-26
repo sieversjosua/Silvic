@@ -47,13 +47,14 @@ function session(
 const empty = { commands: [], processes: [], declared: {}, query: "" };
 
 describe("plotListRows", () => {
-  it("puts active Codex work first, then the primary checkout and urgency", () => {
+  it("orders every plot by its latest Codex session activity", () => {
     const rows = plotListRows({
       ...empty,
       workspaces: [
         plot({ name: "quiet-one" }),
         plot({
           name: "conflicted",
+          observations: [session("conflicted", "quiet", 4)],
           git: {
             branch: "conflicted",
             ahead: 0,
@@ -73,8 +74,8 @@ describe("plotListRows", () => {
     });
     expect(rows.map((row) => row.workspace.name)).toEqual([
       "working",
-      "trunk",
       "conflicted",
+      "trunk",
       "quiet-one",
     ]);
   });
@@ -130,7 +131,7 @@ describe("plotListRows", () => {
     expect(rows.map((row) => row.workspace.name)).toEqual(["newer", "older"]);
   });
 
-  it("holds the order while only timestamps move", () => {
+  it("reorders when the latest Codex session activity changes", () => {
     const rowsAt = (older: number, newer: number) =>
       plotListRows({
         ...empty,
@@ -152,14 +153,13 @@ describe("plotListRows", () => {
       "alpha",
     ]);
 
-    // Alpha's agent writes a line, so it is now the most recent — but nothing
-    // about either plot's standing changed, and a person is reading the list.
+    // Alpha's agent writes a line, so it is now the most recent.
     const second = steadyRows(rowsAt(3, 2), first.order);
     expect(second.rows.map((row) => row.workspace.name)).toEqual([
-      "beta",
       "alpha",
+      "beta",
     ]);
-    expect(second.order).toBe(first.order);
+    expect(second.order).not.toBe(first.order);
   });
 
   it("reorders when a plot's rank really changes", () => {

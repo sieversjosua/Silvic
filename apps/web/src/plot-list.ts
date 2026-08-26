@@ -36,8 +36,8 @@ export interface PlotListRow {
 /**
  * The list answers "what is going on right now" ordered by how much each plot
  * deserves attention, so it cannot share the canvas's spatial lineage order.
- * Active Codex work comes first; the primary checkout remains the fixed point
- * of reference among plots with the same session standing.
+ * The latest Codex work comes first. Primary checkout and operational urgency
+ * only break ties between plots with the same session activity.
  */
 export function plotListRows({
   workspaces,
@@ -93,12 +93,9 @@ export interface RowOrder {
 }
 
 /**
- * Reordering is allowed when a plot's standing changes — not when a timestamp
- * moves. Agent sessions write continuously and runtimes change tone every few
- * seconds, so sorting afresh on every snapshot had rows trading places while
- * someone was reading them. The rank signature ignores that jitter: it changes
- * only when a plot enters or leaves the list, starts or ends active Codex work,
- * or moves to another rank.
+ * Reordering is allowed when the latest session activity or a plot's standing
+ * changes. Runtime tone still changes every few seconds, so the signature keeps
+ * ignoring that jitter unless it moves the plot to another rank.
  */
 export function steadyRows(
   rows: readonly PlotListRow[],
@@ -107,7 +104,7 @@ export function steadyRows(
   const signature = rows
     .map(
       (row) =>
-        `${row.workspace.workspaceId}:${activeSessionRank(row)}:${rowRank(row)}`,
+        `${row.workspace.workspaceId}:${row.activityAt ?? 0}:${activeSessionRank(row)}:${rowRank(row)}`,
     )
     .toSorted()
     .join("|");
@@ -151,6 +148,8 @@ function activeSessionRank(row: PlotListRow): number {
 }
 
 function compareRows(left: PlotListRow, right: PlotListRow): number {
+  const latestActivity = (right.activityAt ?? 0) - (left.activityAt ?? 0);
+  if (latestActivity !== 0) return latestActivity;
   const sessionStanding = activeSessionRank(left) - activeSessionRank(right);
   if (sessionStanding !== 0) return sessionStanding;
   if (left.workspace.isPrimary !== right.workspace.isPrimary) {
@@ -158,7 +157,6 @@ function compareRows(left: PlotListRow, right: PlotListRow): number {
   }
   return (
     rowRank(left) - rowRank(right) ||
-    (right.activityAt ?? 0) - (left.activityAt ?? 0) ||
     left.workspace.name.localeCompare(right.workspace.name)
   );
 }
