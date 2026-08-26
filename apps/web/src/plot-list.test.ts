@@ -47,7 +47,7 @@ function session(
 const empty = { commands: [], processes: [], declared: {}, query: "" };
 
 describe("plotListRows", () => {
-  it("keeps the primary checkout first and ranks the rest by urgency", () => {
+  it("puts active Codex work first, then the primary checkout and urgency", () => {
     const rows = plotListRows({
       ...empty,
       workspaces: [
@@ -72,10 +72,39 @@ describe("plotListRows", () => {
       ],
     });
     expect(rows.map((row) => row.workspace.name)).toEqual([
+      "working",
       "trunk",
       "conflicted",
-      "working",
       "quiet-one",
+    ]);
+  });
+
+  it("lets an active Codex session outrank an attention state", () => {
+    const rows = plotListRows({
+      ...empty,
+      workspaces: [
+        plot({
+          name: "conflicted",
+          git: {
+            branch: "conflicted",
+            ahead: 0,
+            behind: 0,
+            staged: 0,
+            unstaged: 0,
+            untracked: 0,
+            conflicted: 2,
+          },
+        }),
+        plot({
+          name: "working",
+          observations: [session("working", "active", 5)],
+        }),
+      ],
+    });
+
+    expect(rows.map((row) => row.workspace.name)).toEqual([
+      "working",
+      "conflicted",
     ]);
   });
 
@@ -161,6 +190,32 @@ describe("plotListRows", () => {
     expect(
       steadyRows(alarmed, held.order).rows.map((row) => row.workspace.name),
     ).toEqual(["alpha", "beta"]);
+  });
+
+  it("reorders when a Codex session becomes active", () => {
+    const calm = plotListRows({
+      ...empty,
+      workspaces: [
+        plot({ name: "trunk", isPrimary: true }),
+        plot({ name: "working" }),
+      ],
+    });
+    const held = steadyRows(calm, undefined);
+
+    const active = plotListRows({
+      ...empty,
+      workspaces: [
+        plot({ name: "trunk", isPrimary: true }),
+        plot({
+          name: "working",
+          observations: [session("working", "active", 10)],
+        }),
+      ],
+    });
+
+    expect(
+      steadyRows(active, held.order).rows.map((row) => row.workspace.name),
+    ).toEqual(["working", "trunk"]);
   });
 
   it("filters by the same query the canvas answers to", () => {

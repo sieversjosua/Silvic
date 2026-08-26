@@ -36,7 +36,8 @@ export interface PlotListRow {
 /**
  * The list answers "what is going on right now" ordered by how much each plot
  * deserves attention, so it cannot share the canvas's spatial lineage order.
- * The primary checkout stays on top as the fixed point of reference.
+ * Active Codex work comes first; the primary checkout remains the fixed point
+ * of reference among plots with the same session standing.
  */
 export function plotListRows({
   workspaces,
@@ -96,14 +97,18 @@ export interface RowOrder {
  * moves. Agent sessions write continuously and runtimes change tone every few
  * seconds, so sorting afresh on every snapshot had rows trading places while
  * someone was reading them. The rank signature ignores that jitter: it changes
- * only when a plot enters or leaves the list, or moves to another rank.
+ * only when a plot enters or leaves the list, starts or ends active Codex work,
+ * or moves to another rank.
  */
 export function steadyRows(
   rows: readonly PlotListRow[],
   previous: RowOrder | undefined,
 ): { rows: readonly PlotListRow[]; order: RowOrder } {
   const signature = rows
-    .map((row) => `${row.workspace.workspaceId}:${rowRank(row)}`)
+    .map(
+      (row) =>
+        `${row.workspace.workspaceId}:${activeSessionRank(row)}:${rowRank(row)}`,
+    )
     .toSorted()
     .join("|");
   const ids = rows.map((row) => row.workspace.workspaceId);
@@ -141,7 +146,13 @@ function rowRank(row: PlotListRow): number {
   return Math.min(state, runtime);
 }
 
+function activeSessionRank(row: PlotListRow): number {
+  return row.activeSessions > 0 ? 0 : 1;
+}
+
 function compareRows(left: PlotListRow, right: PlotListRow): number {
+  const sessionStanding = activeSessionRank(left) - activeSessionRank(right);
+  if (sessionStanding !== 0) return sessionStanding;
   if (left.workspace.isPrimary !== right.workspace.isPrimary) {
     return left.workspace.isPrimary ? -1 : 1;
   }
