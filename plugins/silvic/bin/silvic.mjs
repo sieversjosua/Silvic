@@ -29326,7 +29326,7 @@ function parseReply(line, id) {
 // package.json
 var package_default = {
   name: "@silvic/cli",
-  version: "0.1.41",
+  version: "0.1.42",
   description: "Non-interactive runtime and preview control for Silvic",
   repository: "https://github.com/sieversjosua/Silvic",
   license: "MIT",
