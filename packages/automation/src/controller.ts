@@ -1,7 +1,12 @@
 import { normalize } from "node:path";
 
 import type {
+  PlotAdoptionPlan,
+  PlotAdoptionRunRequest,
+  PlotAdoptionRunResult,
   PlotCommand,
+  PlotProvisionRequest,
+  PlotProvisionRunResult,
   ProjectSnapshot,
   SilvicSnapshot,
   WorkspaceSnapshot,
@@ -40,6 +45,8 @@ export interface AutomationPlot {
   path: string;
   branch: string;
   isPrimary: boolean;
+  adoption?: WorkspaceSnapshot["adoption"];
+  provisioning?: WorkspaceSnapshot["provisioning"];
   state: PlotLifecycleState;
   previewUrl?: string;
   runtimes: readonly AutomationRuntime[];
@@ -66,6 +73,12 @@ export interface AutomationControllerOptions {
     project: ProjectSnapshot,
     plot: WorkspaceSnapshot,
   ): Promise<PlotDefinition>;
+  planAdoption(request: {
+    workspaceId: string;
+    scope: "single" | "family";
+  }): Promise<PlotAdoptionPlan>;
+  adopt(request: PlotAdoptionRunRequest): Promise<PlotAdoptionRunResult>;
+  provision(request: PlotProvisionRequest): Promise<PlotProvisionRunResult>;
   processes(): readonly SupervisedCommand[];
   start(plotPath: string, runtimeId: string): Promise<void>;
   stop(plotPath: string, runtimeId: string): void;
@@ -77,6 +90,7 @@ export interface AutomationControllerOptions {
 
 export class AutomationController {
   private readonly runtimeLocks = new Map<string, Promise<void>>();
+  private recoveryLock: Promise<void> = Promise.resolve();
 
   constructor(private readonly options: AutomationControllerOptions) {}
 
@@ -89,6 +103,12 @@ export class AutomationController {
         return this.snapshot(request.params);
       case "status":
         return this.status(request.params);
+      case "adoptionPlan":
+        return this.adoptionPlan(request.params);
+      case "adopt":
+        return this.adopt(request.params);
+      case "provision":
+        return this.provision(request.params);
       case "start":
         return this.start(request.params, signal);
       case "stop":
@@ -127,6 +147,91 @@ export class AutomationController {
     assertOnly(params, ["plot"]);
     const found = this.findPlot(requiredString(params, "plot"));
     return this.describe(found.project, found.plot);
+  }
+
+  private async adoptionPlan(params: Record<string, unknown>) {
+    assertOnly(params, ["plot", "scope"]);
+    const found = this.findPlot(requiredString(params, "plot"));
+    this.assertExternalPlot(found.plot);
+    const plan = await this.options.planAdoption({
+      workspaceId: found.plot.workspaceId,
+      scope: optionalScope(params),
+    });
+    return { ...plan, selectedPlotId: found.plot.workspaceId };
+  }
+
+  private async adopt(params: Record<string, unknown>) {
+    assertOnly(params, ["plot", "scope", "confirmPlotId"]);
+    const found = this.findPlot(requiredString(params, "plot"));
+    this.assertExternalPlot(found.plot);
+    this.assertStableConfirmation(found.plot, params);
+    return this.withRecoveryLock(async () => {
+      const result = await this.options.adopt({
+        workspaceId: found.plot.workspaceId,
+        scope: optionalScope(params),
+        confirmProviderChanges: true,
+      });
+      const failed = result.members.some(
+        (member) => member.status === "failed",
+      );
+      const succeeded = result.members.some(
+        (member) => member.status !== "failed",
+      );
+      return {
+        ...result,
+        failed,
+        partialFailure: failed && succeeded,
+      };
+    });
+  }
+
+  private async provision(params: Record<string, unknown>) {
+    assertOnly(params, ["plot", "confirmPlotId", "remedy"]);
+    const found = this.findPlot(requiredString(params, "plot"));
+    this.assertExternalPlot(found.plot);
+    this.assertStableConfirmation(found.plot, params);
+    if (found.plot.adoption?.status !== "adopted") {
+      throw new AutomationError(
+        "ADOPTION_REQUIRED",
+        "Adopt this Plot before retrying its provisioning.",
+        {
+          plotId: found.plot.workspaceId,
+          adoptionStatus: found.plot.adoption?.status ?? "not-adopted",
+        },
+      );
+    }
+    return this.withRecoveryLock(async () => {
+      const current = this.findPlot(found.plot.workspaceId).plot;
+      if (current.provisioning?.status === "complete") {
+        return {
+          provision: current.provisioning.steps,
+          runtime: { status: "not-required" as const, durationMs: 0 },
+          readiness: { status: "not-required" as const, durationMs: 0 },
+          alreadyProvisioned: true,
+          failed: false,
+          partialFailure: false,
+        };
+      }
+      const remedy = optionalRemedy(params);
+      const result = await this.options.provision({
+        path: current.path,
+        ...(remedy ? { remedy } : {}),
+      });
+      const failed =
+        result.provision.some((step) => step.exitCode !== 0) ||
+        result.runtime.status === "failed" ||
+        result.readiness.status === "failed";
+      const succeeded =
+        result.provision.some((step) => step.exitCode === 0) ||
+        result.runtime.status === "started" ||
+        result.readiness.status === "ready";
+      return {
+        ...result,
+        alreadyProvisioned: false,
+        failed,
+        partialFailure: failed && succeeded,
+      };
+    });
   }
 
   private async start(params: Record<string, unknown>, signal: AbortSignal) {
@@ -375,6 +480,8 @@ export class AutomationController {
       path: plot.path,
       branch: plot.git.branch,
       isPrimary: plot.isPrimary,
+      ...(plot.adoption ? { adoption: plot.adoption } : {}),
+      ...(plot.provisioning ? { provisioning: plot.provisioning } : {}),
       state: lifecycleState(runtimes),
       ...(definition.previewUrl ? { previewUrl: definition.previewUrl } : {}),
       runtimes,
@@ -427,14 +534,21 @@ export class AutomationController {
     if (adoptionStatus !== "adopted") {
       const remedy =
         adoptionStatus === "failed"
-          ? "Retry adoption in Silvic"
+          ? "Retry this Plot's adoption"
           : adoptionStatus === "adopting"
-            ? "Wait for adoption to finish in Silvic"
-            : "Adopt this Plot in Silvic";
+            ? "Wait for this Plot's adoption to finish"
+            : "Adopt this Plot";
       throw new AutomationError(
         "ADOPTION_REQUIRED",
-        `${remedy} before starting runtimes. Adoption keeps provider provisioning explicit and isolated.`,
-        { plotId: plot.workspaceId, adoptionStatus },
+        `${remedy} before starting runtimes. Inspect the adoption plan, then explicitly confirm the stable Plot ID.`,
+        {
+          plotId: plot.workspaceId,
+          adoptionStatus,
+          recovery: {
+            cli: `silvic adoption-plan --plot ${plot.workspaceId}`,
+            mcp: "plan_plot_adoption",
+          },
+        },
       );
     }
 
@@ -445,8 +559,39 @@ export class AutomationController {
       const provisioningStatus = plot.provisioning?.status ?? "not-run";
       throw new AutomationError(
         "PROVISIONING_REQUIRED",
-        `${provisioningStatus === "failed" ? "Retry" : "Run"} provisioning in Silvic before starting runtimes for this Plot.`,
-        { plotId: plot.workspaceId, provisioningStatus },
+        `${provisioningStatus === "failed" ? "Retry" : "Run"} provisioning before starting runtimes for this Plot. Inspect the plan, then explicitly confirm the stable Plot ID.`,
+        {
+          plotId: plot.workspaceId,
+          provisioningStatus,
+          recovery: {
+            cli: `silvic adoption-plan --plot ${plot.workspaceId}`,
+            mcp: "plan_plot_adoption",
+          },
+        },
+      );
+    }
+  }
+
+  private assertStableConfirmation(
+    plot: WorkspaceSnapshot,
+    params: Record<string, unknown>,
+  ): void {
+    const confirmation = optionalString(params, "confirmPlotId");
+    if (confirmation !== plot.workspaceId) {
+      throw new AutomationError(
+        "CONFIRMATION_REQUIRED",
+        `Confirm this operation with stable Plot ID ${plot.workspaceId}.`,
+        { plotId: plot.workspaceId },
+      );
+    }
+  }
+
+  private assertExternalPlot(plot: WorkspaceSnapshot): void {
+    if (plot.isPrimary) {
+      throw new AutomationError(
+        "INVALID_ARGUMENT",
+        "The primary checkout does not use external Plot recovery.",
+        { plotId: plot.workspaceId },
       );
     }
   }
@@ -512,6 +657,20 @@ export class AutomationController {
     } finally {
       release();
       if (this.runtimeLocks.get(key) === queued) this.runtimeLocks.delete(key);
+    }
+  }
+
+  private async withRecoveryLock<T>(operation: () => Promise<T>): Promise<T> {
+    const previous = this.recoveryLock;
+    let release = () => {};
+    this.recoveryLock = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
     }
   }
 }
@@ -617,6 +776,29 @@ function optionalInteger(
       "INVALID_ARGUMENT",
       `${key} must be an integer from ${minimum} to ${maximum}.`,
     );
+  }
+  return value;
+}
+
+function optionalScope(params: Record<string, unknown>): "single" | "family" {
+  const value = params["scope"];
+  if (value === undefined) return "single";
+  if (value !== "single" && value !== "family") {
+    throw new AutomationError(
+      "INVALID_ARGUMENT",
+      "scope must be single or family.",
+    );
+  }
+  return value;
+}
+
+function optionalRemedy(
+  params: Record<string, unknown>,
+): "convex-cli" | undefined {
+  const value = params["remedy"];
+  if (value === undefined) return undefined;
+  if (value !== "convex-cli") {
+    throw new AutomationError("INVALID_ARGUMENT", "remedy must be convex-cli.");
   }
   return value;
 }

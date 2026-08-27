@@ -119,6 +119,111 @@ it("maps Plot lifecycle preconditions to exit 5", async () => {
   });
 });
 
+it("plans adoption before provider changes run", async () => {
+  const requests: AutomationRequest[] = [];
+  const directory = await serve(async (request) => {
+    requests.push(request);
+    return {
+      projectId: "project_123",
+      selectedPlotId: "plot_123",
+      scope: "family",
+      members: [
+        {
+          workspaceId: "plot_123",
+          name: "Issue 13",
+          path: "/projects/Silvic/.worktrees/issue-13",
+          status: "not-adopted",
+          url: "https://issue-13-silvic.localhost",
+        },
+      ],
+      steps: [{ label: "Convex deployment", providerChanging: true }],
+      requiresProviderConfirmation: true,
+    };
+  });
+
+  const result = await executeFile(
+    executable,
+    [
+      "adoption-plan",
+      "--plot",
+      "/projects/Silvic/.worktrees/issue-13",
+      "--scope",
+      "family",
+      "--json",
+    ],
+    { env: { ...process.env, SILVIC_AUTOMATION_DIR: directory } },
+  );
+
+  expect(requests).toMatchObject([
+    {
+      method: "adoptionPlan",
+      params: {
+        plot: "/projects/Silvic/.worktrees/issue-13",
+        scope: "family",
+      },
+    },
+  ]);
+  expect(JSON.parse(result.stdout)).toMatchObject({
+    schemaVersion: 1,
+    ok: true,
+    result: { members: [{ workspaceId: "plot_123" }] },
+  });
+});
+
+it("passes the literal stable Plot confirmation to adoption", async () => {
+  const requests: AutomationRequest[] = [];
+  const directory = await serve(async (request) => {
+    requests.push(request);
+    return {
+      members: [
+        { workspaceId: "plot_123", name: "Issue 13", status: "adopted" },
+      ],
+      failed: false,
+      partialFailure: false,
+    };
+  });
+
+  await executeFile(
+    executable,
+    ["adopt", "--plot", "plot_123", "--confirm", "plot_123", "--json"],
+    { env: { ...process.env, SILVIC_AUTOMATION_DIR: directory } },
+  );
+
+  expect(requests).toMatchObject([
+    {
+      method: "adopt",
+      params: { plot: "plot_123", confirmPlotId: "plot_123" },
+    },
+  ]);
+});
+
+it("returns exit 5 when a provisioning retry fails completely", async () => {
+  const directory = await serve(async () => ({
+    provision: [
+      {
+        label: "Convex deployment",
+        exitCode: 1,
+        advice: "Connect and retry.",
+      },
+    ],
+    runtime: { status: "not-required" },
+    readiness: { status: "not-required" },
+    failed: true,
+    partialFailure: false,
+  }));
+
+  const failure = await executeFailure(
+    ["provision", "--plot", "plot_123", "--confirm", "plot_123", "--json"],
+    directory,
+  );
+
+  expect(failure.code).toBe(5);
+  expect(JSON.parse(failure.stdout)).toMatchObject({
+    ok: true,
+    result: { failed: true, partialFailure: false },
+  });
+});
+
 it("uses exit 6 for a parseable partial runtime result", async () => {
   const directory = await serve(async () => ({
     results: [

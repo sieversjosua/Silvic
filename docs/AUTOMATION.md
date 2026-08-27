@@ -60,9 +60,33 @@ attachment without signalling the external process.
 
 Start fails closed for a non-primary Plot until it has been adopted and every
 provisioning step required by its current recipe has completed successfully.
-The error directs the caller to adopt or retry provisioning in Silvic; starting
-through the CLI or MCP never confirms provider changes implicitly. This guard
-applies equally to one named runtime and to starting every declared runtime.
+CLI and MCP callers recover without opening the desktop UI, but recovery is a
+separate, explicit operation:
+
+```sh
+# Read the exact members, stable IDs, routes, and provider-changing steps.
+silvic adoption-plan --plot plot_123 --json
+
+# Confirm with the selected stable ID, never with a path or a boolean.
+silvic adopt --plot plot_123 --confirm plot_123 --json
+
+# Retry an adopted Plot whose provisioning later failed.
+silvic provision --plot plot_123 --confirm plot_123 --json
+```
+
+Use `--scope family` on the plan and adoption to resume the selected Plot's
+discovered lineage in ancestor-first order. Already-adopted members are reported
+as `already-adopted`; failed members retain their attempt state and can be
+retried. Provisioning reruns the same idempotent recipe path as the desktop app.
+If a failed step offers the `convex-cli` remedy, pass
+`--remedy convex-cli` on the retry.
+
+The MCP equivalents are `plan_plot_adoption`, `adopt_plot`, and
+`provision_plot`. Both mutation tools require `confirmPlotId` to equal the
+selected stable Plot ID. Results retain every member and provisioning step and
+report `failed` and `partialFailure` separately. Starting through CLI or MCP
+never confirms provider changes implicitly. This guard applies equally to one
+named runtime and to starting every declared runtime.
 
 `preview` combines start and wait, prints the canonical URL, and optionally
 opens it with `--open`. `wait` has no start side effect. It waits until every
@@ -97,16 +121,16 @@ to stdout:
 Failures use the same envelope with `ok: false` and a stable error `code`.
 Human-mode diagnostics go to stderr. No command reads from stdin or prompts.
 
-| Exit | Meaning                                     |
-| ---: | ------------------------------------------- |
-|    0 | Success, including an idempotent no-op      |
-|    2 | Invalid command or arguments                |
-|    3 | Silvic unavailable or protocol-incompatible |
-|    4 | Project, Plot, or runtime not found         |
-|    5 | Runtime or preview operation failed         |
-|    6 | Some runtimes failed and others succeeded   |
-|    7 | Readiness deadline exceeded                 |
-|  130 | Cancelled                                   |
+| Exit | Meaning                                               |
+| ---: | ----------------------------------------------------- |
+|    0 | Success, including an idempotent no-op                |
+|    2 | Invalid command or arguments                          |
+|    3 | Silvic unavailable or protocol-incompatible           |
+|    4 | Project, Plot, or runtime not found                   |
+|    5 | Runtime, preview, adoption, or provisioning failed    |
+|    6 | Some requested operations failed and others succeeded |
+|    7 | Readiness deadline exceeded                           |
+|  130 | Cancelled                                             |
 
 ## Local protocol and security
 
@@ -115,7 +139,9 @@ directory. Protocol revision 1 uses JSON-RPC 2.0-shaped, newline-delimited JSON
 with a 64 KiB request-frame limit. The parent directory is mode `0700` and the
 socket is mode `0600`. Requests only resolve stable IDs and paths already in the
 authoritative snapshot; the interface accepts neither arbitrary working
-directories nor shell commands.
+directories nor shell commands. Adoption and provisioning accept a stable-ID
+confirmation and, for a known repair, a closed remedy identifier; they never
+accept a command string.
 
 Set `SILVIC_AUTOMATION_DIR` only when running an isolated development or test
 instance. The app and every client must receive the same value.

@@ -5,7 +5,12 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import type {
+  PlotAdoptionPlan,
+  PlotAdoptionRunRequest,
+  PlotAdoptionRunResult,
   PlotCommand,
+  PlotProvisionRequest,
+  PlotProvisionRunResult,
   ProjectSnapshot,
   SilvicSnapshot,
   WorkspaceSnapshot,
@@ -87,6 +92,14 @@ function controller(
   options: {
     workspace?: WorkspaceSnapshot;
     requiresProvisioning?: boolean;
+    planAdoption?: (request: {
+      workspaceId: string;
+      scope: "single" | "family";
+    }) => Promise<PlotAdoptionPlan>;
+    adopt?: (request: PlotAdoptionRunRequest) => Promise<PlotAdoptionRunResult>;
+    provision?: (
+      request: PlotProvisionRequest,
+    ) => Promise<PlotProvisionRunResult>;
     processes?: readonly SupervisedCommand[];
     start?: (plotPath: string, runtimeId: string) => Promise<void>;
     stop?: (plotPath: string, runtimeId: string) => void;
@@ -106,6 +119,43 @@ function controller(
       previewUrl: "https://web-issue-9-silvic.localhost",
       requiresProvisioning: options.requiresProvisioning ?? false,
     }),
+    planAdoption:
+      options.planAdoption ??
+      (async ({ workspaceId, scope }) => ({
+        projectId: project.id,
+        scope,
+        members: [
+          {
+            workspaceId,
+            name: workspace.name,
+            branch: workspace.branch,
+            path: workspace.path,
+            port: 43123,
+            url: "https://web-issue-9-silvic.localhost",
+            status: workspace.adoption?.status ?? "not-adopted",
+          },
+        ],
+        steps: [{ label: "Convex deployment", providerChanging: true }],
+        requiresProviderConfirmation: true,
+      })),
+    adopt:
+      options.adopt ??
+      (async () => ({
+        members: [
+          {
+            workspaceId: workspace.workspaceId,
+            name: workspace.name,
+            status: "adopted",
+          },
+        ],
+      })),
+    provision:
+      options.provision ??
+      (async () => ({
+        provision: [],
+        runtime: { status: "not-required", durationMs: 0 },
+        readiness: { status: "not-required", durationMs: 0 },
+      })),
     processes: () => options.processes ?? [],
     start: options.start ?? (async () => undefined),
     stop: options.stop ?? (() => undefined),
@@ -167,6 +217,180 @@ describe("automation lifecycle states", () => {
 });
 
 describe("automation operations", () => {
+  it("shows adoption and provisioning state in Plot status", async () => {
+    const status = await controller({
+      workspace: {
+        ...plot,
+        provisioning: {
+          status: "complete",
+          at: "2026-08-27T12:00:00.000Z",
+          steps: [],
+        },
+      },
+    }).handle(request("status", { plot: plot.workspaceId }));
+
+    expect(status).toMatchObject({
+      adoption: { status: "adopted", attempt: 1 },
+      provisioning: { status: "complete" },
+    });
+  });
+
+  it("plans adoption from a path but returns the stable Plot identity", async () => {
+    const planAdoption = vi.fn(async ({ scope }) => ({
+      projectId: project.id,
+      scope,
+      members: [],
+      steps: [],
+      requiresProviderConfirmation: false,
+    }));
+
+    const result = await controller({ planAdoption }).handle(
+      request("adoptionPlan", { plot: plot.path, scope: "family" }),
+    );
+
+    expect(planAdoption).toHaveBeenCalledWith({
+      workspaceId: plot.workspaceId,
+      scope: "family",
+    });
+    expect(result).toMatchObject({ selectedPlotId: plot.workspaceId });
+  });
+
+  it("requires adoption confirmation to match the stable Plot ID", async () => {
+    const adopt = vi.fn(async () => ({ members: [] }));
+    const operation = controller({ adopt }).handle(
+      request("adopt", { plot: plot.path, confirmPlotId: plot.path }),
+    );
+
+    await expect(operation).rejects.toMatchObject({
+      code: "CONFIRMATION_REQUIRED",
+      details: { plotId: plot.workspaceId },
+    });
+    expect(adopt).not.toHaveBeenCalled();
+  });
+
+  it("adopts a Plot explicitly and reports member-level partial failure", async () => {
+    const adopt = vi.fn(async () => ({
+      members: [
+        { workspaceId: "parent", name: "Parent", status: "adopted" as const },
+        {
+          workspaceId: plot.workspaceId,
+          name: plot.name,
+          status: "failed" as const,
+          error: "provider refused",
+        },
+      ],
+    }));
+
+    const result = await controller({ adopt }).handle(
+      request("adopt", {
+        plot: plot.path,
+        scope: "family",
+        confirmPlotId: plot.workspaceId,
+      }),
+    );
+
+    expect(adopt).toHaveBeenCalledWith({
+      workspaceId: plot.workspaceId,
+      scope: "family",
+      confirmProviderChanges: true,
+    });
+    expect(result).toMatchObject({ failed: true, partialFailure: true });
+  });
+
+  it("retries provisioning only after adoption and stable-ID confirmation", async () => {
+    const provision = vi.fn(async () => ({
+      provision: [
+        {
+          label: "Convex deployment",
+          command: "npx convex dev --once",
+          exitCode: 0,
+          output: "",
+          durationMs: 1,
+        },
+      ],
+      runtime: { status: "started" as const, durationMs: 1 },
+      readiness: { status: "ready" as const, durationMs: 1 },
+    }));
+
+    const result = await controller({ provision }).handle(
+      request("provision", {
+        plot: plot.path,
+        confirmPlotId: plot.workspaceId,
+        remedy: "convex-cli",
+      }),
+    );
+
+    expect(provision).toHaveBeenCalledWith({
+      path: plot.path,
+      remedy: "convex-cli",
+    });
+    expect(result).toMatchObject({ failed: false, partialFailure: false });
+  });
+
+  it("treats a repeated successful provisioning request as a no-op", async () => {
+    const provision = vi.fn();
+    const result = await controller({
+      workspace: {
+        ...plot,
+        provisioning: {
+          status: "complete",
+          at: "2026-08-27T12:00:00.000Z",
+          steps: [
+            {
+              label: "Convex deployment",
+              command: "npx convex dev --once",
+              exitCode: 0,
+              output: "",
+              durationMs: 1,
+            },
+          ],
+        },
+      },
+      provision,
+    }).handle(
+      request("provision", {
+        plot: plot.workspaceId,
+        confirmPlotId: plot.workspaceId,
+      }),
+    );
+
+    expect(provision).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      alreadyProvisioned: true,
+      failed: false,
+      partialFailure: false,
+    });
+  });
+
+  it("does not provision an external Plot before adoption", async () => {
+    const provision = vi.fn(async () => ({
+      provision: [],
+      runtime: { status: "not-required" as const, durationMs: 0 },
+      readiness: { status: "not-required" as const, durationMs: 0 },
+    }));
+    const operation = controller({
+      workspace: {
+        ...plot,
+        adoption: {
+          status: "not-adopted",
+          at: "2026-08-27T12:00:00.000Z",
+          attempt: 0,
+        },
+      },
+      provision,
+    }).handle(
+      request("provision", {
+        plot: plot.workspaceId,
+        confirmPlotId: plot.workspaceId,
+      }),
+    );
+
+    await expect(operation).rejects.toMatchObject({
+      code: "ADOPTION_REQUIRED",
+    });
+    expect(provision).not.toHaveBeenCalled();
+  });
+
   it("does not start any Convex runtime before an external Plot is adopted", async () => {
     const plotPath = await mkdtemp(join(tmpdir(), "silvic-unadopted-convex-"));
     await writeFile(
@@ -219,7 +443,7 @@ describe("automation operations", () => {
       expect.objectContaining<Partial<AutomationError>>({
         code: "PROVISIONING_REQUIRED",
         message:
-          "Retry provisioning in Silvic before starting runtimes for this Plot.",
+          "Retry provisioning before starting runtimes for this Plot. Inspect the plan, then explicitly confirm the stable Plot ID.",
       }),
     );
     expect(start).not.toHaveBeenCalled();

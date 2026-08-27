@@ -32,7 +32,9 @@ export class AutomationClient {
       this.options.timeoutMs ??
       (method === "wait"
         ? Math.min(readinessTimeout + 5_000, 605_000)
-        : 65_000);
+        : method === "adopt" || method === "provision"
+          ? 605_000
+          : 65_000);
     return new Promise<T>((resolve, reject) => {
       const socket = connect({ path });
       socket.setEncoding("utf8");

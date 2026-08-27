@@ -1,7 +1,15 @@
 export const automationProtocolVersion = 1 as const;
 
 export type AutomationMethod =
-  "snapshot" | "status" | "start" | "stop" | "wait" | "logs";
+  | "snapshot"
+  | "status"
+  | "adoptionPlan"
+  | "adopt"
+  | "provision"
+  | "start"
+  | "stop"
+  | "wait"
+  | "logs";
 
 export interface AutomationRequest {
   jsonrpc: "2.0";
@@ -107,6 +115,9 @@ function isAutomationMethod(value: unknown): value is AutomationMethod {
   return (
     value === "snapshot" ||
     value === "status" ||
+    value === "adoptionPlan" ||
+    value === "adopt" ||
+    value === "provision" ||
     value === "start" ||
     value === "stop" ||
     value === "wait" ||

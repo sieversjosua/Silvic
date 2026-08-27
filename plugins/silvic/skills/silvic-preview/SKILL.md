@@ -14,4 +14,4 @@ Use Silvic's MCP tools for the lifecycle; the desktop UI is not part of this wor
 
 Stopping an externally managed runtime detaches Silvic's route and leaves the external process running. Treat the returned `detached` outcome as success and do not try to terminate that process through another tool.
 
-When start reports `ADOPTION_REQUIRED` or `PROVISIONING_REQUIRED`, stop and direct the user to adopt the Plot or retry its provisioning in Silvic. Starting runtimes is deliberately not an implicit confirmation for provider-changing provisioning.
+When start reports `ADOPTION_REQUIRED` or `PROVISIONING_REQUIRED`, use `plan_plot_adoption` and show the provider-changing steps before continuing. Use the returned selected stable Plot ID as `confirmPlotId` only after provider changes are explicitly approved. Call `adopt_plot` for adoption or `provision_plot` for an adopted Plot whose provisioning failed. Inspect every member and step result; retry failed work when appropriate. Starting runtimes is deliberately not an implicit confirmation for provider-changing provisioning.

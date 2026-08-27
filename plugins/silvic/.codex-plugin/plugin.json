@@ -13,12 +13,13 @@
   "interface": {
     "displayName": "Silvic",
     "shortDescription": "Run and inspect local Plot previews.",
-    "longDescription": "Find Silvic Plots, control their declared runtimes, wait for canonical preview URLs, and inspect logs and diagnostics.",
+    "longDescription": "Find and explicitly adopt Silvic Plots, provision them, control their declared runtimes, wait for canonical preview URLs, and inspect logs and diagnostics.",
     "developerName": "Josua Sievers",
     "category": "Developer Tools",
     "capabilities": ["Read", "Write"],
     "defaultPrompt": [
       "Start this Plot and verify its preview.",
+      "Plan and complete adoption for this Plot.",
       "Show the status and logs for this Plot."
     ]
   },

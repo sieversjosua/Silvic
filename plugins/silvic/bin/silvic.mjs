@@ -29209,7 +29209,7 @@ var AutomationClient = class {
     const id = randomUUID();
     const path = this.options.socketPath ?? automationSocketPath();
     const readinessTimeout = method === "wait" && typeof params["timeoutMs"] === "number" ? params["timeoutMs"] : 6e4;
-    const timeoutMs = this.options.timeoutMs ?? (method === "wait" ? Math.min(readinessTimeout + 5e3, 605e3) : 65e3);
+    const timeoutMs = this.options.timeoutMs ?? (method === "wait" ? Math.min(readinessTimeout + 5e3, 605e3) : method === "adopt" || method === "provision" ? 605e3 : 65e3);
     return new Promise((resolve, reject) => {
       const socket = connect({ path });
       socket.setEncoding("utf8");
@@ -29382,6 +29382,9 @@ async function main(argv) {
       project: { type: "string" },
       plot: { type: "string" },
       runtime: { type: "string" },
+      scope: { type: "string" },
+      confirm: { type: "string" },
+      remedy: { type: "string" },
       timeout: { type: "string" },
       limit: { type: "string" },
       open: { type: "boolean", default: false },
@@ -29429,6 +29432,37 @@ async function main(argv) {
         plot: requireOption(values.plot, "--plot")
       });
       output(plot, values.json, formatStatus(plot));
+      return;
+    }
+    case "adoption-plan": {
+      rejectOptions(values, ["json", "help", "plot", "scope"]);
+      const result = await automationCall("adoptionPlan", {
+        plot: requireOption(values.plot, "--plot"),
+        ...values.scope ? { scope: adoptionScope(values.scope) } : {}
+      });
+      output(result, values.json, formatAdoptionPlan(result));
+      return;
+    }
+    case "adopt": {
+      rejectOptions(values, ["json", "help", "plot", "scope", "confirm"]);
+      const result = await automationCall("adopt", {
+        plot: requireOption(values.plot, "--plot"),
+        ...values.scope ? { scope: adoptionScope(values.scope) } : {},
+        confirmPlotId: requireOption(values.confirm, "--confirm")
+      });
+      output(result, values.json, formatAdoptionResult(result));
+      setRecoveryExitCode(result);
+      return;
+    }
+    case "provision": {
+      rejectOptions(values, ["json", "help", "plot", "confirm", "remedy"]);
+      const result = await automationCall("provision", {
+        plot: requireOption(values.plot, "--plot"),
+        confirmPlotId: requireOption(values.confirm, "--confirm"),
+        ...values.remedy ? { remedy: provisionRemedy(values.remedy) } : {}
+      });
+      output(result, values.json, formatProvisionResult(result));
+      setRecoveryExitCode(result);
       return;
     }
     case "start":
@@ -29525,6 +29559,41 @@ function formatStatus(plot) {
     ...plot.diagnostics.map((diagnostic) => `diagnostic	${diagnostic}`)
   ];
 }
+function formatAdoptionPlan(plan) {
+  return [
+    `selected	${plan.selectedPlotId}`,
+    ...plan.members.map(
+      (member) => `plot	${member.workspaceId}	${member.status}	${member.name}	${member.path}	${member.url}`
+    ),
+    ...plan.steps.map(
+      (step) => `step	${step.providerChanging ? "provider-change" : "local"}	${step.label}`
+    ),
+    ...plan.requiresProviderConfirmation ? [
+      "confirmation	required	Use the selected stable Plot ID with --confirm."
+    ] : []
+  ];
+}
+function formatAdoptionResult(result) {
+  return result.members.flatMap((member) => [
+    `plot	${member.workspaceId}	${member.status}	${member.name}${member.error ? `	${member.error}` : ""}`,
+    ...(member.provision ?? []).map(
+      (step) => `step	${member.workspaceId}	${step.exitCode}	${step.label}${step.advice ? `	${step.advice}` : ""}`
+    )
+  ]);
+}
+function formatProvisionResult(result) {
+  return [
+    ...result.provision.map(
+      (step) => `step	${step.exitCode}	${step.label}${step.advice ? `	${step.advice}` : ""}`
+    ),
+    `runtime	${result.runtime.status}${result.runtime.detail ? `	${result.runtime.detail}` : ""}`,
+    `readiness	${result.readiness.status}${result.readiness.detail ? `	${result.readiness.detail}` : ""}`
+  ];
+}
+function setRecoveryExitCode(result) {
+  if (result.partialFailure) process.exitCode = 6;
+  else if (result.failed) process.exitCode = 5;
+}
 function rejectOptions(values, allowed) {
   const found = Object.entries(values).find(
     ([key, value]) => value !== void 0 && value !== false && !allowed.includes(key)
@@ -29542,6 +29611,18 @@ function positiveInteger(value, name) {
   }
   return parsed;
 }
+function adoptionScope(value) {
+  if (value !== "single" && value !== "family") {
+    throw new CliUsageError("--scope must be single or family.");
+  }
+  return value;
+}
+function provisionRemedy(value) {
+  if (value !== "convex-cli") {
+    throw new CliUsageError("--remedy must be convex-cli.");
+  }
+  return value;
+}
 function writeHelp() {
   process.stdout.write(
     `Silvic ${version2}
@@ -29550,15 +29631,19 @@ Usage:
   silvic projects [--json]
   silvic plots [--project ID] [--json]
   silvic status --plot ID [--json]
+  silvic adoption-plan --plot ID [--scope single|family] [--json]
+  silvic adopt --plot ID [--scope single|family] --confirm STABLE_ID [--json]
+  silvic provision --plot ID --confirm STABLE_ID [--remedy convex-cli] [--json]
   silvic start --plot ID [--runtime ID] [--json]
   silvic preview --plot ID [--timeout MS] [--open] [--json]
   silvic stop --plot ID [--runtime ID] [--json]
   silvic wait --plot ID [--timeout MS] [--json]
   silvic logs --plot ID [--runtime ID] [--limit BYTES] [--json]
 
-Plot selectors accept a stable Plot id or an absolute Plot path. Start and stop
-without --runtime apply to every declared runtime and are idempotent. Preview
-starts all runtimes, waits for readiness, and returns the canonical URL.
+Plot selectors accept a stable Plot id or an absolute Plot path. Before adoption
+or provisioning, inspect adoption-plan and confirm with its selected stable Plot
+ID. Start never confirms provider changes implicitly. Start and stop without
+--runtime apply to every declared runtime and are idempotent.
 `
   );
 }
@@ -29590,6 +29675,12 @@ function buildMcpServer() {
     destructiveHint: true,
     idempotentHint: true,
     openWorldHint: false
+  };
+  const providerMutation = {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: true
   };
   server.registerTool(
     "list_projects",
@@ -29635,6 +29726,62 @@ function buildMcpServer() {
       annotations: readOnly
     },
     async ({ plot }, context) => mcpCall("status", { plot }, void 0, context.mcpReq.signal)
+  );
+  server.registerTool(
+    "plan_plot_adoption",
+    {
+      description: "Show the stable Plot identity, family members, and provider-changing steps before adoption or provisioning.",
+      inputSchema: external_exports.object({
+        plot: external_exports.string().min(1),
+        scope: external_exports.enum(["single", "family"]).optional()
+      }),
+      outputSchema,
+      annotations: readOnly
+    },
+    async ({ plot, scope }, context) => mcpCall(
+      "adoptionPlan",
+      { plot, ...scope ? { scope } : {} },
+      void 0,
+      context.mcpReq.signal
+    )
+  );
+  server.registerTool(
+    "adopt_plot",
+    {
+      description: "Explicitly adopt one Plot or its lineage family after plan_plot_adoption. confirmPlotId must equal the selected stable Plot ID.",
+      inputSchema: external_exports.object({
+        plot: external_exports.string().min(1),
+        scope: external_exports.enum(["single", "family"]).optional(),
+        confirmPlotId: external_exports.string().min(1)
+      }),
+      outputSchema,
+      annotations: providerMutation
+    },
+    async ({ plot, scope, confirmPlotId }, context) => mcpCall(
+      "adopt",
+      { plot, ...scope ? { scope } : {}, confirmPlotId },
+      void 0,
+      context.mcpReq.signal
+    )
+  );
+  server.registerTool(
+    "provision_plot",
+    {
+      description: "Retry provisioning for an adopted Plot after plan_plot_adoption. confirmPlotId must equal the stable Plot ID; optionally run a named offered remedy first.",
+      inputSchema: external_exports.object({
+        plot: external_exports.string().min(1),
+        confirmPlotId: external_exports.string().min(1),
+        remedy: external_exports.enum(["convex-cli"]).optional()
+      }),
+      outputSchema,
+      annotations: providerMutation
+    },
+    async ({ plot, confirmPlotId, remedy }, context) => mcpCall(
+      "provision",
+      { plot, confirmPlotId, ...remedy ? { remedy } : {} },
+      void 0,
+      context.mcpReq.signal
+    )
   );
   server.registerTool(
     "start_runtimes",
@@ -29811,7 +29958,7 @@ void main(process.argv.slice(2)).catch((error51) => {
     process.stderr.write(`silvic: ${payload.message}
 `);
   }
-  process.exitCode = usage ? 2 : automation && (error51.code === "SILVIC_UNAVAILABLE" || error51.code === "UNSUPPORTED_PROTOCOL" || error51.code === "INVALID_REPLY") ? 3 : automation && (error51.code === "PLOT_NOT_FOUND" || error51.code === "RUNTIME_NOT_FOUND") ? 4 : automation && error51.code === "READINESS_TIMEOUT" ? 7 : automation && error51.code === "CANCELLED" ? 130 : automation && (error51.code === "RUNTIME_FAILED" || error51.code === "NO_PREVIEW" || error51.code === "ADOPTION_REQUIRED" || error51.code === "PROVISIONING_REQUIRED") ? 5 : 1;
+  process.exitCode = usage ? 2 : automation && (error51.code === "SILVIC_UNAVAILABLE" || error51.code === "UNSUPPORTED_PROTOCOL" || error51.code === "INVALID_REPLY") ? 3 : automation && (error51.code === "PLOT_NOT_FOUND" || error51.code === "RUNTIME_NOT_FOUND") ? 4 : automation && error51.code === "READINESS_TIMEOUT" ? 7 : automation && error51.code === "CANCELLED" ? 130 : automation && (error51.code === "RUNTIME_FAILED" || error51.code === "NO_PREVIEW" || error51.code === "CONFIRMATION_REQUIRED" || error51.code === "ADOPTION_REQUIRED" || error51.code === "PROVISIONING_REQUIRED") ? 5 : 1;
 });
 /*! Bundled license information:
 
