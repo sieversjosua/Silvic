@@ -575,7 +575,10 @@ void main(process.argv.slice(2)).catch((error: unknown) => {
           : automation && error.code === "CANCELLED"
             ? 130
             : automation &&
-                (error.code === "RUNTIME_FAILED" || error.code === "NO_PREVIEW")
+                (error.code === "RUNTIME_FAILED" ||
+                  error.code === "NO_PREVIEW" ||
+                  error.code === "ADOPTION_REQUIRED" ||
+                  error.code === "PROVISIONING_REQUIRED")
               ? 5
               : 1;
 });

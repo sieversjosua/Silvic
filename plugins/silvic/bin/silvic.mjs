@@ -29811,7 +29811,7 @@ void main(process.argv.slice(2)).catch((error51) => {
     process.stderr.write(`silvic: ${payload.message}
 `);
   }
-  process.exitCode = usage ? 2 : automation && (error51.code === "SILVIC_UNAVAILABLE" || error51.code === "UNSUPPORTED_PROTOCOL" || error51.code === "INVALID_REPLY") ? 3 : automation && (error51.code === "PLOT_NOT_FOUND" || error51.code === "RUNTIME_NOT_FOUND") ? 4 : automation && error51.code === "READINESS_TIMEOUT" ? 7 : automation && error51.code === "CANCELLED" ? 130 : automation && (error51.code === "RUNTIME_FAILED" || error51.code === "NO_PREVIEW") ? 5 : 1;
+  process.exitCode = usage ? 2 : automation && (error51.code === "SILVIC_UNAVAILABLE" || error51.code === "UNSUPPORTED_PROTOCOL" || error51.code === "INVALID_REPLY") ? 3 : automation && (error51.code === "PLOT_NOT_FOUND" || error51.code === "RUNTIME_NOT_FOUND") ? 4 : automation && error51.code === "READINESS_TIMEOUT" ? 7 : automation && error51.code === "CANCELLED" ? 130 : automation && (error51.code === "RUNTIME_FAILED" || error51.code === "NO_PREVIEW" || error51.code === "ADOPTION_REQUIRED" || error51.code === "PROVISIONING_REQUIRED") ? 5 : 1;
 });
 /*! Bundled license information:
 

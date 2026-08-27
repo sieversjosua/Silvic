@@ -13,3 +13,5 @@ Use Silvic's MCP tools for the lifecycle; the desktop UI is not part of this wor
 6. Stop the runtimes started for the task when the preview is no longer needed.
 
 Stopping an externally managed runtime detaches Silvic's route and leaves the external process running. Treat the returned `detached` outcome as success and do not try to terminate that process through another tool.
+
+When start reports `ADOPTION_REQUIRED` or `PROVISIONING_REQUIRED`, stop and direct the user to adopt the Plot or retry its provisioning in Silvic. Starting runtimes is deliberately not an implicit confirmation for provider-changing provisioning.

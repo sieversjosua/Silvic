@@ -55,6 +55,7 @@ export interface AutomationProject {
 
 interface PlotDefinition {
   commands: Readonly<Record<string, PlotCommand>>;
+  requiresProvisioning: boolean;
   previewUrl?: string;
 }
 
@@ -132,6 +133,7 @@ export class AutomationController {
     assertOnly(params, ["plot", "runtime"]);
     const found = this.findPlot(requiredString(params, "plot"));
     const definition = await this.options.definition(found.project, found.plot);
+    this.assertStartable(found.plot, definition);
     const requested = optionalString(params, "runtime");
     const ids = selectRuntimeIds(definition.commands, requested);
     const results: Array<{
@@ -413,6 +415,40 @@ export class AutomationController {
         (process) =>
           normalize(process.plotPath) === target && process.id === id,
       );
+  }
+
+  private assertStartable(
+    plot: WorkspaceSnapshot,
+    definition: PlotDefinition,
+  ): void {
+    if (plot.isPrimary) return;
+
+    const adoptionStatus = plot.adoption?.status ?? "not-adopted";
+    if (adoptionStatus !== "adopted") {
+      const remedy =
+        adoptionStatus === "failed"
+          ? "Retry adoption in Silvic"
+          : adoptionStatus === "adopting"
+            ? "Wait for adoption to finish in Silvic"
+            : "Adopt this Plot in Silvic";
+      throw new AutomationError(
+        "ADOPTION_REQUIRED",
+        `${remedy} before starting runtimes. Adoption keeps provider provisioning explicit and isolated.`,
+        { plotId: plot.workspaceId, adoptionStatus },
+      );
+    }
+
+    if (
+      definition.requiresProvisioning &&
+      plot.provisioning?.status !== "complete"
+    ) {
+      const provisioningStatus = plot.provisioning?.status ?? "not-run";
+      throw new AutomationError(
+        "PROVISIONING_REQUIRED",
+        `${provisioningStatus === "failed" ? "Retry" : "Run"} provisioning in Silvic before starting runtimes for this Plot.`,
+        { plotId: plot.workspaceId, provisioningStatus },
+      );
+    }
   }
 
   private async waitWhileStopping(

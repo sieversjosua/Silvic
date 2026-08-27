@@ -98,6 +98,27 @@ it("maps not-found failures to exit 4 with structured stdout", async () => {
   });
 });
 
+it("maps Plot lifecycle preconditions to exit 5", async () => {
+  const directory = await serve(async () => {
+    throw new AutomationError(
+      "ADOPTION_REQUIRED",
+      "Adopt this Plot in Silvic before starting runtimes.",
+    );
+  });
+
+  const failure = await executeFailure(
+    ["start", "--plot", "plot_123", "--json"],
+    directory,
+  );
+
+  expect(failure.code).toBe(5);
+  expect(JSON.parse(failure.stdout)).toMatchObject({
+    schemaVersion: 1,
+    ok: false,
+    error: { code: "ADOPTION_REQUIRED" },
+  });
+});
+
 it("uses exit 6 for a parseable partial runtime result", async () => {
   const directory = await serve(async () => ({
     results: [

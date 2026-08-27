@@ -1,3 +1,4 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -42,6 +43,11 @@ const plot: WorkspaceSnapshot = {
     conflicted: 0,
   },
   observations: [],
+  adoption: {
+    status: "adopted",
+    at: "2026-08-25T12:00:00.000Z",
+    attempt: 1,
+  },
 };
 
 const project: ProjectSnapshot = {
@@ -79,6 +85,8 @@ function request(
 
 function controller(
   options: {
+    workspace?: WorkspaceSnapshot;
+    requiresProvisioning?: boolean;
     processes?: readonly SupervisedCommand[];
     start?: (plotPath: string, runtimeId: string) => Promise<void>;
     stop?: (plotPath: string, runtimeId: string) => void;
@@ -87,12 +95,16 @@ function controller(
     now?: () => number;
   } = {},
 ) {
+  const workspace = options.workspace ?? plot;
+  const projectSnapshot = { ...project, workspaces: [workspace] };
+  const currentSnapshot = { ...snapshot, projects: [projectSnapshot] };
   return new AutomationController({
-    snapshot: () => snapshot,
+    snapshot: () => currentSnapshot,
     roots: () => [project.rootPath],
     definition: async () => ({
       commands,
       previewUrl: "https://web-issue-9-silvic.localhost",
+      requiresProvisioning: options.requiresProvisioning ?? false,
     }),
     processes: () => options.processes ?? [],
     start: options.start ?? (async () => undefined),
@@ -155,6 +167,103 @@ describe("automation lifecycle states", () => {
 });
 
 describe("automation operations", () => {
+  it("does not start any Convex runtime before an external Plot is adopted", async () => {
+    const plotPath = await mkdtemp(join(tmpdir(), "silvic-unadopted-convex-"));
+    await writeFile(
+      join(plotPath, ".env.local"),
+      "CONVEX_DEPLOYMENT=dev:shared-stale-deployment\n",
+    );
+    const start = vi.fn(async () => undefined);
+    const operation = controller({
+      workspace: {
+        ...plot,
+        path: plotPath,
+        adoption: {
+          status: "not-adopted",
+          at: "2026-08-27T12:00:00.000Z",
+          attempt: 0,
+        },
+      },
+      requiresProvisioning: true,
+      start,
+    }).handle(request("start", { plot: plot.workspaceId }));
+
+    try {
+      await expect(operation).rejects.toEqual(
+        expect.objectContaining<Partial<AutomationError>>({
+          code: "ADOPTION_REQUIRED",
+        }),
+      );
+      expect(start).not.toHaveBeenCalled();
+    } finally {
+      await rm(plotPath, { recursive: true, force: true });
+    }
+  });
+
+  it("does not start one runtime after required provisioning failed", async () => {
+    const start = vi.fn(async () => undefined);
+    const operation = controller({
+      workspace: {
+        ...plot,
+        provisioning: {
+          status: "failed",
+          at: "2026-08-27T12:00:00.000Z",
+          steps: [],
+        },
+      },
+      requiresProvisioning: true,
+      start,
+    }).handle(request("start", { plot: plot.workspaceId, runtime: "worker" }));
+
+    await expect(operation).rejects.toEqual(
+      expect.objectContaining<Partial<AutomationError>>({
+        code: "PROVISIONING_REQUIRED",
+        message:
+          "Retry provisioning in Silvic before starting runtimes for this Plot.",
+      }),
+    );
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it("starts an adopted Plot after required provisioning completed", async () => {
+    const start = vi.fn(async () => undefined);
+
+    await controller({
+      workspace: {
+        ...plot,
+        provisioning: {
+          status: "complete",
+          at: "2026-08-27T12:00:00.000Z",
+          steps: [],
+        },
+      },
+      requiresProvisioning: true,
+      start,
+    }).handle(request("start", { plot: plot.workspaceId, runtime: "worker" }));
+
+    expect(start).toHaveBeenCalledOnce();
+    expect(start).toHaveBeenCalledWith(plot.path, "worker");
+  });
+
+  it("allows the primary checkout without adoption or provisioning", async () => {
+    const start = vi.fn(async () => undefined);
+    const { adoption: _adoption, provisioning: _provisioning, ...base } = plot;
+    const primary = {
+      ...base,
+      isPrimary: true,
+      locationKind: "checkout" as const,
+    };
+
+    await controller({
+      workspace: primary,
+      requiresProvisioning: true,
+      start,
+    }).handle(request("start", { plot: plot.workspaceId, runtime: "web" }));
+
+    expect(start).toHaveBeenCalledOnce();
+    expect(start).toHaveBeenCalledWith(primary.path, "web");
+  });
+
   it("starts every runtime idempotently and reports partial failures", async () => {
     const start = vi.fn(async (_plotPath: string, runtimeId: string) => {
       if (runtimeId === "worker")

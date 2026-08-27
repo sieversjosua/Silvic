@@ -1952,6 +1952,7 @@ async function automationPlotDefinition(
   workspace: WorkspaceSnapshot,
 ): Promise<{
   commands: Readonly<Record<string, PlotCommand>>;
+  requiresProvisioning: boolean;
   previewUrl?: string;
 }> {
   const recipe = await readRecipe(project.rootPath);
@@ -1968,6 +1969,7 @@ async function automationPlotDefinition(
   );
   return {
     commands: recipe.commands,
+    requiresProvisioning: recipe.provision.length > 0,
     ...(servesPreview
       ? { previewUrl: addressFor(recipe, plot, port).url }
       : {}),

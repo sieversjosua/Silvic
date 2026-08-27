@@ -58,6 +58,12 @@ top-level result sets `partialFailure: true`. Stopping a runtime with
 `ownership: "external"` returns `detached`: Silvic removes its route and local
 attachment without signalling the external process.
 
+Start fails closed for a non-primary Plot until it has been adopted and every
+provisioning step required by its current recipe has completed successfully.
+The error directs the caller to adopt or retry provisioning in Silvic; starting
+through the CLI or MCP never confirms provider changes implicitly. This guard
+applies equally to one named runtime and to starting every declared runtime.
+
 `preview` combines start and wait, prints the canonical URL, and optionally
 opens it with `--open`. `wait` has no start side effect. It waits until every
 serving runtime reports running and the canonical preview URL answers, then
