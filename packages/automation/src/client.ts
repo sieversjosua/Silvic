@@ -3,6 +3,7 @@ import { connect } from "node:net";
 
 import {
   AutomationError,
+  automationCompatibilityAction,
   automationProtocolVersion,
   isRecord,
   type AutomationPeer,
@@ -167,8 +168,7 @@ function parseReply(
       {
         clientVersion,
         serverVersion: value["server"]["version"],
-        action:
-          "Install the Codex plugin artifact from the matching Silvic GitHub release, then start a new Codex task.",
+        action: automationCompatibilityAction(value["server"]["version"]),
       },
     );
   }

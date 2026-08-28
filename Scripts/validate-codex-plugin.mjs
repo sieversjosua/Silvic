@@ -2,25 +2,30 @@ import { access, readFile, stat } from "node:fs/promises";
 import { constants } from "node:fs";
 import { resolve } from "node:path";
 
+import {
+  assertBundledToolCatalog,
+  assertReleaseTag,
+  readReleaseContract,
+} from "./release-contract.mjs";
+
 const repositoryRoot = resolve(import.meta.dirname, "..");
 const readJson = async (path) =>
   JSON.parse(await readFile(resolve(repositoryRoot, path), "utf8"));
-const [root, desktop, cli, manifest, mcp, marketplace] = await Promise.all([
-  readJson("package.json"),
-  readJson("apps/desktop/package.json"),
-  readJson("apps/cli/package.json"),
+const { version } = await readReleaseContract(repositoryRoot);
+const tagArgument = process.argv.indexOf("--tag");
+if (tagArgument >= 0 && !process.argv[tagArgument + 1]) {
+  throw new Error("Missing value for --tag.");
+}
+assertReleaseTag(
+  version,
+  tagArgument >= 0 ? process.argv[tagArgument + 1] : undefined,
+);
+const [manifest, mcp, marketplace] = await Promise.all([
   readJson("plugins/silvic/.codex-plugin/plugin.json"),
   readJson("plugins/silvic/.mcp.json"),
   readJson(".agents/plugins/marketplace.json"),
 ]);
 
-if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(manifest.version)) {
-  throw new Error(`Plugin version is not strict semver: ${manifest.version}`);
-}
-const versions = [root.version, desktop.version, cli.version, manifest.version];
-if (!versions.every((version) => version === root.version)) {
-  throw new Error(`Release versions differ: ${versions.join(", ")}`);
-}
 if (
   manifest.name !== "silvic" ||
   manifest.mcpServers !== "./.mcp.json" ||
@@ -48,18 +53,26 @@ if (
 
 const launcher = resolve(repositoryRoot, "plugins/silvic/bin/silvic");
 const program = resolve(repositoryRoot, "plugins/silvic/bin/silvic.mjs");
+const skill = resolve(
+  repositoryRoot,
+  "plugins/silvic/skills/silvic-preview/SKILL.md",
+);
 await Promise.all([
   access(launcher, constants.X_OK),
   access(program, constants.X_OK),
+  access(skill, constants.R_OK),
 ]);
 if (((await stat(launcher)).mode & 0o111) === 0) {
   throw new Error("Plugin launcher is not executable.");
 }
-const bundledProgram = await readFile(program, "utf8");
-for (const tool of ["plan_plot_adoption", "adopt_plot", "provision_plot"]) {
-  if (!bundledProgram.includes(`\"${tool}\"`)) {
-    throw new Error(`Bundled plugin is missing MCP tool ${tool}`);
-  }
+await assertBundledToolCatalog(resolve(repositoryRoot, "plugins/silvic"));
+const skillSource = await readFile(skill, "utf8");
+if (
+  !/^---\s*[\s\S]*?^name:\s*silvic-preview\s*$[\s\S]*?^description:\s*\S/m.test(
+    skillSource,
+  )
+) {
+  throw new Error("Silvic preview skill frontmatter is missing or invalid.");
 }
 
-process.stdout.write(`Silvic Codex plugin ${manifest.version} is valid.\n`);
+process.stdout.write(`Silvic Codex plugin ${version} is valid.\n`);

@@ -4,6 +4,11 @@ import { chmod, cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import { promisify } from "node:util";
 
+import {
+  assertBundledToolCatalog,
+  readReleaseContract,
+} from "./release-contract.mjs";
+
 const executeFile = promisify(execFile);
 const repositoryRoot = resolve(import.meta.dirname, "..");
 const outputArgument = process.argv.indexOf("--output");
@@ -13,36 +18,9 @@ const outputRoot = resolve(
     : join(repositoryRoot, "release"),
 );
 
-const metadataPaths = [
-  "package.json",
-  "apps/desktop/package.json",
-  "apps/cli/package.json",
-  "plugins/silvic/.codex-plugin/plugin.json",
-];
-const metadata = await Promise.all(
-  metadataPaths.map(async (path) =>
-    JSON.parse(await readFile(join(repositoryRoot, path), "utf8")),
-  ),
-);
-const versions = metadata.map((entry) => entry.version);
-const version = versions[0];
-if (!versions.every((candidate) => candidate === version)) {
-  throw new Error(
-    `Release versions differ: ${metadataPaths.map((path, index) => `${path}=${versions[index]}`).join(", ")}`,
-  );
-}
-
+const { version } = await readReleaseContract(repositoryRoot);
 const pluginRoot = join(repositoryRoot, "plugins/silvic");
-const bundledProgram = await readFile(
-  join(pluginRoot, "bin/silvic.mjs"),
-  "utf8",
-);
-const requiredTools = ["plan_plot_adoption", "adopt_plot", "provision_plot"];
-for (const tool of requiredTools) {
-  if (!bundledProgram.includes(`\"${tool}\"`)) {
-    throw new Error(`Bundled plugin is missing MCP tool ${tool}`);
-  }
-}
+await assertBundledToolCatalog(pluginRoot);
 
 const directoryName = `Silvic-Codex-Plugin-${version}`;
 const stagingRoot = join(outputRoot, "codex-plugin");

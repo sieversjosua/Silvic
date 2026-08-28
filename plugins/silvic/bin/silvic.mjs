@@ -29174,15 +29174,21 @@ import { connect } from "node:net";
 // ../../packages/automation/src/protocol.ts
 var automationProtocolVersion = 2;
 var AutomationError = class extends Error {
-  constructor(code, message, details) {
+  constructor(code, message, details, reply) {
     super(message);
     this.code = code;
     this.details = details;
+    this.reply = reply;
     this.name = "AutomationError";
   }
   code;
   details;
+  reply;
 };
+function automationCompatibilityAction(version3) {
+  const release = version3 ? `Silvic ${version3}` : "the matching Silvic release";
+  return `Install the Codex plugin artifact from ${release}, fully restart Codex, and start a new task.`;
+}
 function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -29319,7 +29325,7 @@ function parseReply(line, id, clientVersion) {
       {
         clientVersion,
         serverVersion: value["server"]["version"],
-        action: "Install the Codex plugin artifact from the matching Silvic GitHub release, then start a new Codex task."
+        action: automationCompatibilityAction(value["server"]["version"])
       }
     );
   }

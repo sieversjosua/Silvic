@@ -23,8 +23,10 @@ sudo ln -s "/Applications/Silvic.app/Contents/Resources/bin/silvic" /usr/local/b
 The launcher uses the Electron runtime signed and shipped inside `Silvic.app`;
 it does not resolve `node` through the invoking shell's `PATH`. This makes the
 installed CLI work from SSH, launchd, Codex MCP, and other non-interactive
-environments. For repository development, build the same bundled JavaScript
-program with:
+environments. It resolves POSIX symlink chains before locating its bundled
+program, so the documented `/usr/local/bin/silvic` link keeps working after an
+app update. For repository development, build the same bundled JavaScript program
+with:
 
 ```sh
 pnpm --filter @silvic/cli build
@@ -184,11 +186,13 @@ Silvic app. Do not copy a plugin directory from a moving branch.
    selector and remove only that selector with `codex plugin remove`.
 4. Fully restart Codex and open a new task so no old MCP process remains.
 
-Silvic checks cached Codex plugin manifests at app startup. If it finds Silvic
-plugins but none match the app version, it shows the detected versions and an
-**Open update instructions** action for this exact release. Codex does not expose
-a safe in-place plugin update API to Silvic, so the app never rewrites Codex
-configuration or cache directories itself.
+At packaged-app startup Silvic reads `codex plugin list --json` as the
+authoritative enabled-selector inventory. Cache manifests are reported separately
+as `cachedVersions` and never prove that a matching plugin is active. A stale
+enabled selector, or a Silvic cache whose active selector cannot be verified,
+shows **Open update instructions** for the exact app release. Codex does not
+expose a safe in-place plugin update API to Silvic, so the app never rewrites
+Codex configuration or cache directories itself.
 
 After changing CLI or MCP source, refresh the bundled plugin executable and
 validate both packages:
@@ -196,6 +200,7 @@ validate both packages:
 ```sh
 pnpm --filter @silvic/cli build
 pnpm package:plugin
+node Scripts/verify-packaged-distribution.mjs --app /path/to/Silvic.app --plugin-archive release/Silvic-Codex-Plugin-0.1.53.tar.gz
 python3 ~/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py plugins/silvic
 python3 ~/.codex/skills/.system/skill-creator/scripts/quick_validate.py plugins/silvic/skills/silvic-preview
 ```

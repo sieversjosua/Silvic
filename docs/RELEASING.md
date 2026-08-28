@@ -47,11 +47,11 @@ The tag must exactly match `apps/desktop/package.json`. GitHub Actions then:
 
 1. repeats the full source checks;
 2. builds the CLI/MCP bundle and the versioned Codex marketplace artifact;
-3. validates the plugin, skill, complete tool catalog, checksum, and version parity;
+3. validates the plugin, skill, complete tool catalog, checksum, and version parity from one shared release contract;
 4. builds one Universal macOS app;
 5. signs every executable with Developer ID and enables Hardened Runtime;
 6. submits the app to Apple's notary service and staples the ticket;
-7. verifies the signature, Gatekeeper assessment, ticket and update metadata;
+7. verifies the signature, Gatekeeper assessment, ticket, update metadata, packaged CLI symlink, extracted plugin MCP handshake, and tool catalog without Node on `PATH`;
 8. creates the public GitHub Release only after every verification passes.
 
 An installed Silvic checks at every launch and every four hours, and downloads
@@ -90,6 +90,9 @@ Verify the plugin from the same release independently:
 ```bash
 shasum -a 256 -c Silvic-Codex-Plugin-0.1.53.tar.gz.sha256
 tar -tzf Silvic-Codex-Plugin-0.1.53.tar.gz
+node Scripts/verify-packaged-distribution.mjs \
+  --app /Applications/Silvic.app \
+  --plugin-archive Silvic-Codex-Plugin-0.1.53.tar.gz
 ```
 
 The archive must contain `.agents/plugins/marketplace.json`,

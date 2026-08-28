@@ -3,6 +3,7 @@ import { createServer, Socket, type Server } from "node:net";
 import { dirname } from "node:path";
 
 import {
+  AutomationError,
   assertCompatibleClient,
   automationProtocolVersion,
   errorBody,
@@ -83,9 +84,6 @@ async function answer(
   let replyProtocolVersion: number = automationProtocolVersion;
   const server = { name: "silvic-desktop" as const, version: serverVersion };
   try {
-    const envelope = requestEnvelope(line);
-    id = envelope.id;
-    replyProtocolVersion = envelope.protocolVersion;
     const request = parseAutomationRequest(line);
     id = request.id;
     replyProtocolVersion = automationProtocolVersion;
@@ -95,33 +93,14 @@ async function answer(
       `${JSON.stringify({ jsonrpc: "2.0", protocolVersion: automationProtocolVersion, server, id, ok: true, result })}\n`,
     );
   } catch (error) {
+    if (error instanceof AutomationError && error.reply) {
+      id = error.reply.id;
+      replyProtocolVersion = error.reply.protocolVersion;
+    }
     socket.end(
       `${JSON.stringify({ jsonrpc: "2.0", protocolVersion: replyProtocolVersion, server, id, ok: false, error: errorBody(error) })}\n`,
     );
   }
-}
-
-function requestEnvelope(line: string): {
-  id: string;
-  protocolVersion: number;
-} {
-  let value: unknown;
-  try {
-    value = JSON.parse(line);
-  } catch {
-    return { id: "invalid", protocolVersion: automationProtocolVersion };
-  }
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return { id: "invalid", protocolVersion: automationProtocolVersion };
-  }
-  const envelope = value as Record<string, unknown>;
-  return {
-    id: typeof envelope["id"] === "string" ? envelope["id"] : "invalid",
-    protocolVersion:
-      typeof envelope["protocolVersion"] === "number"
-        ? envelope["protocolVersion"]
-        : automationProtocolVersion,
-  };
 }
 
 function socketAcceptsConnections(socketPath: string): Promise<boolean> {

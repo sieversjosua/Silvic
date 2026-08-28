@@ -141,6 +141,7 @@ import { DesktopUpdater } from "./updater";
 import {
   inspectPluginCompatibility,
   pluginMismatchMessage,
+  readCodexPluginInventory,
 } from "./plugin-compatibility";
 import { startSessionRefreshLoop } from "./session-refresh";
 
@@ -280,7 +281,7 @@ if (!app.requestSingleInstanceLock()) {
 
   app.whenReady().then(async () => {
     setDevelopmentDockIcon();
-    void primeResolvedCommandPath();
+    await primeResolvedCommandPath();
     await migrateLegacySettings();
     nativeTheme.themeSource = settings.get("appearance");
     nativeTheme.on("updated", () => {
@@ -342,6 +343,7 @@ async function warnAboutPluginMismatch(): Promise<void> {
   const compatibility = await inspectPluginCompatibility({
     homeDirectory: homedir(),
     appVersion: app.getVersion(),
+    installedInventory: await readCodexPluginInventory(resolvedCommandPath()),
   });
   const warning = pluginMismatchMessage(compatibility);
   if (!warning) return;

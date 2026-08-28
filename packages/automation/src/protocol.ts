@@ -31,6 +31,11 @@ export interface AutomationErrorBody {
   details?: unknown;
 }
 
+export interface AutomationErrorReply {
+  id: string;
+  protocolVersion: number;
+}
+
 export type AutomationReply =
   | {
       protocolVersion: typeof automationProtocolVersion;
@@ -54,6 +59,7 @@ export class AutomationError extends Error {
     readonly code: string,
     message: string,
     readonly details?: unknown,
+    readonly reply?: AutomationErrorReply,
   ) {
     super(message);
     this.name = "AutomationError";
@@ -70,8 +76,20 @@ export function parseAutomationRequest(line: string): AutomationRequest {
   if (!isRecord(value)) {
     throw new AutomationError("INVALID_REQUEST", "Request must be an object.");
   }
+  const reply = {
+    id: typeof value["id"] === "string" ? value["id"] : "invalid",
+    protocolVersion:
+      typeof value["protocolVersion"] === "number"
+        ? value["protocolVersion"]
+        : automationProtocolVersion,
+  };
   if (value["jsonrpc"] !== "2.0") {
-    throw new AutomationError("INVALID_REQUEST", "jsonrpc must be 2.0.");
+    throw new AutomationError(
+      "INVALID_REQUEST",
+      "jsonrpc must be 2.0.",
+      undefined,
+      reply,
+    );
   }
   if (value["protocolVersion"] !== automationProtocolVersion) {
     throw new AutomationError(
@@ -80,9 +98,9 @@ export function parseAutomationRequest(line: string): AutomationRequest {
       {
         requested: value["protocolVersion"],
         supported: [automationProtocolVersion],
-        action:
-          "Install the Codex plugin artifact from the matching Silvic GitHub release, then start a new Codex task.",
+        action: automationCompatibilityAction(),
       },
+      reply,
     );
   }
   const id = value["id"];
@@ -97,7 +115,12 @@ export function parseAutomationRequest(line: string): AutomationRequest {
     !isAutomationPeer(client) ||
     !isRecord(params)
   ) {
-    throw new AutomationError("INVALID_REQUEST", "Request shape is invalid.");
+    throw new AutomationError(
+      "INVALID_REQUEST",
+      "Request shape is invalid.",
+      undefined,
+      reply,
+    );
   }
   return {
     jsonrpc: "2.0",
@@ -121,10 +144,14 @@ export function assertCompatibleClient(
       client: request.client,
       server: { name: "silvic-desktop", version: serverVersion },
       protocolVersion: automationProtocolVersion,
-      action:
-        "Install the Codex plugin artifact from the matching Silvic GitHub release, then start a new Codex task.",
+      action: automationCompatibilityAction(serverVersion),
     },
   );
+}
+
+export function automationCompatibilityAction(version?: string): string {
+  const release = version ? `Silvic ${version}` : "the matching Silvic release";
+  return `Install the Codex plugin artifact from ${release}, fully restart Codex, and start a new task.`;
 }
 
 export function errorBody(error: unknown): AutomationErrorBody {

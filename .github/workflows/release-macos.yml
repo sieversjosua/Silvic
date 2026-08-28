@@ -34,20 +34,7 @@ jobs:
           package-manager-cache: false
 
       - name: Verify release version
-        run: |
-          root_version="$(node -p "require('./package.json').version")"
-          desktop_version="$(node -p "require('./apps/desktop/package.json').version")"
-          cli_version="$(node -p "require('./apps/cli/package.json').version")"
-          plugin_version="$(node -p "require('./plugins/silvic/.codex-plugin/plugin.json').version")"
-          if [[ "$root_version" != "$desktop_version" || "$root_version" != "$cli_version" || "$root_version" != "$plugin_version" ]]; then
-            echo "::error::Release versions differ: root=$root_version desktop=$desktop_version cli=$cli_version plugin=$plugin_version"
-            exit 1
-          fi
-          expected="v$desktop_version"
-          if [[ "$GITHUB_REF_NAME" != "$expected" ]]; then
-            echo "::error::Tag $GITHUB_REF_NAME does not match app version $expected"
-            exit 1
-          fi
+        run: node Scripts/validate-codex-plugin.mjs --tag "$GITHUB_REF_NAME"
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -103,6 +90,9 @@ jobs:
           hdiutil verify "$dmg_path"
           test -f release/latest-mac.yml
           grep -q '\.zip' release/latest-mac.yml
+          node Scripts/verify-packaged-distribution.mjs \
+            --app "$app_path" \
+            --plugin-archive "release/Silvic-Codex-Plugin-${GITHUB_REF_NAME#v}.tar.gz"
 
       - name: Publish GitHub Release
         env:

@@ -56,6 +56,25 @@ it("round-trips structured requests over a user-local socket", async () => {
   });
 });
 
+it("accepts a plugin only when its explicit release matches the server", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "silvic-automation-"));
+  directories.push(directory);
+  const socketPath = join(directory, "automation.sock");
+  server = await startAutomationServer({
+    socketPath,
+    serverVersion: "0.1.53",
+    handle: async (request) => ({ client: request.client }),
+  });
+
+  const client = new AutomationClient({
+    socketPath,
+    client: { name: "silvic-codex-plugin", version: "0.1.53" },
+  });
+  await expect(client.call("snapshot")).resolves.toEqual({
+    client: { name: "silvic-codex-plugin", version: "0.1.53" },
+  });
+});
+
 it("preserves machine-readable server errors", async () => {
   const directory = await mkdtemp(join(tmpdir(), "silvic-automation-"));
   directories.push(directory);
@@ -99,7 +118,7 @@ it("rejects a version-skewed plugin with an actionable structured error", async 
       details: expect.objectContaining({
         client: { name: "silvic-codex-plugin", version: "0.1.46" },
         server: { name: "silvic-desktop", version: "0.1.53" },
-        action: expect.stringContaining("matching Silvic GitHub release"),
+        action: expect.stringContaining("Silvic 0.1.53"),
       }),
     }),
   );
