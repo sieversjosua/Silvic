@@ -1457,7 +1457,9 @@ async function provisionPlot(
   const progress = new PlotProgressReporter(
     workspace.git.branch,
     [
-      ...(remedy ? [{ id: remedyStepId, label: remedyLabel(remedy) }] : []),
+      ...(remedy === "convex-cli"
+        ? [{ id: remedyStepId, label: remedyLabel(remedy) }]
+        : []),
       ...recipe.provision.map((step, index) => ({
         id: provisionStepId(index),
         label: provisionStepLabel(step, index),
@@ -1476,7 +1478,7 @@ async function provisionPlot(
 
   try {
     let repair: ProvisionResult | undefined;
-    if (remedy) {
+    if (remedy === "convex-cli") {
       progress.began(remedyStepId);
       const startedAt = Date.now();
       const command = remedyCommand(remedy, packageManager);
@@ -1523,6 +1525,7 @@ async function provisionPlot(
         ...(packageManager ? { packageManager } : {}),
       },
       {
+        recreateConvex: remedy === "convex-recreate",
         onStepStart: ({ index }) => progress.began(provisionStepId(index)),
         onStepOutput: ({ index, chunk }) =>
           progress.wrote(provisionStepId(index), chunk),
