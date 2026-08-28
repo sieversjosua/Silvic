@@ -44,7 +44,11 @@ export class ConvexProvisioner {
   async run(
     step: ConvexStep,
     context: ProvisionContext,
-    options: { signal?: AbortSignal; onOutput?: (chunk: string) => void } = {},
+    options: {
+      signal?: AbortSignal;
+      onOutput?: (chunk: string) => void;
+      recreate?: boolean;
+    } = {},
   ): Promise<{ exitCode: number; output: string }> {
     const source = await readSourceEnvironment(
       context.sourceRoot,
@@ -114,7 +118,42 @@ export class ConvexProvisioner {
 
     const workspaceEnvPath = join(context.root, ".env.local");
     let workspaceEnvironment = await optionalFile(workspaceEnvPath);
-    if (!environmentValue(workspaceEnvironment, "CONVEX_DEPLOYMENT")) {
+    const previousWorkspaceEnvironment = workspaceEnvironment;
+    const configuredName = step.convex.name.replaceAll("{plot}", context.plot);
+    let deploymentName = configuredName;
+    if (options.recreate) {
+      if (!step.convex.expiration) {
+        throw new Error(
+          "Convex recovery requires an expiration on the typed Convex step",
+        );
+      }
+      const selected = convexDeploymentIn(workspaceEnvironment);
+      const expected = expectedDevDeployment(configuredName);
+      if (
+        !selected ||
+        selected.type !== "dev" ||
+        !matchesPlotDeployment(selected.name, expected) ||
+        selected.team !== target.team ||
+        selected.project !== target.project
+      ) {
+        throw new Error(
+          "Silvic will only replace the selected expiring dev deployment whose name, team, and project match this Plot's typed Convex recipe",
+        );
+      }
+      deploymentName = recoveryDeploymentName(configuredName);
+      announce(
+        `Replacing Convex dev deployment ${configuredName}; its data will not be copied and the previous deployment will expire ${step.convex.expiration}`,
+      );
+      workspaceEnvironment = withApplicationUrls(
+        withoutEnvironmentKeys(workspaceEnvironment, deploymentEnvironmentKeys),
+        context.url,
+      );
+      await writePrivateEnvironment(workspaceEnvPath, workspaceEnvironment);
+    }
+    if (
+      !options.recreate &&
+      !environmentValue(workspaceEnvironment, "CONVEX_DEPLOYMENT")
+    ) {
       // Before a deployment is selected, any file here is an interrupted
       // setup rather than an isolated environment. Rebuild it from the source
       // so a retry cannot silently keep a partial set of local variables.
@@ -129,10 +168,9 @@ export class ConvexProvisioner {
       await writePrivateEnvironment(workspaceEnvPath, workspaceEnvironment);
     }
 
-    const name = step.convex.name.replaceAll("{plot}", context.plot);
-    const reference = `${target.team}:${target.project}:${name}`;
+    const reference = `${target.team}:${target.project}:${deploymentName}`;
     if (!environmentValue(workspaceEnvironment, "CONVEX_DEPLOYMENT")) {
-      announce(`Creating Convex dev deployment ${name}`);
+      announce(`Creating Convex dev deployment ${deploymentName}`);
       const created = await runCli(
         [
           "deployment",
@@ -148,6 +186,12 @@ export class ConvexProvisioner {
         context.root,
       );
       if (created.exitCode !== 0) {
+        if (options.recreate) {
+          await writePrivateEnvironment(
+            workspaceEnvPath,
+            previousWorkspaceEnvironment,
+          );
+        }
         return failed("Creating the Convex deployment", created);
       }
       workspaceEnvironment = await optionalFile(workspaceEnvPath);
@@ -287,6 +331,42 @@ function convexTargetIn(
   const team = line?.match(/team:\s*([^,\s]+)/)?.[1];
   const project = line?.match(/project:\s*([^,\s]+)/)?.[1];
   return team && project ? { team, project } : undefined;
+}
+
+function convexDeploymentIn(
+  contents: string,
+): { type: string; name: string; team: string; project: string } | undefined {
+  const line = contents
+    .split(/\r?\n/)
+    .find((candidate) => environmentKey(candidate) === "CONVEX_DEPLOYMENT");
+  const value = line?.match(/^\s*CONVEX_DEPLOYMENT\s*=\s*([^\s#]+)/)?.[1];
+  const deployment = value?.match(/^([^:]+):(.+)$/);
+  const team = line?.match(/team:\s*([^,\s]+)/)?.[1];
+  const project = line?.match(/project:\s*([^,\s]+)/)?.[1];
+  const type = deployment?.[1];
+  const name = deployment?.[2];
+  return type && name && team && project
+    ? { type, name, team, project }
+    : undefined;
+}
+
+function expectedDevDeployment(name: string): string | undefined {
+  return name.startsWith("dev/") ? name.slice("dev/".length) : undefined;
+}
+
+function matchesPlotDeployment(
+  selected: string,
+  expected: string | undefined,
+): boolean {
+  return (
+    expected !== undefined &&
+    (selected === expected || selected.startsWith(`${expected}-recovery-`))
+  );
+}
+
+function recoveryDeploymentName(name: string): string {
+  const suffix = `-recovery-${Date.now().toString(36)}`;
+  return `${name.slice(0, 200 - suffix.length)}${suffix}`;
 }
 
 function mergeEnvironmentContents(primary: string, fallback: string): string {

@@ -29530,7 +29530,10 @@ var recipeSchema = external_exports.object({
   ).optional(),
   provision: external_exports.array(provisionStepSchema).max(50).optional()
 }).strict();
-var provisionRemedyIdSchema = external_exports.enum(["convex-cli"]);
+var provisionRemedyIdSchema = external_exports.enum([
+  "convex-cli",
+  "convex-recreate"
+]);
 var recipeSaveRequestSchema = external_exports.object({
   projectId: external_exports.string().min(1).max(400),
   recipe: recipeSchema
@@ -29886,6 +29889,10 @@ function formatAdoptionPlan(plan) {
     ...plan.steps.map(
       (step) => `step	${step.providerChanging ? "provider-change" : "local"}	${step.label}`
     ),
+    ...plan.recovery ? [
+      `recovery	provider-change	${plan.recovery.id}	${plan.recovery.label}${plan.recovery.dataLoss ? "	data-loss" : ""}`,
+      ...plan.recovery.detail ? [`recovery-detail	${plan.recovery.detail}`] : []
+    ] : [],
     ...plan.requiresProviderConfirmation ? [
       "confirmation	required	Use the selected stable Plot ID with --confirm."
     ] : []
@@ -29952,8 +29959,8 @@ function adoptionScope(value) {
   return value;
 }
 function provisionRemedy(value) {
-  if (value !== "convex-cli") {
-    throw new CliUsageError("--remedy must be convex-cli.");
+  if (value !== "convex-cli" && value !== "convex-recreate") {
+    throw new CliUsageError("--remedy must be convex-cli or convex-recreate.");
   }
   return value;
 }
@@ -29967,7 +29974,7 @@ Usage:
   silvic status --plot ID [--json]
   silvic adoption-plan --plot ID [--scope single|family] [--json]
   silvic adopt --plot ID [--scope single|family] --confirm STABLE_ID [--json]
-  silvic provision --plot ID --confirm STABLE_ID [--remedy convex-cli] [--json]
+  silvic provision --plot ID --confirm STABLE_ID [--remedy convex-cli|convex-recreate] [--json]
   silvic state-plan [--json]
   silvic state-prune --confirm PLAN_ID [--json]
   silvic start --plot ID [--runtime ID] [--json]
@@ -30114,7 +30121,7 @@ function buildMcpServer() {
       inputSchema: external_exports.object({
         plot: external_exports.string().min(1),
         confirmPlotId: external_exports.string().min(1),
-        remedy: external_exports.enum(["convex-cli"]).optional()
+        remedy: external_exports.enum(["convex-cli", "convex-recreate"]).optional()
       }),
       outputSchema,
       annotations: providerMutation

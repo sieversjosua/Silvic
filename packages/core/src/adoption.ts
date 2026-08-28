@@ -62,6 +62,12 @@ export function buildAdoptionPlan({
     "workspaceId" | "name" | "branch" | "path" | "status"
   >;
 }): PlotAdoptionPlan {
+  const selected = project.workspaces.find(
+    (workspace) => workspace.workspaceId === selectedWorkspaceId,
+  );
+  const recovery = selected?.provisioning?.steps.find(
+    (step) => step.exitCode !== 0 && step.remedy,
+  )?.remedy;
   const plannedSteps = steps.map((step, index) => ({
     label: provisionStepLabel(step, index),
     providerChanging: provisionStepChangesProvider(step),
@@ -80,9 +86,12 @@ export function buildAdoptionPlan({
       }),
     ),
     steps: plannedSteps,
-    requiresProviderConfirmation: plannedSteps.some(
-      (step) => step.providerChanging,
-    ),
+    ...(recovery
+      ? { recovery: { ...recovery, providerChanging: true as const } }
+      : {}),
+    requiresProviderConfirmation:
+      recovery !== undefined ||
+      plannedSteps.some((step) => step.providerChanging),
   };
 }
 
