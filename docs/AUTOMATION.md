@@ -117,6 +117,35 @@ report `failed` and `partialFailure` separately. Starting through CLI or MCP
 never confirms provider changes implicitly. This guard applies equally to one
 named runtime and to starting every declared runtime.
 
+## Disposable Plot policy
+
+A trusted repository can opt detached, one-use worktrees into bounded adoption:
+
+```json
+{
+  "automation": { "adoptDisposablePlots": true },
+  "provision": [
+    { "run": "pnpm install", "providerChanges": false },
+    {
+      "convex": { "name": "dev/{plot}", "expiration": "in 1 day" }
+    },
+    { "run": "pnpm build", "providerChanges": false }
+  ]
+}
+```
+
+On `start_runtimes`, Silvic evaluates the same adoption plan exposed by
+`plan_plot_adoption`. It proceeds only for one detached Plot when every shell
+step is declared local-only, every resource is isolated, and every created
+provider resource has a typed lifecycle Silvic can recover or expire. Today
+that includes local web runtimes, the WorkOS emulator, and an expiring Convex
+dev deployment. Unknown shell effects, provider resources without typed
+teardown, and `namespaced`, `shared`, or `manual` resources remain blocked.
+
+The start result includes `automaticAdoption.selectedPlotId`, the evaluated
+plan, and the member result. A blocked policy remains `ADOPTION_REQUIRED` and
+returns its reasons. Without the repository opt-in, behavior is unchanged.
+
 ## Workspace-state diagnostics
 
 State reconciliation is inspect-first and metadata-only:

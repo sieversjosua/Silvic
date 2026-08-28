@@ -278,6 +278,11 @@ interface AdoptionPlanResult {
     url: string;
   }[];
   steps: readonly { label: string; providerChanging: boolean }[];
+  automaticAdoption?: {
+    policy: "isolated-disposable";
+    eligible: boolean;
+    reasons: readonly string[];
+  };
   recovery?: {
     id: "convex-cli" | "convex-recreate";
     label: string;
@@ -390,6 +395,14 @@ function formatAdoptionPlan(plan: AdoptionPlanResult): string[] {
       (step) =>
         `step\t${step.providerChanging ? "provider-change" : "local"}\t${step.label}`,
     ),
+    ...(plan.automaticAdoption
+      ? [
+          `policy\t${plan.automaticAdoption.policy}\t${plan.automaticAdoption.eligible ? "eligible" : "blocked"}`,
+          ...plan.automaticAdoption.reasons.map(
+            (reason) => `policy-reason\t${reason}`,
+          ),
+        ]
+      : []),
     ...(plan.recovery
       ? [
           `recovery\tprovider-change\t${plan.recovery.id}\t${plan.recovery.label}${plan.recovery.dataLoss ? "\tdata-loss" : ""}`,
@@ -593,7 +606,7 @@ function buildMcpServer(): McpServer {
     "plan_plot_adoption",
     {
       description:
-        "Show the stable Plot identity, family members, and provider-changing steps before adoption or provisioning.",
+        "Show the stable Plot identity, family members, provider-changing steps, and any configured disposable-Plot policy before adoption or provisioning.",
       inputSchema: z.object({
         plot: z.string().min(1),
         scope: z.enum(["single", "family"]).optional(),

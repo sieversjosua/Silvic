@@ -93,6 +93,85 @@ describe("worktree adoption", () => {
     ]);
   });
 
+  it("approves only a detached Plot with local steps and expiring isolated resources", () => {
+    const detached = {
+      ...workspace("leaf", "main"),
+      branch: "(detached)",
+      git: { ...workspace("leaf", "main").git, branch: "(detached)" },
+    };
+    const plan = buildAdoptionPlan({
+      project: { ...project, workspaces: [workspace("main"), detached] },
+      selectedWorkspaceId: "leaf",
+      scope: "single",
+      steps: [
+        { label: "Install", run: "pnpm install", providerChanges: false },
+        {
+          convex: { name: "dev/{plot}", expiration: "in 1 day" },
+        },
+        { label: "Build", run: "pnpm build", providerChanges: false },
+      ],
+      resources: {
+        app: {
+          provider: "web",
+          kind: "runtime",
+          isolation: "isolated",
+          command: "web",
+        },
+        backend: {
+          provider: "convex",
+          kind: "backend",
+          isolation: "isolated",
+        },
+      },
+      automaticAdoption: true,
+      member: () => ({ port: 43123, url: "https://leaf.localhost" }),
+    });
+
+    expect(plan.steps).toEqual([
+      { label: "Install", providerChanging: false },
+      { label: "Convex deployment", providerChanging: true },
+      { label: "Build", providerChanging: false },
+    ]);
+    expect(plan.automaticAdoption).toEqual({
+      policy: "isolated-disposable",
+      eligible: true,
+      reasons: [],
+    });
+  });
+
+  it("keeps opaque steps, shared resources, and missing expiration fail closed", () => {
+    const detached = {
+      ...workspace("leaf", "main"),
+      branch: "(detached)",
+      git: { ...workspace("leaf", "main").git, branch: "(detached)" },
+    };
+    const plan = buildAdoptionPlan({
+      project: { ...project, workspaces: [workspace("main"), detached] },
+      selectedWorkspaceId: "leaf",
+      scope: "single",
+      steps: [
+        { label: "Install", run: "pnpm install" },
+        { convex: { name: "dev/{plot}" } },
+      ],
+      resources: {
+        auth: {
+          provider: "workos",
+          kind: "auth",
+          isolation: "shared",
+        },
+      },
+      automaticAdoption: true,
+      member: () => ({ port: 43123, url: "https://leaf.localhost" }),
+    });
+
+    expect(plan.automaticAdoption).toMatchObject({ eligible: false });
+    expect(plan.automaticAdoption?.reasons).toEqual([
+      "Install: shell steps must declare providerChanges false.",
+      "Convex deployment: an expiration is required.",
+      "auth: shared resources are not eligible for automatic adoption.",
+    ]);
+  });
+
   it("surfaces a failed provisioning recovery with its data-loss boundary", () => {
     const failedProject: ProjectSnapshot = {
       ...project,

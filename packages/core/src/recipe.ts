@@ -22,6 +22,7 @@ export interface ResolvedRecipe {
   commands: Readonly<Record<string, PlotCommand>>;
   resources: Readonly<Record<string, PlotResourceDefinition>>;
   provision: readonly ProvisionStep[];
+  automaticAdoption: boolean;
   /** False when the repository has no recipe and defaults were used. */
   configured: boolean;
 }
@@ -78,6 +79,7 @@ function resolveRecipe(
     commands: recipe.commands ?? {},
     resources: recipe.resources ?? {},
     provision: recipe.provision ?? [],
+    automaticAdoption: recipe.automation?.adoptDisposablePlots ?? false,
     configured: true,
   };
 }
@@ -136,6 +138,7 @@ function defaults(
     commands: {},
     resources: {},
     provision: [],
+    automaticAdoption: false,
     configured,
   };
 }

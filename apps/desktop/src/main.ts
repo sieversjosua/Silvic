@@ -1578,6 +1578,8 @@ async function planPlotAdoption(
     selectedWorkspaceId: request.workspaceId,
     scope: request.scope,
     steps: recipe.provision,
+    resources: recipe.resources,
+    automaticAdoption: recipe.automaticAdoption,
     member: (workspace) => {
       const plot = plotNameIn(workspace.path, recipe.project, workspace.branch);
       const stored = storedPlotPort(workspace.path);
@@ -2133,6 +2135,7 @@ async function automationPlotDefinition(
   commands: Readonly<Record<string, PlotCommand>>;
   resources: ResolvedRecipe["resources"];
   requiresProvisioning: boolean;
+  automaticAdoption: boolean;
   previewUrl?: string;
 }> {
   const recipe = await readRecipe(project.rootPath);
@@ -2151,6 +2154,7 @@ async function automationPlotDefinition(
     commands: recipe.commands,
     resources: recipe.resources,
     requiresProvisioning: recipe.provision.length > 0,
+    automaticAdoption: recipe.automaticAdoption,
     ...(servesPreview
       ? { previewUrl: addressFor(recipe, plot, port).url }
       : {}),

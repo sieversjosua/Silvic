@@ -114,19 +114,22 @@ function controller(
     probe?: (url: string) => Promise<boolean>;
     wait?: (milliseconds: number) => Promise<void>;
     now?: () => number;
+    snapshot?: () => SilvicSnapshot;
+    automaticAdoption?: boolean;
   } = {},
 ) {
   const workspace = options.workspace ?? plot;
   const projectSnapshot = { ...project, workspaces: [workspace] };
   const currentSnapshot = { ...snapshot, projects: [projectSnapshot] };
   return new AutomationController({
-    snapshot: () => currentSnapshot,
+    snapshot: options.snapshot ?? (() => currentSnapshot),
     roots: () => [project.rootPath],
     definition: async () => ({
       commands,
       resources: options.resources ?? {},
       previewUrl: "https://web-issue-9-silvic.localhost",
       requiresProvisioning: options.requiresProvisioning ?? false,
+      automaticAdoption: options.automaticAdoption ?? false,
     }),
     planAdoption:
       options.planAdoption ??
@@ -565,6 +568,172 @@ describe("automation operations", () => {
     } finally {
       await rm(plotPath, { recursive: true, force: true });
     }
+  });
+
+  it("automatically adopts an eligible detached Plot and returns the audit", async () => {
+    let current: WorkspaceSnapshot = {
+      ...plot,
+      branch: "(detached)",
+      git: { ...plot.git, branch: "(detached)" },
+      adoption: {
+        status: "not-adopted",
+        at: "2026-08-28T12:00:00.000Z",
+        attempt: 0,
+      },
+    };
+    const currentSnapshot = (): SilvicSnapshot => ({
+      ...snapshot,
+      projects: [{ ...project, workspaces: [current] }],
+    });
+    const plan: PlotAdoptionPlan = {
+      projectId: project.id,
+      scope: "single",
+      members: [
+        {
+          workspaceId: plot.workspaceId,
+          name: plot.name,
+          branch: "(detached)",
+          path: plot.path,
+          port: 43123,
+          url: "https://web-issue-9-silvic.localhost",
+          status: "not-adopted",
+        },
+      ],
+      steps: [
+        { label: "Install", providerChanging: false },
+        { label: "Convex deployment", providerChanging: true },
+      ],
+      automaticAdoption: {
+        policy: "isolated-disposable",
+        eligible: true,
+        reasons: [],
+      },
+      requiresProviderConfirmation: true,
+    };
+    const adopt = vi.fn(async () => {
+      current = {
+        ...current,
+        adoption: {
+          status: "adopted",
+          at: "2026-08-28T12:00:01.000Z",
+          attempt: 1,
+        },
+        provisioning: {
+          status: "complete",
+          at: "2026-08-28T12:00:01.000Z",
+          steps: [],
+        },
+      };
+      return {
+        members: [
+          {
+            workspaceId: plot.workspaceId,
+            name: plot.name,
+            status: "adopted" as const,
+          },
+        ],
+      };
+    });
+    const start = vi.fn(async () => undefined);
+
+    const result = await controller({
+      workspace: current,
+      snapshot: currentSnapshot,
+      automaticAdoption: true,
+      requiresProvisioning: true,
+      planAdoption: async () => plan,
+      adopt,
+      start,
+    }).handle(request("start", { plot: plot.workspaceId }));
+
+    expect(adopt).toHaveBeenCalledWith({
+      workspaceId: plot.workspaceId,
+      scope: "single",
+      confirmProviderChanges: true,
+    });
+    expect(start).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({
+      automaticAdoption: {
+        selectedPlotId: plot.workspaceId,
+        plan: { automaticAdoption: { eligible: true } },
+        result: { members: [{ status: "adopted" }] },
+      },
+    });
+  });
+
+  it("keeps an ineligible disposable Plot fail closed with policy reasons", async () => {
+    const detached: WorkspaceSnapshot = {
+      ...plot,
+      branch: "(detached)",
+      git: { ...plot.git, branch: "(detached)" },
+      adoption: {
+        status: "not-adopted",
+        at: "2026-08-28T12:00:00.000Z",
+        attempt: 0,
+      },
+    };
+    const adopt = vi.fn();
+    const start = vi.fn(async () => undefined);
+    const operation = controller({
+      workspace: detached,
+      automaticAdoption: true,
+      planAdoption: async () => ({
+        projectId: project.id,
+        scope: "single",
+        members: [],
+        steps: [{ label: "Deploy shared state", providerChanging: true }],
+        automaticAdoption: {
+          policy: "isolated-disposable",
+          eligible: false,
+          reasons: [
+            "Deploy shared state: shell steps must declare providerChanges false.",
+          ],
+        },
+        requiresProviderConfirmation: true,
+      }),
+      adopt,
+      start,
+    }).handle(request("start", { plot: plot.workspaceId }));
+
+    await expect(operation).rejects.toMatchObject({
+      code: "ADOPTION_REQUIRED",
+      details: {
+        automaticAdoption: {
+          selectedPlotId: plot.workspaceId,
+          plan: {
+            automaticAdoption: {
+              eligible: false,
+              reasons: [expect.stringContaining("providerChanges false")],
+            },
+          },
+        },
+      },
+    });
+    expect(adopt).not.toHaveBeenCalled();
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it("does not infer automatic approval for a detached Plot without repository opt-in", async () => {
+    const detached: WorkspaceSnapshot = {
+      ...plot,
+      branch: "(detached)",
+      git: { ...plot.git, branch: "(detached)" },
+      adoption: {
+        status: "not-adopted",
+        at: "2026-08-28T12:00:00.000Z",
+        attempt: 0,
+      },
+    };
+    const planAdoption = vi.fn();
+    const adopt = vi.fn();
+
+    await expect(
+      controller({ workspace: detached, planAdoption, adopt }).handle(
+        request("start", { plot: plot.workspaceId }),
+      ),
+    ).rejects.toMatchObject({ code: "ADOPTION_REQUIRED" });
+    expect(planAdoption).not.toHaveBeenCalled();
+    expect(adopt).not.toHaveBeenCalled();
   });
 
   it("does not start one runtime after required provisioning failed", async () => {
