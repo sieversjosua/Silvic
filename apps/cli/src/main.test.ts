@@ -1,5 +1,5 @@
 import { execFile, execFileSync } from "node:child_process";
-import { cp, mkdir, mkdtemp, rm } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -21,28 +21,18 @@ const releaseVersion = packageMetadata.version;
 const executable = resolve(repositoryRoot, "apps/cli/dist/silvic.mjs");
 const directories: string[] = [];
 let server: AutomationServer | undefined;
-let electronExecutable: string;
 let installedLauncher: string;
 let installedRoot: string;
+let packagedRuntimeExecutable: string;
 
 beforeAll(async () => {
   execFileSync("pnpm", ["--filter", "@silvic/cli", "build"], {
     cwd: repositoryRoot,
     stdio: "ignore",
   });
-  electronExecutable = execFileSync(
-    "pnpm",
-    [
-      "--filter",
-      "@silvic/desktop",
-      "exec",
-      "node",
-      "-p",
-      "require('electron')",
-    ],
-    { cwd: repositoryRoot, encoding: "utf8" },
-  ).trim();
   installedRoot = await mkdtemp(join(tmpdir(), "silvic-cli-install-"));
+  packagedRuntimeExecutable = join(installedRoot, "SilvicRuntime");
+  await symlink(process.execPath, packagedRuntimeExecutable);
   await mkdir(join(installedRoot, "bin"), { recursive: true });
   await mkdir(join(installedRoot, "lib"), { recursive: true });
   await cp(
@@ -104,11 +94,11 @@ it("writes one versioned JSON document and keeps stderr clean", async () => {
   });
 });
 
-it("starts the installed CLI and plugin without Node on PATH", async () => {
+it("starts the installed CLI and plugin with a packaged runtime and no Node on PATH", async () => {
   const environment = {
     HOME: tmpdir(),
     PATH: "/usr/bin:/bin",
-    SILVIC_APP_EXECUTABLE: electronExecutable,
+    SILVIC_APP_EXECUTABLE: packagedRuntimeExecutable,
   };
   const installed = await executeFile(installedLauncher, ["--version"], {
     env: environment,
