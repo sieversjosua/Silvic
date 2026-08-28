@@ -1,4 +1,9 @@
-export const automationProtocolVersion = 1 as const;
+export const automationProtocolVersion = 2 as const;
+
+export interface AutomationPeer {
+  name: "silvic-cli" | "silvic-codex-plugin" | "silvic-desktop";
+  version: string;
+}
 
 export type AutomationMethod =
   | "snapshot"
@@ -16,6 +21,7 @@ export type AutomationMethod =
 export interface AutomationRequest {
   jsonrpc: "2.0";
   protocolVersion: typeof automationProtocolVersion;
+  client: AutomationPeer;
   id: string;
   method: AutomationMethod;
   params: Record<string, unknown>;
@@ -27,9 +33,15 @@ export interface AutomationErrorBody {
   details?: unknown;
 }
 
+export interface AutomationErrorReply {
+  id: string;
+  protocolVersion: number;
+}
+
 export type AutomationReply =
   | {
       protocolVersion: typeof automationProtocolVersion;
+      server: AutomationPeer;
       jsonrpc: "2.0";
       id: string;
       ok: true;
@@ -37,6 +49,7 @@ export type AutomationReply =
     }
   | {
       protocolVersion: typeof automationProtocolVersion;
+      server: AutomationPeer;
       jsonrpc: "2.0";
       id: string;
       ok: false;
@@ -48,6 +61,7 @@ export class AutomationError extends Error {
     readonly code: string,
     message: string,
     readonly details?: unknown,
+    readonly reply?: AutomationErrorReply,
   ) {
     super(message);
     this.name = "AutomationError";
@@ -64,35 +78,82 @@ export function parseAutomationRequest(line: string): AutomationRequest {
   if (!isRecord(value)) {
     throw new AutomationError("INVALID_REQUEST", "Request must be an object.");
   }
+  const reply = {
+    id: typeof value["id"] === "string" ? value["id"] : "invalid",
+    protocolVersion:
+      typeof value["protocolVersion"] === "number"
+        ? value["protocolVersion"]
+        : automationProtocolVersion,
+  };
   if (value["jsonrpc"] !== "2.0") {
-    throw new AutomationError("INVALID_REQUEST", "jsonrpc must be 2.0.");
+    throw new AutomationError(
+      "INVALID_REQUEST",
+      "jsonrpc must be 2.0.",
+      undefined,
+      reply,
+    );
   }
   if (value["protocolVersion"] !== automationProtocolVersion) {
     throw new AutomationError(
       "UNSUPPORTED_PROTOCOL",
-      `Silvic automation protocol ${String(value["protocolVersion"])} is not supported.`,
-      { supported: [automationProtocolVersion] },
+      `This Silvic client uses automation protocol ${String(value["protocolVersion"])}; the installed app requires protocol ${automationProtocolVersion}. Update the Silvic Codex plugin or CLI to the same version as the app.`,
+      {
+        requested: value["protocolVersion"],
+        supported: [automationProtocolVersion],
+        action: automationCompatibilityAction(),
+      },
+      reply,
     );
   }
   const id = value["id"];
   const method = value["method"];
   const params = value["params"];
+  const client = value["client"];
   if (
     typeof id !== "string" ||
     id.length === 0 ||
     id.length > 100 ||
     !isAutomationMethod(method) ||
+    !isAutomationPeer(client) ||
     !isRecord(params)
   ) {
-    throw new AutomationError("INVALID_REQUEST", "Request shape is invalid.");
+    throw new AutomationError(
+      "INVALID_REQUEST",
+      "Request shape is invalid.",
+      undefined,
+      reply,
+    );
   }
   return {
     jsonrpc: "2.0",
     protocolVersion: automationProtocolVersion,
+    client,
     id,
     method,
     params,
   };
+}
+
+export function assertCompatibleClient(
+  request: AutomationRequest,
+  serverVersion: string,
+): void {
+  if (request.client.version === serverVersion) return;
+  throw new AutomationError(
+    "INCOMPATIBLE_CLIENT",
+    `Silvic ${serverVersion} cannot serve ${request.client.name} ${request.client.version}. Install the Codex plugin or CLI from Silvic ${serverVersion}.`,
+    {
+      client: request.client,
+      server: { name: "silvic-desktop", version: serverVersion },
+      protocolVersion: automationProtocolVersion,
+      action: automationCompatibilityAction(serverVersion),
+    },
+  );
+}
+
+export function automationCompatibilityAction(version?: string): string {
+  const release = version ? `Silvic ${version}` : "the matching Silvic release";
+  return `Install the Codex plugin artifact from ${release}, fully restart Codex, and start a new task.`;
 }
 
 export function errorBody(error: unknown): AutomationErrorBody {
@@ -126,5 +187,17 @@ function isAutomationMethod(value: unknown): value is AutomationMethod {
     value === "stop" ||
     value === "wait" ||
     value === "logs"
+  );
+}
+
+function isAutomationPeer(value: unknown): value is AutomationPeer {
+  return (
+    isRecord(value) &&
+    (value["name"] === "silvic-cli" ||
+      value["name"] === "silvic-codex-plugin" ||
+      value["name"] === "silvic-desktop") &&
+    typeof value["version"] === "string" &&
+    value["version"].length > 0 &&
+    value["version"].length <= 100
   );
 }

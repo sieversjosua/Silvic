@@ -34,24 +34,20 @@ jobs:
           package-manager-cache: false
 
       - name: Verify release version
-        run: |
-          root_version="$(node -p "require('./package.json').version")"
-          desktop_version="$(node -p "require('./apps/desktop/package.json').version")"
-          if [[ "$root_version" != "$desktop_version" ]]; then
-            echo "::error::Root version $root_version does not match app version $desktop_version"
-            exit 1
-          fi
-          expected="v$desktop_version"
-          if [[ "$GITHUB_REF_NAME" != "$expected" ]]; then
-            echo "::error::Tag $GITHUB_REF_NAME does not match app version $expected"
-            exit 1
-          fi
+        run: node Scripts/validate-codex-plugin.mjs --tag "$GITHUB_REF_NAME"
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
       - name: Verify source
         run: pnpm check
+
+      - name: Build and validate Codex plugin artifact
+        run: |
+          pnpm package:plugin
+          test -f "release/Silvic-Codex-Plugin-${GITHUB_REF_NAME#v}.tar.gz"
+          cd release
+          shasum -a 256 -c "Silvic-Codex-Plugin-${GITHUB_REF_NAME#v}.tar.gz.sha256"
 
       - name: Prepare Apple notarization key
         env:
@@ -94,14 +90,17 @@ jobs:
           hdiutil verify "$dmg_path"
           test -f release/latest-mac.yml
           grep -q '\.zip' release/latest-mac.yml
+          node Scripts/verify-packaged-distribution.mjs \
+            --app "$app_path" \
+            --plugin-archive "release/Silvic-Codex-Plugin-${GITHUB_REF_NAME#v}.tar.gz"
 
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           shopt -s nullglob
-          artifacts=(release/*.dmg release/*.zip release/latest-mac.yml release/*.blockmap)
-          if (( ${#artifacts[@]} < 3 )); then
+          artifacts=(release/*.dmg release/*.zip release/latest-mac.yml release/*.blockmap release/Silvic-Codex-Plugin-*.tar.gz release/Silvic-Codex-Plugin-*.tar.gz.sha256)
+          if (( ${#artifacts[@]} < 5 )); then
             echo "::error::Release artifacts are incomplete"
             exit 1
           fi

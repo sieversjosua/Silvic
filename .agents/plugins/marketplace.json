@@ -1,0 +1,20 @@
+{
+  "name": "silvic",
+  "interface": {
+    "displayName": "Silvic"
+  },
+  "plugins": [
+    {
+      "name": "silvic",
+      "source": {
+        "source": "local",
+        "path": "./plugins/silvic"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}

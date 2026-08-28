@@ -17,7 +17,12 @@ import { z } from "zod";
 import packageMetadata from "../package.json" with { type: "json" };
 
 const version = packageMetadata.version;
-const client = new AutomationClient();
+const client = new AutomationClient({
+  client: {
+    name: process.argv[2] === "mcp" ? "silvic-codex-plugin" : "silvic-cli",
+    version,
+  },
+});
 const executeFile = promisify(execFile);
 
 interface SnapshotResult {
@@ -875,6 +880,8 @@ void main(process.argv.slice(2)).catch((error: unknown) => {
     : automation &&
         (error.code === "SILVIC_UNAVAILABLE" ||
           error.code === "UNSUPPORTED_PROTOCOL" ||
+          error.code === "INCOMPATIBLE_CLIENT" ||
+          error.code === "INCOMPATIBLE_SERVER" ||
           error.code === "INVALID_REPLY")
       ? 3
       : automation &&

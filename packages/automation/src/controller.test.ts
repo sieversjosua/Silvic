@@ -83,6 +83,7 @@ function request(
   return {
     jsonrpc: "2.0",
     protocolVersion: automationProtocolVersion,
+    client: { name: "silvic-cli", version: "development" },
     id: "test-request",
     method,
     params,

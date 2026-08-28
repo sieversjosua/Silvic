@@ -3,6 +3,8 @@ import { createServer, Socket, type Server } from "node:net";
 import { dirname } from "node:path";
 
 import {
+  AutomationError,
+  assertCompatibleClient,
   automationProtocolVersion,
   errorBody,
   parseAutomationRequest,
@@ -16,9 +18,11 @@ export interface AutomationServer {
 
 export async function startAutomationServer({
   socketPath = automationSocketPath(),
+  serverVersion = "development",
   handle,
 }: {
   socketPath?: string;
+  serverVersion?: string;
   handle(request: AutomationRequest, signal: AbortSignal): Promise<unknown>;
 }): Promise<AutomationServer> {
   const clients = new Set<Socket>();
@@ -39,7 +43,7 @@ export async function startAutomationServer({
       if (newline < 0) return;
       answered = true;
       const line = buffered.slice(0, newline);
-      void answer(socket, line, handle, cancellation.signal);
+      void answer(socket, line, serverVersion, handle, cancellation.signal);
     });
     socket.on("error", () => socket.destroy());
     socket.once("close", () => {
@@ -72,20 +76,29 @@ export async function startAutomationServer({
 async function answer(
   socket: Socket,
   line: string,
+  serverVersion: string,
   handle: (request: AutomationRequest, signal: AbortSignal) => Promise<unknown>,
   signal: AbortSignal,
 ): Promise<void> {
   let id = "invalid";
+  let replyProtocolVersion: number = automationProtocolVersion;
+  const server = { name: "silvic-desktop" as const, version: serverVersion };
   try {
     const request = parseAutomationRequest(line);
     id = request.id;
+    replyProtocolVersion = automationProtocolVersion;
+    assertCompatibleClient(request, serverVersion);
     const result = await handle(request, signal);
     socket.end(
-      `${JSON.stringify({ jsonrpc: "2.0", protocolVersion: automationProtocolVersion, id, ok: true, result })}\n`,
+      `${JSON.stringify({ jsonrpc: "2.0", protocolVersion: automationProtocolVersion, server, id, ok: true, result })}\n`,
     );
   } catch (error) {
+    if (error instanceof AutomationError && error.reply) {
+      id = error.reply.id;
+      replyProtocolVersion = error.reply.protocolVersion;
+    }
     socket.end(
-      `${JSON.stringify({ jsonrpc: "2.0", protocolVersion: automationProtocolVersion, id, ok: false, error: errorBody(error) })}\n`,
+      `${JSON.stringify({ jsonrpc: "2.0", protocolVersion: replyProtocolVersion, server, id, ok: false, error: errorBody(error) })}\n`,
     );
   }
 }

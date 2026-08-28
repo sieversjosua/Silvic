@@ -49,8 +49,12 @@
     ],
     "extraResources": [
       {
-        "from": "../cli/dist/silvic.mjs",
+        "from": "../cli/bin/silvic",
         "to": "bin/silvic"
+      },
+      {
+        "from": "../cli/dist/silvic.mjs",
+        "to": "lib/silvic.mjs"
       }
     ],
     "mac": {

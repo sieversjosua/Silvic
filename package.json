@@ -12,6 +12,8 @@
     "build": "pnpm --filter @silvic/cli build && pnpm --filter @silvic/desktop build",
     "cli": "node apps/cli/dist/silvic.mjs",
     "package:mac": "pnpm --filter @silvic/desktop package:mac",
+    "validate:plugin": "node Scripts/validate-codex-plugin.mjs",
+    "package:plugin": "pnpm --filter @silvic/cli build && pnpm validate:plugin && node Scripts/build-codex-plugin.mjs",
     "release:version": "node Scripts/set-release-version.mjs",
     "test": "vitest run",
     "test:watch": "vitest",

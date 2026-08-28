@@ -22,6 +22,13 @@ Filesystem access, process execution, persistence, and external applications sta
 in the main process. IPC mutation handlers validate renderer inputs against the
 latest discovered snapshot.
 
+CLI and Codex-plugin automation crosses a separate per-user Unix socket. Its
+wire envelope carries a protocol revision plus the client role, client release,
+and desktop release. The desktop rejects mismatched protocol or release versions
+with a structured update action before dispatching a lifecycle method. This
+keeps tool-catalog drift from weakening the explicit stable-ID confirmation used
+by adoption and provisioning.
+
 ## Snapshot pipeline
 
 `ProjectService.snapshot()` recursively discovers repositories under configured

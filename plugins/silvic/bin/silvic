@@ -1,0 +1,54 @@
+#!/bin/sh
+set -eu
+
+source_path=$0
+link_depth=0
+while [ -L "$source_path" ]; do
+  link_depth=$((link_depth + 1))
+  if [ "$link_depth" -gt 40 ]; then
+    echo "silvic: the launcher symlink chain is too deep." >&2
+    exit 3
+  fi
+  source_dir=$(CDPATH= cd -- "$(dirname -- "$source_path")" && pwd)
+  link_target=$(readlink "$source_path")
+  case "$link_target" in
+    /*) source_path=$link_target ;;
+    *) source_path=$source_dir/$link_target ;;
+  esac
+done
+script_dir=$(CDPATH= cd -- "$(dirname -- "$source_path")" && pwd)
+
+if [ -n "${SILVIC_APP_EXECUTABLE:-}" ]; then
+  runtime=$SILVIC_APP_EXECUTABLE
+else
+  case "$script_dir" in
+    */Silvic.app/Contents/Resources/bin)
+      runtime=${script_dir%/Contents/Resources/bin}/Contents/MacOS/Silvic
+      ;;
+    *)
+      runtime=/Applications/Silvic.app/Contents/MacOS/Silvic
+      if [ ! -x "$runtime" ] && [ -n "${HOME:-}" ]; then
+        runtime=$HOME/Applications/Silvic.app/Contents/MacOS/Silvic
+      fi
+      ;;
+  esac
+fi
+
+if [ ! -x "$runtime" ]; then
+  echo "silvic: the packaged Silvic runtime was not found." >&2
+  echo "Install Silvic in /Applications, or set SILVIC_APP_EXECUTABLE to its executable." >&2
+  exit 3
+fi
+
+if [ -f "$script_dir/silvic.mjs" ]; then
+  program=$script_dir/silvic.mjs
+else
+  program=$script_dir/../lib/silvic.mjs
+fi
+
+if [ ! -f "$program" ]; then
+  echo "silvic: the bundled CLI program is missing from this installation." >&2
+  exit 3
+fi
+
+ELECTRON_RUN_AS_NODE=1 exec "$runtime" "$program" "$@"

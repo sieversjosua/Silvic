@@ -1,10 +1,10 @@
 import { execFile, execFileSync } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 
-import { afterEach, beforeAll, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
 
 import {
   AutomationError,
@@ -13,17 +13,48 @@ import {
   type AutomationServer,
 } from "@silvic/automation";
 
+import packageMetadata from "../package.json" with { type: "json" };
+
 const executeFile = promisify(execFile);
 const repositoryRoot = resolve(import.meta.dirname, "../../..");
+const releaseVersion = packageMetadata.version;
 const executable = resolve(repositoryRoot, "apps/cli/dist/silvic.mjs");
 const directories: string[] = [];
 let server: AutomationServer | undefined;
+let electronExecutable: string;
+let installedLauncher: string;
+let installedRoot: string;
 
-beforeAll(() => {
+beforeAll(async () => {
   execFileSync("pnpm", ["--filter", "@silvic/cli", "build"], {
     cwd: repositoryRoot,
     stdio: "ignore",
   });
+  electronExecutable = execFileSync(
+    "pnpm",
+    [
+      "--filter",
+      "@silvic/desktop",
+      "exec",
+      "node",
+      "-p",
+      "require('electron')",
+    ],
+    { cwd: repositoryRoot, encoding: "utf8" },
+  ).trim();
+  installedRoot = await mkdtemp(join(tmpdir(), "silvic-cli-install-"));
+  await mkdir(join(installedRoot, "bin"), { recursive: true });
+  await mkdir(join(installedRoot, "lib"), { recursive: true });
+  await cp(
+    resolve(repositoryRoot, "apps/cli/bin/silvic"),
+    join(installedRoot, "bin/silvic"),
+  );
+  await cp(executable, join(installedRoot, "lib/silvic.mjs"));
+  installedLauncher = join(installedRoot, "bin/silvic");
+});
+
+afterAll(async () => {
+  await rm(installedRoot, { recursive: true, force: true });
 });
 
 afterEach(async () => {
@@ -71,6 +102,27 @@ it("writes one versioned JSON document and keeps stderr clean", async () => {
       ],
     },
   });
+});
+
+it("starts the installed CLI and plugin without Node on PATH", async () => {
+  const environment = {
+    HOME: tmpdir(),
+    PATH: "/usr/bin:/bin",
+    SILVIC_APP_EXECUTABLE: electronExecutable,
+  };
+  const installed = await executeFile(installedLauncher, ["--version"], {
+    env: environment,
+  });
+  const plugin = await executeFile(
+    resolve(repositoryRoot, "plugins/silvic/bin/silvic"),
+    ["--version"],
+    { env: environment },
+  );
+
+  expect(installed.stdout.trim()).toBe(releaseVersion);
+  expect(plugin.stdout).toBe(installed.stdout);
+  expect(installed.stderr).toBe("");
+  expect(plugin.stderr).toBe("");
 });
 
 it("prints resource kind in human-readable Plot status", async () => {
@@ -403,6 +455,7 @@ async function serve(
   directories.push(directory);
   server = await startAutomationServer({
     socketPath: join(directory, "automation.sock"),
+    serverVersion: releaseVersion,
     handle,
   });
   return directory;

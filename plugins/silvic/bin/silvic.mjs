@@ -29172,17 +29172,23 @@ import { randomUUID } from "node:crypto";
 import { connect } from "node:net";
 
 // ../../packages/automation/src/protocol.ts
-var automationProtocolVersion = 1;
+var automationProtocolVersion = 2;
 var AutomationError = class extends Error {
-  constructor(code, message, details) {
+  constructor(code, message, details, reply) {
     super(message);
     this.code = code;
     this.details = details;
+    this.reply = reply;
     this.name = "AutomationError";
   }
   code;
   details;
+  reply;
 };
+function automationCompatibilityAction(version3) {
+  const release = version3 ? `Silvic ${version3}` : "the matching Silvic release";
+  return `Install the Codex plugin artifact from ${release}, fully restart Codex, and start a new task.`;
+}
 function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -29208,6 +29214,10 @@ var AutomationClient = class {
   call(method, params = {}, options = {}) {
     const id = randomUUID();
     const path = this.options.socketPath ?? automationSocketPath();
+    const client2 = this.options.client ?? {
+      name: "silvic-cli",
+      version: "development"
+    };
     const readinessTimeout = method === "wait" && typeof params["timeoutMs"] === "number" ? params["timeoutMs"] : 6e4;
     const timeoutMs = this.options.timeoutMs ?? (method === "wait" ? Math.min(readinessTimeout + 5e3, 605e3) : method === "adopt" || method === "provision" ? 605e3 : 65e3);
     return new Promise((resolve, reject) => {
@@ -29243,7 +29253,7 @@ var AutomationClient = class {
       options.signal?.addEventListener("abort", aborted2, { once: true });
       socket.once("connect", () => {
         socket.write(
-          `${JSON.stringify({ jsonrpc: "2.0", protocolVersion: automationProtocolVersion, id, method, params })}
+          `${JSON.stringify({ jsonrpc: "2.0", protocolVersion: automationProtocolVersion, client: client2, id, method, params })}
 `
         );
       });
@@ -29264,7 +29274,7 @@ var AutomationClient = class {
         if (newline < 0) return;
         let reply;
         try {
-          reply = parseReply(buffered.slice(0, newline), id);
+          reply = parseReply(buffered.slice(0, newline), id, client2.version);
         } catch (error51) {
           finish(() => reject(error51));
           return;
@@ -29295,17 +29305,28 @@ var AutomationClient = class {
     });
   }
 };
-function parseReply(line, id) {
+function parseReply(line, id, clientVersion) {
   let value;
   try {
     value = JSON.parse(line);
   } catch {
     throw new AutomationError("INVALID_REPLY", "Silvic returned invalid JSON.");
   }
-  if (!isRecord(value) || value["jsonrpc"] !== "2.0" || value["protocolVersion"] !== automationProtocolVersion || value["id"] !== id || typeof value["ok"] !== "boolean") {
+  if (!isRecord(value) || value["jsonrpc"] !== "2.0" || value["protocolVersion"] !== automationProtocolVersion || !isRecord(value["server"]) || value["server"]["name"] !== "silvic-desktop" || typeof value["server"]["version"] !== "string" || value["id"] !== id || typeof value["ok"] !== "boolean") {
     throw new AutomationError(
       "INVALID_REPLY",
       "Silvic returned an invalid reply."
+    );
+  }
+  if (value["server"]["version"] !== clientVersion && value["ok"]) {
+    throw new AutomationError(
+      "INCOMPATIBLE_SERVER",
+      `This client is ${clientVersion}, but the Silvic app is ${value["server"]["version"]}. Install matching versions before continuing.`,
+      {
+        clientVersion,
+        serverVersion: value["server"]["version"],
+        action: automationCompatibilityAction(value["server"]["version"])
+      }
     );
   }
   if (value["ok"]) return { ok: true, result: value["result"] };
@@ -29627,7 +29648,12 @@ var package_default = {
 
 // src/main.ts
 var version2 = package_default.version;
-var client = new AutomationClient();
+var client = new AutomationClient({
+  client: {
+    name: process.argv[2] === "mcp" ? "silvic-codex-plugin" : "silvic-cli",
+    version: version2
+  }
+});
 var executeFile = promisify(execFile);
 async function main(argv) {
   const command = argv[0];
@@ -30300,7 +30326,7 @@ void main(process.argv.slice(2)).catch((error51) => {
     process.stderr.write(`silvic: ${payload.message}
 `);
   }
-  process.exitCode = usage ? 2 : automation && (error51.code === "SILVIC_UNAVAILABLE" || error51.code === "UNSUPPORTED_PROTOCOL" || error51.code === "INVALID_REPLY") ? 3 : automation && (error51.code === "PLOT_NOT_FOUND" || error51.code === "RUNTIME_NOT_FOUND") ? 4 : automation && error51.code === "READINESS_TIMEOUT" ? 7 : automation && error51.code === "CANCELLED" ? 130 : automation && (error51.code === "RUNTIME_FAILED" || error51.code === "NO_PREVIEW" || error51.code === "CONFIRMATION_REQUIRED" || error51.code === "ADOPTION_REQUIRED" || error51.code === "PROVISIONING_REQUIRED" || error51.code === "STATE_PLAN_CONFIRMATION_REQUIRED") ? 5 : 1;
+  process.exitCode = usage ? 2 : automation && (error51.code === "SILVIC_UNAVAILABLE" || error51.code === "UNSUPPORTED_PROTOCOL" || error51.code === "INCOMPATIBLE_CLIENT" || error51.code === "INCOMPATIBLE_SERVER" || error51.code === "INVALID_REPLY") ? 3 : automation && (error51.code === "PLOT_NOT_FOUND" || error51.code === "RUNTIME_NOT_FOUND") ? 4 : automation && error51.code === "READINESS_TIMEOUT" ? 7 : automation && error51.code === "CANCELLED" ? 130 : automation && (error51.code === "RUNTIME_FAILED" || error51.code === "NO_PREVIEW" || error51.code === "CONFIRMATION_REQUIRED" || error51.code === "ADOPTION_REQUIRED" || error51.code === "PROVISIONING_REQUIRED" || error51.code === "STATE_PLAN_CONFIRMATION_REQUIRED") ? 5 : 1;
 });
 /*! Bundled license information:
 

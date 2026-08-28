@@ -8,7 +8,7 @@ export default defineConfig(({ mode }) => ({
     include:
       mode === "live"
         ? ["{apps,packages,connectors}/**/*.live.test.ts"]
-        : ["{apps,packages,connectors}/**/*.test.ts"],
+        : ["{Scripts,apps,packages,connectors}/**/*.test.ts"],
     exclude:
       mode === "live"
         ? ["**/node_modules/**"]
