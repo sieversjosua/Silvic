@@ -88,6 +88,7 @@ function forward(
         route,
         port,
         publicHost,
+        request.url ?? "/",
         upstreamResponse,
         response,
         context,
@@ -119,11 +120,18 @@ function forwardResponse(
   route: GateRoute,
   port: number,
   publicHost: string,
+  requestUrl: string,
   upstream: IncomingMessage,
   response: ServerResponse,
   context: ProxyContext,
 ): void {
   const status = upstream.statusCode ?? 0;
+  if (status === 404 && versionedViteOptimizerChunk(requestUrl)) {
+    context.recover(route, "vite-stale-optimized-dependency");
+    upstream.destroy();
+    respondHtml(response, 503, recoveryPage(route));
+    return;
+  }
   if (status < 500 || status >= 600) {
     writeUpstreamHead(response, upstream, publicHost, port);
     upstream.pipe(response);
@@ -160,6 +168,19 @@ function forwardResponse(
   });
   upstream.once("end", () => decide(true));
   upstream.once("error", () => decide(true));
+}
+
+function versionedViteOptimizerChunk(requestUrl: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(requestUrl, "http://silvic.local");
+  } catch {
+    return false;
+  }
+  if (!parsed.searchParams.get("v")) return false;
+  return /\/node_modules\/(?:\.vite|\.cache\/vite)\/(?:deps|deps_ssr)\/[^/]+\.js$/.test(
+    parsed.pathname,
+  );
 }
 
 function writeUpstreamHead(
