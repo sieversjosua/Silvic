@@ -172,6 +172,55 @@ describe("worktree adoption", () => {
     ]);
   });
 
+  it("surfaces a failed provisioning recovery with its data-loss boundary", () => {
+    const failedProject: ProjectSnapshot = {
+      ...project,
+      workspaces: project.workspaces.map((candidate) =>
+        candidate.workspaceId === "leaf"
+          ? {
+              ...candidate,
+              provisioning: {
+                status: "failed",
+                at: "2026-08-28T10:00:00.000Z",
+                steps: [
+                  {
+                    label: "Convex deployment",
+                    command: "Silvic isolated Convex environment",
+                    exitCode: 1,
+                    output: "Schema validation failed",
+                    durationMs: 10,
+                    remedy: {
+                      id: "convex-recreate",
+                      label: "Replace the isolated Convex deployment",
+                      dataLoss: true,
+                      detail: "Existing data is not copied.",
+                    },
+                  },
+                ],
+              },
+            }
+          : candidate,
+      ),
+    };
+
+    const plan = buildAdoptionPlan({
+      project: failedProject,
+      selectedWorkspaceId: "leaf",
+      scope: "single",
+      steps: [{ convex: { name: "dev/{plot}", expiration: "in 7 days" } }],
+      member: () => ({ port: 43123, url: "https://leaf.localhost" }),
+    });
+
+    expect(plan.recovery).toEqual({
+      id: "convex-recreate",
+      label: "Replace the isolated Convex deployment",
+      dataLoss: true,
+      detail: "Existing data is not copied.",
+      providerChanging: true,
+    });
+    expect(plan.requiresProviderConfirmation).toBe(true);
+  });
+
   it("adopts the selected stack ancestors without unrelated worktrees", () => {
     expect(
       adoptionMembers(project, "leaf", "family").map(

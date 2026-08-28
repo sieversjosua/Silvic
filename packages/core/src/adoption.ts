@@ -71,6 +71,12 @@ export function buildAdoptionPlan({
   >;
 }): PlotAdoptionPlan {
   const members = adoptionMembers(project, selectedWorkspaceId, scope);
+  const selected = project.workspaces.find(
+    (workspace) => workspace.workspaceId === selectedWorkspaceId,
+  );
+  const recovery = selected?.provisioning?.steps.find(
+    (step) => step.exitCode !== 0 && step.remedy,
+  )?.remedy;
   const plannedSteps = steps.map((step, index) => ({
     label: provisionStepLabel(step, index),
     providerChanging: provisionStepChangesProvider(step),
@@ -96,9 +102,12 @@ export function buildAdoptionPlan({
           }),
         }
       : {}),
-    requiresProviderConfirmation: plannedSteps.some(
-      (step) => step.providerChanging,
-    ),
+    ...(recovery
+      ? { recovery: { ...recovery, providerChanging: true as const } }
+      : {}),
+    requiresProviderConfirmation:
+      recovery !== undefined ||
+      plannedSteps.some((step) => step.providerChanging),
   };
 }
 

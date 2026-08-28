@@ -202,6 +202,37 @@ describe("Provisioner", () => {
     ).toBeUndefined();
   });
 
+  it("offers a data-losing replacement only for an expiring typed Convex deployment", () => {
+    const diagnosis = provisionDiagnosis(
+      {
+        convex: {
+          name: "dev/{plot}",
+          expiration: "in 7 days",
+        },
+      },
+      "Schema validation failed: Object contains extra field seatReconciledAt",
+    );
+
+    expect(diagnosis).toMatchObject({
+      advice: expect.stringContaining("repeating the push cannot succeed"),
+      remedy: {
+        id: "convex-recreate",
+        dataLoss: true,
+        detail: expect.stringContaining("not copied"),
+      },
+    });
+  });
+
+  it("keeps schema rollback recovery manual without expiration", () => {
+    const diagnosis = provisionDiagnosis(
+      { convex: { name: "dev/{plot}" } },
+      "Schema validation failed: Object contains extra field seatReconciledAt",
+    );
+
+    expect(diagnosis?.advice).toContain("will not replace");
+    expect(diagnosis?.remedy).toBeUndefined();
+  });
+
   it("repairs with the package manager the repository uses", () => {
     expect(remedyCommand("convex-cli", "pnpm")).toBe("pnpm add convex@1.40");
     expect(remedyCommand("convex-cli", "bun")).toBe("bun add convex@1.40");
@@ -481,6 +512,130 @@ describe("Convex provisioning step", () => {
     ]);
   });
 
+  it("replaces a matching expiring Plot deployment with an empty deployment", async () => {
+    const root = await plotRoot();
+    const source = await plotRoot();
+    await writeFile(
+      join(source, ".env.local"),
+      "CONVEX_DEPLOYMENT=dev:source # team: syntwin, project: mono\n",
+    );
+    await writeFile(
+      join(root, ".env.local"),
+      [
+        "CONVEX_DEPLOYMENT=dev:owner-onboarding # team: syntwin, project: mono",
+        "CONVEX_DEPLOY_KEY=old-secret",
+        "NEXT_PUBLIC_CONVEX_URL=https://old.convex.cloud",
+        "LOCAL_ONLY=kept",
+        "",
+      ].join("\n"),
+    );
+    const runner = new ConvexLifecycleRunner(root);
+
+    const [step] = await new Provisioner(runner).run(
+      [
+        {
+          convex: {
+            name: "dev/{plot}",
+            expiration: "in 7 days",
+          },
+        },
+      ],
+      {
+        root,
+        sourceRoot: source,
+        project: "syntwin-mono",
+        plot: "owner-onboarding",
+      },
+      { recreateConvex: true },
+    );
+
+    expect(step?.exitCode).toBe(0);
+    expect(runner.commands()).toEqual([
+      "env list",
+      expect.stringMatching(
+        /^deployment create syntwin:mono:dev\/owner-onboarding-recovery-[a-z0-9]+ --type dev --select --expiration in 7 days$/,
+      ),
+      "deployment token create silvic-owner-onboarding --save-env",
+      expect.stringMatching(/^env set --force --from-file /),
+      "dev --once",
+    ]);
+    const local = await readFile(join(root, ".env.local"), "utf8");
+    expect(local).toContain("LOCAL_ONLY=kept");
+    expect(local).not.toContain("old-secret");
+    expect(step?.output).toContain("data will not be copied");
+  });
+
+  it("refuses to replace a Convex deployment not owned by the typed Plot recipe", async () => {
+    const root = await plotRoot();
+    const source = await plotRoot();
+    await writeFile(
+      join(source, ".env.local"),
+      "CONVEX_DEPLOYMENT=dev:source # team: syntwin, project: mono\n",
+    );
+    await writeFile(
+      join(root, ".env.local"),
+      "CONVEX_DEPLOYMENT=dev:shared # team: syntwin, project: mono\n",
+    );
+
+    await expect(
+      new Provisioner(new ConvexLifecycleRunner(root)).run(
+        [
+          {
+            convex: {
+              name: "dev/{plot}",
+              expiration: "in 7 days",
+            },
+          },
+        ],
+        {
+          root,
+          sourceRoot: source,
+          project: "syntwin-mono",
+          plot: "owner-onboarding",
+        },
+        { recreateConvex: true },
+      ),
+    ).rejects.toThrow(/only replace.*match this Plot/i);
+  });
+
+  it("restores the selected deployment when replacement creation fails", async () => {
+    const root = await plotRoot();
+    const source = await plotRoot();
+    await writeFile(
+      join(source, ".env.local"),
+      "CONVEX_DEPLOYMENT=dev:source # team: syntwin, project: mono\n",
+    );
+    const original = [
+      "CONVEX_DEPLOYMENT=dev:owner-onboarding # team: syntwin, project: mono",
+      "CONVEX_DEPLOY_KEY=old-secret",
+      "NEXT_PUBLIC_CONVEX_URL=https://old.convex.cloud",
+      "",
+    ].join("\n");
+    await writeFile(join(root, ".env.local"), original);
+    const runner = new ConvexLifecycleRunner(root, true);
+
+    const [step] = await new Provisioner(runner).run(
+      [
+        {
+          convex: {
+            name: "dev/{plot}",
+            expiration: "in 7 days",
+          },
+        },
+      ],
+      {
+        root,
+        sourceRoot: source,
+        project: "syntwin-mono",
+        plot: "owner-onboarding",
+      },
+      { recreateConvex: true },
+    );
+
+    expect(step?.exitCode).toBe(1);
+    expect(await readFile(join(root, ".env.local"), "utf8")).toBe(original);
+  });
+
   it("prefers explicit team and project over the source checkout", async () => {
     const root = await plotRoot();
     const source = await plotRoot();
@@ -524,7 +679,10 @@ class ConvexLifecycleRunner implements CommandRunner {
   readonly requests: CommandRequest[] = [];
   serverEnvironment = "";
 
-  constructor(private readonly root: string) {}
+  constructor(
+    private readonly root: string,
+    private readonly failDeploymentCreation = false,
+  ) {}
 
   commands(): string[] {
     return this.requests.map((request) =>
@@ -546,6 +704,9 @@ class ConvexLifecycleRunner implements CommandRunner {
       );
     }
     if (command[0] === "deployment" && command[1] === "create") {
+      if (this.failDeploymentCreation) {
+        return failure("Provider refused replacement");
+      }
       const existing = await readFile(join(this.root, ".env.local"), "utf8");
       await writeFile(
         join(this.root, ".env.local"),

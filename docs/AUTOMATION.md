@@ -94,6 +94,22 @@ retried. Provisioning reruns the same idempotent recipe path as the desktop app.
 If a failed step offers the `convex-cli` remedy, pass
 `--remedy convex-cli` on the retry.
 
+A Convex push can also fail permanently when an older schema rejects data
+already stored in the Plot's deployment. The adoption plan then reports
+`convex-recreate` only when the typed Convex step has an expiration and the
+selected dev deployment matches the Plot's declared name, team, and project.
+This recovery creates a new empty, expiring deployment; documents and file
+storage are not copied, and the previous deployment remains until its existing
+expiration. Inspect that data-loss boundary before confirming:
+
+```sh
+silvic adoption-plan --plot plot_123 --json
+silvic provision --plot plot_123 --confirm plot_123 --remedy convex-recreate --json
+```
+
+Shared, manually managed, non-expiring, or mismatched deployments are never
+replaced. The failed step instead gives a manual recovery direction.
+
 The MCP equivalents are `plan_plot_adoption`, `adopt_plot`, and
 `provision_plot`. Both mutation tools require `confirmPlotId` to equal the
 selected stable Plot ID. Results retain every member and provisioning step and

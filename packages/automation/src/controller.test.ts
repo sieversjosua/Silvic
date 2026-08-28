@@ -452,6 +452,27 @@ describe("automation operations", () => {
     expect(result).toMatchObject({ failed: false, partialFailure: false });
   });
 
+  it("forwards an offered destructive Convex recovery as a closed remedy", async () => {
+    const provision = vi.fn(async () => ({
+      provision: [],
+      runtime: { status: "not-required" as const, durationMs: 0 },
+      readiness: { status: "not-required" as const, durationMs: 0 },
+    }));
+
+    await controller({ provision }).handle(
+      request("provision", {
+        plot: plot.workspaceId,
+        confirmPlotId: plot.workspaceId,
+        remedy: "convex-recreate",
+      }),
+    );
+
+    expect(provision).toHaveBeenCalledWith({
+      path: plot.path,
+      remedy: "convex-recreate",
+    });
+  });
+
   it("treats a repeated successful provisioning request as a no-op", async () => {
     const provision = vi.fn();
     const result = await controller({

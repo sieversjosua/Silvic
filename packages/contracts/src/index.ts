@@ -649,13 +649,20 @@ export type Recipe = z.infer<typeof recipeSchema>;
  * never by command: what actually runs is decided in the main process, from
  * the package manager the repository uses.
  */
-export const provisionRemedyIdSchema = z.enum(["convex-cli"]);
+export const provisionRemedyIdSchema = z.enum([
+  "convex-cli",
+  "convex-recreate",
+]);
 export type ProvisionRemedyId = z.infer<typeof provisionRemedyIdSchema>;
 
 export interface ProvisionRemedy {
   id: ProvisionRemedyId;
   /** What the button offering it says. */
   label: string;
+  /** Provider data that will not be copied into the replacement resource. */
+  dataLoss?: boolean;
+  /** What changes and why an ordinary retry cannot recover it. */
+  detail?: string;
 }
 
 export interface ProvisionResult {
@@ -823,6 +830,8 @@ export interface PlotAdoptionPlan {
     eligible: boolean;
     reasons: readonly string[];
   };
+  /** Recovery offered by the selected Plot's last failed provisioning step. */
+  recovery?: ProvisionRemedy & { providerChanging: true };
   requiresProviderConfirmation: boolean;
 }
 

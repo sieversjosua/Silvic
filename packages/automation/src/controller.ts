@@ -955,11 +955,14 @@ function optionalScope(params: Record<string, unknown>): "single" | "family" {
 
 function optionalRemedy(
   params: Record<string, unknown>,
-): "convex-cli" | undefined {
+): "convex-cli" | "convex-recreate" | undefined {
   const value = params["remedy"];
   if (value === undefined) return undefined;
-  if (value !== "convex-cli") {
-    throw new AutomationError("INVALID_ARGUMENT", "remedy must be convex-cli.");
+  if (value !== "convex-cli" && value !== "convex-recreate") {
+    throw new AutomationError(
+      "INVALID_ARGUMENT",
+      "remedy must be convex-cli or convex-recreate.",
+    );
   }
   return value;
 }

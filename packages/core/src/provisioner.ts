@@ -46,8 +46,18 @@ export class Provisioner {
       /** Each chunk the running step prints, in the order it arrives. */
       onStepOutput?: (step: { index: number; chunk: string }) => void;
       onStep?: (result: ProvisionResult, index: number) => void;
+      /** Replace only an expiring, Plot-owned Convex dev deployment. */
+      recreateConvex?: boolean;
     } = {},
   ): Promise<ProvisionResult[]> {
+    if (
+      options.recreateConvex &&
+      steps.filter((step) => isConvexStep(step)).length !== 1
+    ) {
+      throw new Error(
+        "Convex recovery requires exactly one typed Convex provisioning step",
+      );
+    }
     const results: ProvisionResult[] = [];
     for (const [index, step] of steps.entries()) {
       const startedAt = Date.now();
@@ -67,7 +77,10 @@ export class Provisioner {
           : {}),
       };
       const result: { exitCode: number; output: string } = isConvexStep(step)
-        ? await this.convexProvisioner.run(step, context, stepOptions)
+        ? await this.convexProvisioner.run(step, context, {
+            ...stepOptions,
+            recreate: options.recreateConvex === true,
+          })
         : isWorkosStep(step)
           ? await this.workosProvisioner.run(step, context, stepOptions)
           : await this.runner
@@ -138,6 +151,25 @@ export function provisionDiagnosis(
     };
   }
   if (!isConvexStep(step)) return undefined;
+  if (/Schema validation failed/i.test(output)) {
+    if (step.convex.expiration) {
+      return {
+        advice:
+          "The existing isolated Convex deployment contains data rejected by this schema, so repeating the push cannot succeed. Recreate the Plot's expiring dev deployment to continue with an empty database.",
+        remedy: {
+          id: "convex-recreate",
+          label: "Replace the isolated Convex deployment and discard its data",
+          dataLoss: true,
+          detail:
+            "Creates a new expiring dev deployment for this Plot. Documents and file storage in the current deployment are not copied; the previous deployment remains until its configured expiration.",
+        },
+      };
+    }
+    return {
+      advice:
+        "The existing Convex deployment contains data rejected by this schema, so repeating the push cannot succeed. Silvic will not replace a deployment without a configured expiration; remove the incompatible data in Convex or add an expiration to this Plot's isolated Convex recipe before retrying.",
+    };
+  }
   if (!/unknown command '?deployment'?|no project configured/i.test(output)) {
     return undefined;
   }
@@ -176,10 +208,11 @@ export function remedyCommand(
   remedy: ProvisionRemedyId,
   packageManager: PackageManager | undefined,
 ): string {
-  // One remedy so far; the switch is where the next one goes.
   switch (remedy) {
     case "convex-cli":
       return `${addPackage(packageManager)} convex@${convexDeploymentMinimum}`;
+    case "convex-recreate":
+      throw new Error("Convex recreation is handled by the typed provisioner");
   }
 }
 
@@ -188,6 +221,8 @@ export function remedyLabel(remedy: ProvisionRemedyId): string {
   switch (remedy) {
     case "convex-cli":
       return `Install convex ${convexDeploymentMinimum}`;
+    case "convex-recreate":
+      return "Replace isolated Convex deployment";
   }
 }
 
