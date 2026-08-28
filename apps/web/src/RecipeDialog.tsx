@@ -133,6 +133,9 @@ export function RecipeDialog({
         : findings?.packageManager
           ? { packageManager: findings.packageManager }
           : {}),
+      ...(document?.recipe.automation
+        ? { automation: document.recipe.automation }
+        : {}),
       ...(directory.trim() ? { plots: { directory: directory.trim() } } : {}),
       ...(commands.length > 0
         ? {

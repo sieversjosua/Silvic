@@ -29434,7 +29434,9 @@ var openWorkspaceRequestSchema = external_exports.object({
 }).strict();
 var shellStepSchema = external_exports.object({
   run: external_exports.string().min(1).max(2e3),
-  label: external_exports.string().min(1).max(120).optional()
+  label: external_exports.string().min(1).max(120).optional(),
+  /** Explicitly declares a local-only command for bounded automation. */
+  providerChanges: external_exports.literal(false).optional()
 }).strict();
 var convexStepSchema = external_exports.object({
   convex: external_exports.object({
@@ -29520,6 +29522,7 @@ var recipeSchema = external_exports.object({
   project: external_exports.string().min(1).max(120).optional(),
   packageManager: packageManagerSchema.optional(),
   plots: external_exports.object({ directory: external_exports.string().min(1).max(400).optional() }).strict().optional(),
+  automation: external_exports.object({ adoptDisposablePlots: external_exports.boolean().default(false) }).strict().optional(),
   commands: external_exports.record(
     external_exports.string().regex(/^[a-z][a-z0-9-]*$/).max(60),
     plotCommandSchema
@@ -29886,6 +29889,12 @@ function formatAdoptionPlan(plan) {
     ...plan.steps.map(
       (step) => `step	${step.providerChanging ? "provider-change" : "local"}	${step.label}`
     ),
+    ...plan.automaticAdoption ? [
+      `policy	${plan.automaticAdoption.policy}	${plan.automaticAdoption.eligible ? "eligible" : "blocked"}`,
+      ...plan.automaticAdoption.reasons.map(
+        (reason) => `policy-reason	${reason}`
+      )
+    ] : [],
     ...plan.requiresProviderConfirmation ? [
       "confirmation	required	Use the selected stable Plot ID with --confirm."
     ] : []
@@ -30073,7 +30082,7 @@ function buildMcpServer() {
   server.registerTool(
     "plan_plot_adoption",
     {
-      description: "Show the stable Plot identity, family members, and provider-changing steps before adoption or provisioning.",
+      description: "Show the stable Plot identity, family members, provider-changing steps, and any configured disposable-Plot policy before adoption or provisioning.",
       inputSchema: external_exports.object({
         plot: external_exports.string().min(1),
         scope: external_exports.enum(["single", "family"]).optional()

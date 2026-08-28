@@ -56,9 +56,14 @@ describe("readRecipe", () => {
         },
       },
       provision: [
-        { run: "bun install", label: "Install dependencies" },
+        {
+          run: "bun install",
+          label: "Install dependencies",
+          providerChanges: false,
+        },
         { run: "bun scripts/work-setup.ts" },
       ],
+      automation: { adoptDisposablePlots: true },
     });
 
     const recipe = await readRecipe(root);
@@ -77,6 +82,8 @@ describe("readRecipe", () => {
       dashboardUrl: "https://dashboard.workos.com/",
     });
     expect(recipe.provision).toHaveLength(2);
+    expect(recipe.provision[0]).toMatchObject({ providerChanges: false });
+    expect(recipe.automaticAdoption).toBe(true);
     expect(recipe.configured).toBe(true);
   });
 

@@ -308,6 +308,8 @@ export const shellStepSchema = z
   .object({
     run: z.string().min(1).max(2_000),
     label: z.string().min(1).max(120).optional(),
+    /** Explicitly declares a local-only command for bounded automation. */
+    providerChanges: z.literal(false).optional(),
   })
   .strict();
 
@@ -615,6 +617,10 @@ export const recipeSchema = z
       .object({ directory: z.string().min(1).max(400).optional() })
       .strict()
       .optional(),
+    automation: z
+      .object({ adoptDisposablePlots: z.boolean().default(false) })
+      .strict()
+      .optional(),
     commands: z
       .record(
         z
@@ -812,6 +818,11 @@ export interface PlotAdoptionPlan {
   scope: "single" | "family";
   members: readonly PlotAdoptionPlanMember[];
   steps: readonly { label: string; providerChanging: boolean }[];
+  automaticAdoption?: {
+    policy: "isolated-disposable";
+    eligible: boolean;
+    reasons: readonly string[];
+  };
   requiresProviderConfirmation: boolean;
 }
 

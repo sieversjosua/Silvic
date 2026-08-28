@@ -5,6 +5,7 @@ import type {
   PlotAdoptionPlanMember,
   PlotAdoptionRunResult,
   PlotProvisionRunResult,
+  PlotResourceDefinition,
   ProjectSnapshot,
   ProvisionStep,
   WorkspaceSnapshot,
@@ -13,9 +14,12 @@ import type {
 import { isConvexStep, isWorkosStep } from "@silvic/contracts";
 import { provisionStepLabel } from "./provisioner";
 
-/** Persistent providers are typed; opaque shell steps are disclosed as potential side effects. */
+/** Typed providers are known; shell steps stay opaque unless declared local-only. */
 export function provisionStepChangesProvider(step: ProvisionStep): boolean {
-  return isConvexStep(step) || (!isWorkosStep(step) && "run" in step);
+  return (
+    isConvexStep(step) ||
+    (!isWorkosStep(step) && "run" in step && step.providerChanges !== false)
+  );
 }
 
 export function adoptionMembers(
@@ -49,12 +53,16 @@ export function buildAdoptionPlan({
   selectedWorkspaceId,
   scope,
   steps,
+  resources = {},
+  automaticAdoption = false,
   member,
 }: {
   project: ProjectSnapshot;
   selectedWorkspaceId: string;
   scope: "single" | "family";
   steps: readonly ProvisionStep[];
+  resources?: Readonly<Record<string, PlotResourceDefinition>>;
+  automaticAdoption?: boolean;
   member(
     workspace: WorkspaceSnapshot,
   ): Omit<
@@ -62,6 +70,7 @@ export function buildAdoptionPlan({
     "workspaceId" | "name" | "branch" | "path" | "status"
   >;
 }): PlotAdoptionPlan {
+  const members = adoptionMembers(project, selectedWorkspaceId, scope);
   const plannedSteps = steps.map((step, index) => ({
     label: provisionStepLabel(step, index),
     providerChanging: provisionStepChangesProvider(step),
@@ -69,20 +78,88 @@ export function buildAdoptionPlan({
   return {
     projectId: project.id,
     scope,
-    members: adoptionMembers(project, selectedWorkspaceId, scope).map(
-      (workspace) => ({
-        workspaceId: workspace.workspaceId,
-        name: workspace.name,
-        branch: workspace.branch,
-        path: workspace.path,
-        status: workspace.adoption?.status ?? "not-adopted",
-        ...member(workspace),
-      }),
-    ),
+    members: members.map((workspace) => ({
+      workspaceId: workspace.workspaceId,
+      name: workspace.name,
+      branch: workspace.branch,
+      path: workspace.path,
+      status: workspace.adoption?.status ?? "not-adopted",
+      ...member(workspace),
+    })),
     steps: plannedSteps,
+    ...(automaticAdoption
+      ? {
+          automaticAdoption: assessAutomaticAdoption({
+            members,
+            steps,
+            resources,
+          }),
+        }
+      : {}),
     requiresProviderConfirmation: plannedSteps.some(
       (step) => step.providerChanging,
     ),
+  };
+}
+
+function assessAutomaticAdoption({
+  members,
+  steps,
+  resources,
+}: {
+  members: readonly WorkspaceSnapshot[];
+  steps: readonly ProvisionStep[];
+  resources: Readonly<Record<string, PlotResourceDefinition>>;
+}): NonNullable<PlotAdoptionPlan["automaticAdoption"]> {
+  const reasons: string[] = [];
+  if (members.length !== 1 || members[0]?.branch !== "(detached)") {
+    reasons.push(
+      "Automatic adoption is limited to one detached disposable Plot.",
+    );
+  }
+
+  const expiringConvex = steps.some(
+    (step) =>
+      isConvexStep(step) &&
+      step.convex.name.startsWith("dev/") &&
+      Boolean(step.convex.expiration),
+  );
+  const localWorkos = steps.some(isWorkosStep);
+  for (const [index, step] of steps.entries()) {
+    const label = provisionStepLabel(step, index);
+    if (isConvexStep(step)) {
+      if (!step.convex.name.startsWith("dev/")) {
+        reasons.push(`${label}: only a dev deployment can be automated.`);
+      }
+      if (!step.convex.expiration) {
+        reasons.push(`${label}: an expiration is required.`);
+      }
+    } else if (!isWorkosStep(step) && step.providerChanges !== false) {
+      reasons.push(`${label}: shell steps must declare providerChanges false.`);
+    }
+  }
+
+  for (const [id, resource] of Object.entries(resources)) {
+    if (resource.isolation !== "isolated") {
+      reasons.push(
+        `${id}: ${resource.isolation} resources are not eligible for automatic adoption.`,
+      );
+      continue;
+    }
+    if (resource.provider === "web" && resource.command) continue;
+    if (resource.provider === "convex" && expiringConvex) continue;
+    if (resource.provider === "workos" && localWorkos && resource.command) {
+      continue;
+    }
+    reasons.push(
+      `${id}: ${resource.provider} has no typed expiration or teardown managed by Silvic.`,
+    );
+  }
+
+  return {
+    policy: "isolated-disposable",
+    eligible: reasons.length === 0,
+    reasons,
   };
 }
 

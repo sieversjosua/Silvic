@@ -79,6 +79,7 @@ interface PlotDefinition {
   commands: Readonly<Record<string, PlotCommand>>;
   resources: Readonly<Record<string, PlotResourceDefinition>>;
   requiresProvisioning: boolean;
+  automaticAdoption?: boolean;
   previewUrl?: string;
 }
 
@@ -273,8 +274,13 @@ export class AutomationController {
 
   private async start(params: Record<string, unknown>, signal: AbortSignal) {
     assertOnly(params, ["plot", "runtime"]);
-    const found = this.findPlot(requiredString(params, "plot"));
-    const definition = await this.options.definition(found.project, found.plot);
+    let found = this.findPlot(requiredString(params, "plot"));
+    let definition = await this.options.definition(found.project, found.plot);
+    const automaticAdoption = await this.automaticallyAdopt(found, definition);
+    if (automaticAdoption) {
+      found = this.findPlot(found.plot.workspaceId);
+      definition = await this.options.definition(found.project, found.plot);
+    }
     this.assertStartable(found.plot, definition);
     const requested = optionalString(params, "runtime");
     const ids = selectRuntimeIds(definition.commands, requested);
@@ -315,7 +321,94 @@ export class AutomationController {
       results,
       plot: await this.describe(found.project, found.plot),
       partialFailure: results.some((result) => result.action === "failed"),
+      ...(automaticAdoption ? { automaticAdoption } : {}),
     };
+  }
+
+  private async automaticallyAdopt(
+    found: { project: ProjectSnapshot; plot: WorkspaceSnapshot },
+    definition: PlotDefinition,
+  ): Promise<
+    | {
+        selectedPlotId: string;
+        plan: PlotAdoptionPlan;
+        result: PlotAdoptionRunResult;
+      }
+    | undefined
+  > {
+    if (
+      found.plot.isPrimary ||
+      found.plot.adoption?.status === "adopted" ||
+      !definition.automaticAdoption ||
+      found.plot.branch !== "(detached)"
+    ) {
+      return undefined;
+    }
+
+    return this.withRecoveryLock(async () => {
+      const current = this.findPlot(found.plot.workspaceId);
+      if (current.plot.adoption?.status === "adopted") return undefined;
+      const plan = await this.options.planAdoption({
+        workspaceId: current.plot.workspaceId,
+        scope: "single",
+      });
+      if (!plan.automaticAdoption?.eligible) {
+        const auditedPlan: PlotAdoptionPlan = plan.automaticAdoption
+          ? plan
+          : {
+              ...plan,
+              automaticAdoption: {
+                policy: "isolated-disposable",
+                eligible: false,
+                reasons: [
+                  "The adoption plan did not include the configured policy.",
+                ],
+              },
+            };
+        throw new AutomationError(
+          "ADOPTION_REQUIRED",
+          "The project's automatic adoption policy did not approve this disposable Plot. Inspect the plan and confirm it explicitly.",
+          {
+            plotId: current.plot.workspaceId,
+            automaticAdoption: {
+              selectedPlotId: current.plot.workspaceId,
+              plan: auditedPlan,
+            },
+            recovery: {
+              cli: `silvic adoption-plan --plot ${current.plot.workspaceId}`,
+              mcp: "plan_plot_adoption",
+            },
+          },
+        );
+      }
+      const result = await this.options.adopt({
+        workspaceId: current.plot.workspaceId,
+        scope: "single",
+        confirmProviderChanges: true,
+      });
+      const failed = result.members.some(
+        (member) => member.status === "failed",
+      );
+      if (failed) {
+        throw new AutomationError(
+          "ADOPTION_REQUIRED",
+          "Automatic adoption failed; runtimes were not started.",
+          {
+            plotId: current.plot.workspaceId,
+            automaticAdoption: {
+              selectedPlotId: current.plot.workspaceId,
+              plan,
+              result,
+            },
+          },
+        );
+      }
+      return {
+        selectedPlotId: current.plot.workspaceId,
+        plan,
+        result,
+      };
+    });
   }
 
   private async stop(params: Record<string, unknown>, signal: AbortSignal) {

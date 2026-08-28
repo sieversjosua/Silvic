@@ -61,6 +61,9 @@ One optional file at the repository root. Every field optional.
     "directory": "../syntwin-mono.plots",
   },
 
+  // Opt in only detached, disposable worktrees to the bounded policy below.
+  "automation": { "adoptDisposablePlots": true },
+
   "commands": {
     // Serving commands get a named HTTPS address by default.
     // Set `portless: false` to keep only the stable localhost port.
@@ -92,10 +95,16 @@ One optional file at the repository root. Every field optional.
 
   // Ordered, idempotent, retryable. Each step reports what it did.
   "provision": [
-    { "run": "bun install" },
+    // Shell steps stay blocked unless the repository declares them local-only.
+    { "run": "bun install", "providerChanges": false },
     // Team and project are read from the source checkout's CONVEX_DEPLOYMENT
     // when they are left out. Silvic supplies its own compatible Convex CLI.
-    { "convex": { "name": "dev/{plot}" } },
+    {
+      "convex": {
+        "name": "dev/{plot}",
+        "expiration": "in 1 day",
+      },
+    },
   ],
 }
 ```
@@ -111,6 +120,22 @@ never reads credential values.
 tasks; named steps like `convex` are implemented by Silvic because they own an
 isolation contract and can report structured results — a deployment name Silvic
 can then display and link.
+
+`automation.adoptDisposablePlots` is a repository-owned approval for
+unattended startup of a single detached worktree. It does not apply to named
+branches or lineage families. The policy admits only:
+
+- shell steps that explicitly set `providerChanges: false`;
+- the local WorkOS emulator;
+- a Convex `dev/` deployment with an expiration; and
+- isolated resources whose lifecycle Silvic knows: local web runtimes, the
+  typed WorkOS emulator, and the expiring typed Convex deployment.
+
+Unknown shell effects, non-expiring provider resources, other isolated
+providers without typed teardown, and every `namespaced`, `shared`, or `manual`
+resource keep adoption fail closed. The default is unchanged. Automation
+returns the evaluated policy, reasons, adoption plan, and member result with the
+runtime-start response so an unattended run retains the decision record.
 
 The `workos` step is the second typed step, and the first whose isolation
 contract is entirely local: it points the app's `WORKOS_*` variables at a

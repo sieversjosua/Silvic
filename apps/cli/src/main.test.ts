@@ -247,6 +247,35 @@ it("plans adoption before provider changes run", async () => {
   });
 });
 
+it("prints automatic adoption eligibility and blocking reasons", async () => {
+  const directory = await serve(async () => ({
+    projectId: "project_123",
+    selectedPlotId: "plot_123",
+    scope: "single",
+    members: [],
+    steps: [{ label: "Deploy shared state", providerChanging: true }],
+    automaticAdoption: {
+      policy: "isolated-disposable",
+      eligible: false,
+      reasons: [
+        "Deploy shared state: shell steps must declare providerChanges false.",
+      ],
+    },
+    requiresProviderConfirmation: true,
+  }));
+
+  const result = await executeFile(
+    executable,
+    ["adoption-plan", "--plot", "plot_123"],
+    { env: { ...process.env, SILVIC_AUTOMATION_DIR: directory } },
+  );
+
+  expect(result.stdout).toContain("policy\tisolated-disposable\tblocked\n");
+  expect(result.stdout).toContain(
+    "policy-reason\tDeploy shared state: shell steps must declare providerChanges false.\n",
+  );
+});
+
 it("passes the literal stable Plot confirmation to adoption", async () => {
   const requests: AutomationRequest[] = [];
   const directory = await serve(async (request) => {
