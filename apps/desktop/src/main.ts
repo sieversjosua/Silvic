@@ -1,7 +1,14 @@
 import { existsSync, watch, type FSWatcher } from "node:fs";
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir, platform } from "node:os";
-import { basename, isAbsolute, join, normalize, relative } from "node:path";
+import {
+  basename,
+  isAbsolute,
+  join,
+  normalize,
+  relative,
+  resolve,
+} from "node:path";
 import { randomUUID } from "node:crypto";
 import {
   request as httpRequest,
@@ -144,10 +151,9 @@ import {
 } from "./application-menu";
 import { DesktopUpdater } from "./updater";
 import {
-  inspectPluginCompatibility,
-  pluginMismatchMessage,
-  readCodexPluginInventory,
-} from "./plugin-compatibility";
+  packagedCodexMarketplaceRoot,
+  reconcileCodexPlugin,
+} from "./codex-plugin-manager";
 import { startSessionRefreshLoop } from "./session-refresh";
 import {
   reserveRuntimePorts,
@@ -170,6 +176,8 @@ interface Settings {
   plotProvisioning: Record<string, PlotProvisioning>;
   /** Whether a plot's commands outlive the window that started them. */
   keepCommandsRunning: boolean;
+  /** Plugin version whose refreshed copy still needs a full Codex restart. */
+  codexPluginRestartRequiredVersion: string | null;
   /** What was left running, so a new window can take it back. */
   runningCommands: SupervisedCommand[];
 }
@@ -243,6 +251,7 @@ const settings = new Store<Settings>({
     runtimePorts: {},
     plotProvisioning: {},
     keepCommandsRunning: true,
+    codexPluginRestartRequiredVersion: null,
     runningCommands: [],
   },
 });
@@ -353,7 +362,7 @@ if (!app.requestSingleInstanceLock()) {
     registerIpc();
     installRootWatchers();
     createWindow();
-    void warnAboutPluginMismatch();
+    void reconcileCodexPluginAtStartup();
     scheduleAutomaticUpdateChecks();
     await paintFromGit(settings.get("roots"), "replace");
     void refreshConnectorObservations();
@@ -370,29 +379,120 @@ if (!app.requestSingleInstanceLock()) {
   });
 }
 
-async function warnAboutPluginMismatch(): Promise<void> {
+async function reconcileCodexPluginAtStartup(): Promise<void> {
   if (!app.isPackaged) return;
-  const compatibility = await inspectPluginCompatibility({
+  const marketplaceRoot = packagedCodexMarketplaceRoot({
+    resourcesPath: process.resourcesPath,
     homeDirectory: homedir(),
-    appVersion: app.getVersion(),
-    installedInventory: await readCodexPluginInventory(resolvedCommandPath()),
   });
-  const warning = pluginMismatchMessage(compatibility);
-  if (!warning) return;
+  if (!marketplaceRoot) {
+    await showPluginDialog({
+      message: "Silvic Codex plugin updates are paused",
+      detail: `The signed plugin source needs a permanent application path. Install the unrenamed app as /Applications/Silvic.app or ~/Applications/Silvic.app, then reopen Silvic. The current bundle at ${resolve(process.resourcesPath, "../..")} was not registered with Codex.`,
+      buttons: ["OK"],
+    });
+    return;
+  }
+  const options = {
+    marketplaceRoot,
+    appVersion: app.getVersion(),
+    commandPath: resolvedCommandPath(),
+  };
+  let reconciliation = await reconcileCodexPlugin({
+    ...options,
+    installIfMissing: false,
+  });
+  if (reconciliation.restartRequired) {
+    settings.set("codexPluginRestartRequiredVersion", app.getVersion());
+  }
+  if (reconciliation.status === "current") {
+    if (settings.get("codexPluginRestartRequiredVersion")) {
+      settings.set("codexPluginRestartRequiredVersion", app.getVersion());
+      const response = await showPluginDialog({
+        message: "Codex restart is still required",
+        detail: `Silvic ${app.getVersion()} and silvic@silvic match, but Silvic cannot prove that existing Codex tasks released the previous MCP process. Keep this reminder until you have quit Codex completely and opened a new task.`,
+        buttons: ["Keep reminder", "I restarted Codex"],
+      });
+      if (response === 1) {
+        settings.set("codexPluginRestartRequiredVersion", null);
+      }
+    }
+    return;
+  }
+
+  if (reconciliation.status === "not-installed") {
+    const response = await showPluginDialog({
+      message: "Install the Silvic Codex plugin?",
+      detail:
+        "Silvic will add its signed local marketplace and install silvic@silvic. Future Desktop updates refresh the same selector.",
+      buttons: ["Install plugin", "Not now"],
+    });
+    if (response !== 0) return;
+    reconciliation = await reconcileCodexPlugin({
+      ...options,
+      installIfMissing: true,
+    });
+    if (reconciliation.restartRequired) {
+      settings.set("codexPluginRestartRequiredVersion", app.getVersion());
+    }
+  }
+
+  if (reconciliation.status === "current") return;
+  if (reconciliation.status === "restart-required") {
+    settings.set(
+      "codexPluginRestartRequiredVersion",
+      reconciliation.appVersion,
+    );
+    const migrated = reconciliation.migratedSelectors.length
+      ? ` Migrated ${reconciliation.migratedSelectors.join(", ")}.`
+      : "";
+    await showPluginDialog({
+      message: "Restart Codex to finish the Silvic plugin update",
+      detail: `Codex now reports silvic@silvic ${reconciliation.appVersion}, and its MCP initialize and tool catalog passed.${migrated} Quit Codex completely, then open a new task so no older MCP process remains.`,
+      buttons: ["OK"],
+    });
+    return;
+  }
+
+  const response = await showPluginDialog({
+    message: "Silvic could not verify its Codex plugin",
+    detail: `${
+      reconciliation.migratedSelectors.length
+        ? `${reconciliation.detail ?? "The plugin update failed."} The stable plugin passed before migration, but these legacy selectors remain removed: ${reconciliation.migratedSelectors.join(", ")}.`
+        : `${reconciliation.detail ?? "The plugin update failed."} Silvic did not leave an unverified selector removed.`
+    }${reconciliation.restartRequired ? " Quit Codex completely before retrying because its cached plugin may already have changed." : ""}`,
+    buttons: ["Open recovery instructions", "Later"],
+  });
+  if (response === 0) {
+    await shell.openExternal(
+      `https://github.com/sieversjosua/Silvic/blob/v${encodeURIComponent(app.getVersion())}/docs/AUTOMATION.md#codex-plugin`,
+    );
+  }
+}
+
+async function showPluginDialog({
+  message,
+  detail,
+  buttons,
+}: {
+  message: string;
+  detail: string;
+  buttons: string[];
+}): Promise<number> {
   const options = {
     type: "warning" as const,
-    title: "Update Silvic Codex Plugin",
-    message: warning.message,
-    detail: warning.detail,
-    buttons: ["Open update instructions", "Later"],
+    title: "Silvic Codex Plugin",
+    message,
+    detail,
+    buttons,
     defaultId: 0,
-    cancelId: 1,
+    cancelId: Math.max(0, buttons.length - 1),
     noLink: true,
   };
   const result = mainWindow
     ? await dialog.showMessageBox(mainWindow, options)
     : await dialog.showMessageBox(options);
-  if (result.response === 0) await shell.openExternal(compatibility.updateUrl);
+  return result.response;
 }
 
 app.on("before-quit", () => {

@@ -55,6 +55,14 @@
       {
         "from": "../cli/dist/silvic.mjs",
         "to": "lib/silvic.mjs"
+      },
+      {
+        "from": "../../.agents",
+        "to": "codex-marketplace/.agents"
+      },
+      {
+        "from": "../../plugins/silvic",
+        "to": "codex-marketplace/plugins/silvic"
       }
     ],
     "mac": {

@@ -1,6 +1,8 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
+import codexPluginContract from "../packages/contracts/src/codex-plugin-contract.json" with { type: "json" };
+
 export const releaseMetadataPaths = [
   "package.json",
   "apps/desktop/package.json",
@@ -8,20 +10,7 @@ export const releaseMetadataPaths = [
   "plugins/silvic/.codex-plugin/plugin.json",
 ];
 
-export const requiredMcpTools = [
-  "list_projects",
-  "list_plots",
-  "plot_status",
-  "plan_plot_adoption",
-  "adopt_plot",
-  "provision_plot",
-  "plan_workspace_state",
-  "prune_workspace_state",
-  "start_runtimes",
-  "stop_runtimes",
-  "wait_for_preview",
-  "runtime_logs",
-];
+export const requiredMcpTools = codexPluginContract.tools;
 
 export async function readReleaseContract(repositoryRoot) {
   const metadata = await Promise.all(

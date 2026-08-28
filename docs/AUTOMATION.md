@@ -191,34 +191,115 @@ preview-lifecycle skill, and a bundled MCP server built from the same
 `AutomationClient` as the CLI. The MCP process uses the current MCP 2026-07-28
 wire implementation while retaining legacy-client negotiation.
 
-### Install or update the Codex plugin
+### Install the Codex plugin once
 
-Each GitHub release includes `Silvic-Codex-Plugin-<version>.tar.gz` and its
-`.sha256` file. Use the artifact whose version exactly matches the installed
-Silvic app. Do not copy a plugin directory from a moving branch.
+The packaged app carries a signed local marketplace at
+`Contents/Resources/codex-marketplace`. On first launch, Silvic offers to add
+that source with `codex plugin marketplace add` and install the permanent
+selector `silvic@silvic`. The app asks before the first installation and does
+not register a source until the bundle is named `Silvic.app` under
+`/Applications` or `~/Applications`.
 
-1. Quit running Codex tasks that use Silvic. Download both plugin files from the
-   matching GitHub release.
-2. Verify and extract the artifact without administrator privileges:
+If automatic installation is unavailable, quit Codex and run:
 
-   ```sh
-   shasum -a 256 -c Silvic-Codex-Plugin-0.1.53.tar.gz.sha256
-   tar -xzf Silvic-Codex-Plugin-0.1.53.tar.gz
-   ```
+```sh
+codex plugin marketplace list --json
+codex plugin marketplace add "/Applications/Silvic.app/Contents/Resources/codex-marketplace"
+codex plugin add silvic@silvic
+codex plugin list --json
+```
 
-3. Read the extracted `INSTALL.md`. It contains the version-specific local
-   marketplace and `codex plugin add` commands. Before replacing an older
-   install, use `codex plugin list` to find its full `silvic@marketplace`
-   selector and remove only that selector with `codex plugin remove`.
-4. Fully restart Codex and open a new task so no old MCP process remains.
+Stop before `marketplace add` if the first command reports a marketplace named
+`silvic` whose root is not the displayed app path. The last command must report
+an installed, enabled `silvic@silvic` whose version equals Silvic Desktop. Then
+fully restart Codex and open a new task.
 
-At packaged-app startup Silvic reads `codex plugin list --json` as the
-authoritative enabled-selector inventory. Cache manifests are reported separately
-as `cachedVersions` and never prove that a matching plugin is active. A stale
-enabled selector, or a Silvic cache whose active selector cannot be verified,
-shows **Open update instructions** for the exact app release. Codex does not
-expose a safe in-place plugin update API to Silvic, so the app never rewrites
-Codex configuration or cache directories itself.
+### Normal updates
+
+The macOS updater replaces the signed app bundle as one unit, including Desktop,
+CLI, and the marketplace source. At the next Silvic launch, the app refreshes
+the existing selector with `codex plugin add silvic@silvic`; it does not remove
+the selector first. Silvic then treats `codex plugin list --json` as the
+authoritative enabled inventory and verifies all three versions. Finally it
+starts the installed plugin copy with no Node dependency on `PATH`, completes a
+real MCP `initialize`, and compares the complete `tools/list` catalog.
+
+When that check passes after a change, Silvic asks for a full Codex restart.
+Silvic never kills Codex or an MCP process. A task that was already open can
+still hold the old process, so only a new task after the restart is current.
+Silvic keeps the versioned restart reminder across its own launches until the
+user confirms that Codex was fully restarted.
+
+### Migration from older selectors
+
+An existing `silvic@silvic-0-1-*` or `silvic@personal` installation is migrated
+only when its source manifest names this Silvic repository. The app first adds,
+version-checks, and MCP-checks
+`silvic@silvic`; only after all checks pass does it remove the recognized old
+selector. It leaves the old marketplace registered and does not touch any other
+plugin or marketplace.
+
+If Silvic reports an unrecognized selector or a different marketplace already
+named `silvic`, inspect both public inventories before changing anything:
+
+```sh
+codex plugin marketplace list --json
+codex plugin list --json
+```
+
+Do not remove the colliding entry unless you have established that it is the
+old Silvic source. Silvic stops and leaves it unchanged.
+
+### Rollback, manual distribution, and uninstall
+
+Every GitHub release still contains `Silvic-Codex-Plugin-<version>.tar.gz` and
+its `.sha256`. These are rollback and manual-distribution artifacts, not the
+normal companion update path. Use an artifact only with the exactly matching
+Silvic app, verify it with `shasum -a 256 -c`, and follow its `INSTALL.md`. The
+archive also uses marketplace `silvic` and selector `silvic@silvic`.
+
+Rolling back the signed app restores its matching marketplace source. Launch
+Silvic, let it refresh and verify the selector, then restart Codex. If the
+rollback fails before app replacement, the previous complete app and source
+remain; Silvic never stages individual plugin files beside the app.
+
+To use the extracted artifact as the source for a deliberate manual rollback,
+first inspect `codex plugin marketplace list --json`. Continue only when the
+existing `silvic` root is the exact app-bound path (or another extracted Silvic
+artifact) and its `plugins/silvic/.codex-plugin/plugin.json` names this
+repository. Then switch only that marketplace:
+
+```sh
+codex plugin marketplace remove silvic
+codex plugin marketplace add "$PWD/Silvic-Codex-Plugin-<version>"
+codex plugin add silvic@silvic
+```
+
+After the rollback check, restart Codex. To resume normal Desktop updates,
+repeat the same identity checks on the extracted source, remove only marketplace
+`silvic`, and add the marketplace under the installed `Silvic.app` again. Silvic
+never performs this source switch automatically because a same-named foreign
+marketplace must remain untouched.
+
+Removing `Silvic.app` also removes the signed source, but it intentionally does
+not rewrite Codex settings. The cached launcher then fails closed because the
+packaged Silvic runtime is missing. Remove only the companion selector when it
+is no longer wanted:
+
+```sh
+codex plugin remove silvic@silvic
+```
+
+For any version mismatch, failed Codex command, MCP error, or tool-catalog
+difference, Silvic shows the failure. If Codex may already have refreshed its
+cached copy, the restart reminder remains active even though verification
+failed. A migration failure restores any legacy selector already removed and
+confirms that recovery with `codex plugin list --json`; if restoration itself
+fails, the dialog names the selector that remains removed. Silvic never uses a
+cache directory as evidence of an active plugin and never edits Codex
+configuration or cache files directly.
+The complete update contract and source-placement rationale are documented in
+[Codex plugin updates](CODEX_PLUGIN_UPDATES.md).
 
 After changing CLI or MCP source, refresh the bundled plugin executable and
 validate both packages:

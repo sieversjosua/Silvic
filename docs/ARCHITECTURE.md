@@ -29,6 +29,13 @@ with a structured update action before dispatching a lifecycle method. This
 keeps tool-catalog drift from weakening the explicit stable-ID confirmation used
 by adoption and provisioning.
 
+The packaged Codex marketplace is part of the signed app bundle and therefore
+shares Desktop's atomic update and rollback boundary. Codex retains its own
+installed cache copy. Silvic refreshes that copy only through public
+`codex plugin` commands, verifies the enabled selector through
+`codex plugin list --json`, and performs an MCP handshake before removing a
+recognized legacy selector. See [Codex plugin updates](CODEX_PLUGIN_UPDATES.md).
+
 ## Snapshot pipeline
 
 `ProjectService.snapshot()` recursively discovers repositories under configured

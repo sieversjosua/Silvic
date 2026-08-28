@@ -1,5 +1,9 @@
 import { z } from "zod";
 
+import codexPluginContract from "./codex-plugin-contract.json" with { type: "json" };
+
+export const silvicCodexPlugin = codexPluginContract;
+
 export const connectorManifestSchema = z
   .object({
     id: z
