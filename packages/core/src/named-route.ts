@@ -80,7 +80,10 @@ export interface NamedRoutePublisher {
     request: PublishNamedRouteRequest,
   ): Promise<PublishedNamedRoute | undefined>;
   healthy(request: { routeName: string; port: number }): Promise<boolean>;
-  /** Revalidates that a persisted listener still belongs to this process tree. */
+  /**
+   * Revalidates that a persisted listener still belongs to this process tree.
+   * Publishers without this capability are always unverified and suspended.
+   */
   verify?(request: { processId: number; port: number }): Promise<boolean>;
   /**
    * Distinguishes a routed application error Silvic knows how to repair from

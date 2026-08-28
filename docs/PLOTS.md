@@ -137,7 +137,7 @@ Every supervised command receives a stable per-Attempt runtime context:
   and recipe command;
 - `PORT` and `SILVIC_RUNTIME_PORT` are the command's reserved main port;
 - `SILVIC_INSPECTOR_PORT` is a separately reserved side port; and
-- Node's `--inspect-port` is set to the same side port through `NODE_OPTIONS`.
+- Node's own inspector follows that port through `NODE_OPTIONS` when enabled.
 
 Reservations are persisted before launch, so parallel starts cannot choose the
 same candidate. The first browser-serving command keeps the Plot's established
@@ -151,9 +151,11 @@ derived from the Project, Plot and Attempt — no API keys or secrets are read o
 logged. The provider remains `shared`; only the agent identity is namespaced.
 Link the resource with `"command": "agent"` for this injection to apply.
 
-Some tools own a separate inspector and do not read Node options. Configure
-those tools from `SILVIC_INSPECTOR_PORT`. For the Cloudflare Vite plugin, whose
-default inspector is 9229, use:
+`NODE_OPTIONS` does not configure provider-owned inspectors. In particular,
+the Cloudflare/Vite Worker inspector is separate from Node's inspector. Generic
+Silvic cannot safely rewrite an arbitrary Vite or Astro configuration, so a
+project using that plugin must explicitly consume the reserved contract from
+`SILVIC_INSPECTOR_PORT`:
 
 ```ts
 cloudflare({
@@ -164,7 +166,9 @@ cloudflare({
 The same pattern applies when Astro composes the Cloudflare Vite plugin. A
 project must not call a “find a free inspector port” helper independently;
 that check-and-bind sequence can race another Plot. Silvic's reserved value is
-the cross-Plot coordination point.
+the cross-Plot coordination point. Until the project passes this value to the
+plugin, Silvic reserves and reports the port but does not claim that the
+Cloudflare/Vite inspector itself is isolated.
 
 ## Stable named URLs
 

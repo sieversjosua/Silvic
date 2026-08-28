@@ -23,7 +23,7 @@ const resources = {
 describe("runtime isolation", () => {
   it("reserves unique main and inspector ports and agent identities for five parallel Plots", () => {
     const taken = new Set([3_101, 3_102, 3_103, 3_104, 3_105]);
-    const attempts = Array.from({ length: 5 }, (_, index) => {
+    const environments = Array.from({ length: 5 }, (_, index) => {
       const attemptId = `workspace_attempt_${index}`;
       const port = reserveRuntimeSidePort(`${attemptId}/agent/port`, taken);
       const inspectorPort = reserveRuntimeSidePort(
@@ -41,13 +41,13 @@ describe("runtime isolation", () => {
       });
     });
 
-    const allPorts = attempts.flatMap((environment) => [
+    const allPorts = environments.flatMap((environment) => [
       environment["SILVIC_RUNTIME_PORT"],
       environment["SILVIC_INSPECTOR_PORT"],
     ]);
     expect(new Set(allPorts).size).toBe(10);
     expect(
-      new Set(attempts.map((environment) => environment.LIVEKIT_AGENT_NAME))
+      new Set(environments.map((environment) => environment.LIVEKIT_AGENT_NAME))
         .size,
     ).toBe(5);
     expect(allPorts.map(Number)).not.toContain(23_101);

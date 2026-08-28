@@ -109,7 +109,6 @@ import {
   plotPort,
   resolvePlotAddress,
   provisionEnvironment,
-  reserveRuntimeSidePort,
   runtimeIsolationEnvironment,
   primeResolvedCommandPath,
   provisionCompleted,
@@ -141,6 +140,10 @@ import {
 } from "./application-menu";
 import { DesktopUpdater } from "./updater";
 import { startSessionRefreshLoop } from "./session-refresh";
+import {
+  reserveRuntimePorts,
+  type RuntimePortReservations,
+} from "./runtime-reservations";
 
 interface Settings {
   roots: string[];
@@ -152,18 +155,13 @@ interface Settings {
   /** Plot path to the port it was assigned, so addresses stay stable. */
   plotPorts: Record<string, number>;
   /** Stable per-Attempt runtime and inspector reservations. */
-  runtimePorts: Record<string, Record<string, RuntimePortReservation>>;
+  runtimePorts: RuntimePortReservations;
   /** Plot path to the outcome of the last provisioning run there. */
   plotProvisioning: Record<string, PlotProvisioning>;
   /** Whether a plot's commands outlive the window that started them. */
   keepCommandsRunning: boolean;
   /** What was left running, so a new window can take it back. */
   runningCommands: SupervisedCommand[];
-}
-
-interface RuntimePortReservation {
-  port: number;
-  inspectorPort: number;
 }
 
 /** Enough of a failure to show and act on, without keeping whole build logs. */
@@ -1918,10 +1916,19 @@ async function startPlotCommand(
     plotPort(recipe.project, plot, takenPlotPorts());
   const address = addressFor(recipe, plot, port);
   const runtimePorts = reserveRuntimePorts({
-    workspace,
-    recipe,
+    store: {
+      read: () => settings.get("runtimePorts"),
+      write: (reservations) => settings.set("runtimePorts", reservations),
+    },
+    workspaceId: workspace.workspaceId,
+    commands: recipe.commands,
     commandId: id,
     plotPort: port,
+    claimedPlotPorts: Object.values(settings.get("plotPorts")),
+    activePorts: supervisor
+      .list()
+      .flatMap((runtime) => [runtime.expectedPort, runtime.targetPort])
+      .filter((candidate): candidate is number => candidate !== undefined),
   });
   let routeAdvice: string | undefined;
   if (address.named) {
@@ -2010,61 +2017,6 @@ async function automationPlotDefinition(
       ? { previewUrl: addressFor(recipe, plot, port).url }
       : {}),
   };
-}
-
-/**
- * Claims both numbers synchronously before the first await in startup. This is
- * the reservation boundary that prevents two parallel starts from observing
- * the same candidate as free.
- */
-function reserveRuntimePorts({
-  workspace,
-  recipe,
-  commandId,
-  plotPort: stablePlotPort,
-}: {
-  workspace: WorkspaceSnapshot;
-  recipe: ResolvedRecipe;
-  commandId: string;
-  plotPort: number;
-}): RuntimePortReservation {
-  const attemptPorts = settings.get("runtimePorts")[workspace.workspaceId];
-  const existing = attemptPorts?.[commandId];
-  if (existing) return existing;
-
-  const taken = new Set<number>([
-    ...Object.values(settings.get("plotPorts")),
-    ...Object.values(settings.get("plotPorts")).map((port) => port + 20_000),
-    ...Object.values(settings.get("runtimePorts")).flatMap((commands) =>
-      Object.values(commands).flatMap((reservation) => [
-        reservation.port,
-        reservation.inspectorPort,
-      ]),
-    ),
-    ...supervisor
-      .list()
-      .flatMap((runtime) => [runtime.expectedPort, runtime.targetPort])
-      .filter((port): port is number => port !== undefined),
-  ]);
-  const primaryServingCommand = Object.entries(recipe.commands).find(
-    ([, command]) => command.url === true,
-  )?.[0];
-  const identity = `${workspace.workspaceId}/${commandId}`;
-  const reservation = {
-    port:
-      commandId === primaryServingCommand
-        ? stablePlotPort
-        : reserveRuntimeSidePort(`${identity}/runtime`, taken),
-    inspectorPort: reserveRuntimeSidePort(`${identity}/inspector`, taken),
-  };
-  settings.set("runtimePorts", {
-    ...settings.get("runtimePorts"),
-    [workspace.workspaceId]: {
-      ...attemptPorts,
-      [commandId]: reservation,
-    },
-  });
-  return reservation;
 }
 
 /** The commands Silvic has running in a plot, by their recipe ids. */

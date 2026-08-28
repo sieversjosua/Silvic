@@ -12,6 +12,7 @@ import type {
   SilvicSnapshot,
   WorkspaceSnapshot,
 } from "@silvic/contracts";
+import { assessResourceIsolation } from "@silvic/contracts";
 import type { SupervisedCommand } from "@silvic/core";
 
 import { AutomationError, type AutomationRequest } from "./protocol";
@@ -492,36 +493,29 @@ export class AutomationController {
         };
       },
     );
-    const resources = Object.entries(definition.resources).map(
-      ([id, resource]): AutomationResource => ({
+    const resourceAssessments = Object.entries(definition.resources).map(
+      ([id, resource]) => ({
+        id,
+        resource,
+        assessment: assessResourceIsolation(resource),
+      }),
+    );
+    const resources = resourceAssessments.map(
+      ({ id, resource, assessment }): AutomationResource => ({
         id,
         provider: resource.provider,
         kind: resource.kind,
         isolation: resource.isolation,
         ...(resource.command ? { commandId: resource.command } : {}),
-        ...(resource.provider === "livekit" && resource.command
-          ? { runtimeIdentity: "namespaced" as const }
+        ...(assessment.runtimeIdentity
+          ? { runtimeIdentity: assessment.runtimeIdentity }
           : {}),
       }),
     );
-    const isolationDiagnostics = resources.flatMap((resource) => {
-      if (resource.isolation === "manual") {
-        return [
-          `${resource.id}: ${resource.provider} isolation is manual; Silvic displays the attachment but cannot verify or configure provider isolation.`,
-        ];
-      }
-      if (resource.isolation === "shared") {
-        if (resource.runtimeIdentity === "namespaced") {
-          return [
-            `${resource.id}: ${resource.provider} infrastructure is shared; Silvic namespaces this runtime's agent identity per Attempt, but provider data and credentials remain shared.`,
-          ];
-        }
-        return [
-          `${resource.id}: ${resource.provider} infrastructure is shared; Silvic does not claim provider-level isolation.`,
-        ];
-      }
-      return [];
-    });
+    const isolationDiagnostics = resourceAssessments.flatMap(
+      ({ id, assessment }) =>
+        assessment.warning ? [`${id}: ${assessment.warning}`] : [],
+    );
     return {
       id: plot.workspaceId,
       projectId: project.id,

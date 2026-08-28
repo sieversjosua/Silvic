@@ -1,4 +1,5 @@
 import {
+  assessResourceIsolation,
   plotResourceProviderCatalog,
   type ConnectorObservation,
   type PlotCommand,
@@ -98,16 +99,8 @@ function declaredResource(
 function resourceDetail(
   definition: PlotResourceDefinition,
 ): string | undefined {
-  if (definition.detail) return definition.detail;
-  if (definition.isolation === "manual") {
-    return "Manual provider isolation — Silvic can display this resource but cannot verify or configure its isolation.";
-  }
-  if (definition.isolation === "shared") {
-    return definition.provider === "livekit" && definition.command
-      ? "Shared provider infrastructure — Silvic namespaces the linked runtime's agent identity per Attempt; provider data and credentials remain shared."
-      : "Shared provider infrastructure — Silvic does not claim provider-level isolation.";
-  }
-  return undefined;
+  const warning = assessResourceIsolation(definition).warning;
+  return [definition.detail, warning].filter(Boolean).join(" — ") || undefined;
 }
 
 function commandResource(

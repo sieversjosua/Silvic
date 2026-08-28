@@ -528,24 +528,30 @@ export class CommandSupervisor {
     // could consequently overwhelm a warm Next dev server even though its
     // process, listener and named route had never stopped.
     if (entry.targetPort) {
-      const verified = await this.routePublisher.verify?.({
+      const verified = await this.verifyRouteOwnership({
         processId: entry.processId,
-        port: entry.targetPort,
-      });
-      const diagnosis = await this.routeDiagnosis({
-        routeName: entry.routeName,
         port: entry.targetPort,
       });
       const latest = this.running.get(key);
       if (!latest || latest.processId !== entry.processId) return;
-      if (verified !== false && diagnosis.status === "healthy") {
-        const { advice: _staleAdvice, ...healthy } = latest;
-        this.running.set(key, { ...healthy, status: "running" });
-        this.announce();
-        this.scheduleRouteHealth(key, entry.processId);
-        return;
+      if (!verified) {
+        // Suspend before any network diagnosis. A healthy response is not
+        // identity evidence and must never keep an unverifiable listener at
+        // the persisted canonical URL.
+        await this.routePublisher.remove(entry.routeName);
+      } else {
+        const diagnosis = await this.routeDiagnosis({
+          routeName: entry.routeName,
+          port: entry.targetPort,
+        });
+        if (diagnosis.status === "healthy") {
+          const { advice: _staleAdvice, ...healthy } = latest;
+          this.running.set(key, { ...healthy, status: "running" });
+          this.announce();
+          this.scheduleRouteHealth(key, entry.processId);
+          return;
+        }
       }
-      if (verified === false) await this.routePublisher.remove(entry.routeName);
     }
 
     this.running.set(key, {
@@ -626,8 +632,7 @@ export class CommandSupervisor {
       return;
     }
     if (
-      this.routePublisher.verify &&
-      !(await this.routePublisher.verify({
+      !(await this.verifyRouteOwnership({
         processId,
         port: entry.targetPort,
       }))
@@ -717,6 +722,18 @@ export class CommandSupervisor {
     return (await this.routePublisher.healthy(request))
       ? { status: "healthy" }
       : { status: "unavailable" };
+  }
+
+  /** Missing or broken verification is unverified, never implicitly trusted. */
+  private async verifyRouteOwnership(request: {
+    processId: number;
+    port: number;
+  }): Promise<boolean> {
+    try {
+      return (await this.routePublisher.verify?.(request)) === true;
+    } catch {
+      return false;
+    }
   }
 
   /** One cache rebuild and automatic restart, then a human decision. */

@@ -488,6 +488,34 @@ export type PlotResourceDefinition = z.infer<
   typeof plotResourceDefinitionSchema
 >;
 
+export interface ResourceIsolationAssessment {
+  /** Human-facing qualification; absent when the declared mode needs none. */
+  warning?: string;
+  /** Only the linked runtime identity is namespaced, not its provider. */
+  runtimeIdentity?: "namespaced";
+}
+
+/** One assessment shared by Automation diagnostics and the web inspector. */
+export function assessResourceIsolation(
+  resource: Pick<PlotResourceDefinition, "provider" | "isolation" | "command">,
+): ResourceIsolationAssessment {
+  if (resource.isolation === "manual") {
+    return {
+      warning: `${resource.provider} isolation is manual; Silvic displays the attachment but cannot verify or configure provider isolation.`,
+    };
+  }
+  if (resource.isolation !== "shared") return {};
+  if (resource.provider === "livekit" && resource.command) {
+    return {
+      runtimeIdentity: "namespaced",
+      warning: `${resource.provider} infrastructure is shared; Silvic namespaces this runtime's agent identity per Attempt, but provider data and credentials remain shared.`,
+    };
+  }
+  return {
+    warning: `${resource.provider} infrastructure is shared; Silvic does not claim provider-level isolation.`,
+  };
+}
+
 export const plotResourceProviderCatalog: Readonly<
   Record<
     PlotResourceProvider,

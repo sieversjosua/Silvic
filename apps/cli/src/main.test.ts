@@ -73,6 +73,41 @@ it("writes one versioned JSON document and keeps stderr clean", async () => {
   });
 });
 
+it("prints resource kind in human-readable Plot status", async () => {
+  const directory = await serve(async () => ({
+    id: "plot_123",
+    projectId: "project_123",
+    name: "Runtime isolation",
+    path: "/projects/Silvic.plots/runtime-isolation",
+    branch: "fix/runtime-isolation",
+    isPrimary: false,
+    state: "stopped",
+    runtimes: [],
+    resources: [
+      {
+        id: "agent",
+        provider: "livekit",
+        kind: "agent",
+        isolation: "shared",
+        runtimeIdentity: "namespaced",
+      },
+    ],
+    diagnostics: [],
+  }));
+
+  const result = await executeFile(
+    executable,
+    ["status", "--plot", "plot_123"],
+    {
+      env: { ...process.env, SILVIC_AUTOMATION_DIR: directory },
+    },
+  );
+
+  expect(result.stdout).toContain(
+    "resource\tagent\tlivekit\tagent\tshared\tnamespaced",
+  );
+});
+
 it("maps not-found failures to exit 4 with structured stdout", async () => {
   const directory = await serve(async () => {
     throw new AutomationError(

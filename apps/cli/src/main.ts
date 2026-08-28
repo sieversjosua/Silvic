@@ -314,7 +314,7 @@ function formatStatus(plot: AutomationPlot): string[] {
     ),
     ...plot.resources.map(
       (resource) =>
-        `resource\t${resource.id}\t${resource.provider}\t${resource.isolation}\t${resource.runtimeIdentity ?? "provider"}`,
+        `resource\t${resource.id}\t${resource.provider}\t${resource.kind}\t${resource.isolation}\t${resource.runtimeIdentity ?? "provider"}`,
     ),
     ...plot.diagnostics.map((diagnostic) => `diagnostic\t${diagnostic}`),
   ];
