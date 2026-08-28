@@ -13,7 +13,7 @@ import type {
   WorkspaceSnapshot,
 } from "@silvic/contracts";
 import { assessResourceIsolation } from "@silvic/contracts";
-import type { SupervisedCommand } from "@silvic/core";
+import type { SupervisedCommand, WorkspaceStatePlan } from "@silvic/core";
 
 import { AutomationError, type AutomationRequest } from "./protocol";
 
@@ -95,6 +95,11 @@ export interface AutomationControllerOptions {
   }): Promise<PlotAdoptionPlan>;
   adopt(request: PlotAdoptionRunRequest): Promise<PlotAdoptionRunResult>;
   provision(request: PlotProvisionRequest): Promise<PlotProvisionRunResult>;
+  inspectWorkspaceState(): Promise<WorkspaceStatePlan>;
+  pruneWorkspaceState(confirmPlanId: string): Promise<{
+    plan: WorkspaceStatePlan;
+    removedRecordIds: readonly string[];
+  }>;
   processes(): readonly SupervisedCommand[];
   start(plotPath: string, runtimeId: string): Promise<void>;
   stop(plotPath: string, runtimeId: string): void;
@@ -125,6 +130,10 @@ export class AutomationController {
         return this.adopt(request.params);
       case "provision":
         return this.provision(request.params);
+      case "workspaceStatePlan":
+        return this.workspaceStatePlan(request.params);
+      case "pruneWorkspaceState":
+        return this.pruneWorkspaceState(request.params);
       case "start":
         return this.start(request.params, signal);
       case "stop":
@@ -248,6 +257,18 @@ export class AutomationController {
         partialFailure: failed && succeeded,
       };
     });
+  }
+
+  private async workspaceStatePlan(params: Record<string, unknown>) {
+    assertOnly(params, []);
+    return this.options.inspectWorkspaceState();
+  }
+
+  private async pruneWorkspaceState(params: Record<string, unknown>) {
+    assertOnly(params, ["confirmPlanId"]);
+    return this.options.pruneWorkspaceState(
+      requiredString(params, "confirmPlanId"),
+    );
   }
 
   private async start(params: Record<string, unknown>, signal: AbortSignal) {

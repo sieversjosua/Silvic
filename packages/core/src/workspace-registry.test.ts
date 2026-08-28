@@ -211,6 +211,51 @@ describe("WorkspaceRegistry", () => {
       "Unknown plot",
     );
   });
+
+  it("marks missing records only after an authoritative scan", () => {
+    const registry = new WorkspaceRegistry();
+    const first = registry.reconcile(fixture("/projects/app-feature"), [], {
+      now: new Date("2026-01-01T00:00:00.000Z"),
+    });
+    const partial = registry.reconcile(
+      { projects: [], connectorFailures: [], refreshedAt: "partial" },
+      first.records,
+      { authoritative: false, now: new Date("2026-01-02T00:00:00.000Z") },
+    );
+    expect(partial.records.every((record) => !record.missingSince)).toBe(true);
+
+    const missing = registry.reconcile(
+      { projects: [], connectorFailures: [], refreshedAt: "full" },
+      partial.records,
+      { authoritative: true, now: new Date("2026-01-03T00:00:00.000Z") },
+    );
+    expect(missing.records.map((record) => record.missingSince)).toEqual([
+      "2026-01-03T00:00:00.000Z",
+      "2026-01-03T00:00:00.000Z",
+    ]);
+  });
+
+  it("clears a stale marker when the same stable Workspace returns", () => {
+    const registry = new WorkspaceRegistry();
+    const first = registry.reconcile(fixture("/projects/app-feature"), [], {
+      now: new Date("2026-01-01T00:00:00.000Z"),
+    });
+    const missing = registry.reconcile(
+      { projects: [], connectorFailures: [], refreshedAt: "full" },
+      first.records,
+      { now: new Date("2026-02-01T00:00:00.000Z") },
+    );
+    const returned = registry.reconcile(
+      fixture("/projects/app-feature"),
+      missing.records,
+      { now: new Date("2026-02-02T00:00:00.000Z") },
+    );
+
+    expect(returned.records.every((record) => !record.missingSince)).toBe(true);
+    expect(returned.records.map((record) => record.workspaceId)).toEqual(
+      first.records.map((record) => record.workspaceId),
+    );
+  });
 });
 
 function fixture(featurePath: string): SilvicSnapshot {

@@ -140,6 +140,9 @@ pnpm package:mac
 
 Runtime and preview automation is available through the documented `silvic`
 CLI and bundled Codex plugin. See [the automation guide](docs/AUTOMATION.md).
+Workspace-state retention, diagnostics, and the Silvic/Codex/Git ownership
+boundary are documented in
+[the workspace-state guide](docs/WORKSPACE_STATE.md).
 
 The verified app archive is written to `release/Silvic-mac-arm64.zip`.
 Local directory builds receive an ad-hoc signature when no valid Apple signing

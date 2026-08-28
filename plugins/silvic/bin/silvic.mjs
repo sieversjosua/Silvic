@@ -29465,6 +29465,24 @@ async function main(argv) {
       setRecoveryExitCode(result);
       return;
     }
+    case "state-plan": {
+      rejectOptions(values, ["json", "help"]);
+      const result = await automationCall("workspaceStatePlan");
+      output(result, values.json, formatWorkspaceStatePlan(result));
+      return;
+    }
+    case "state-prune": {
+      rejectOptions(values, ["json", "help", "confirm"]);
+      const result = await automationCall(
+        "pruneWorkspaceState",
+        { confirmPlanId: requireOption(values.confirm, "--confirm") }
+      );
+      output(result, values.json, [
+        `plan	${result.plan.planId}`,
+        ...result.removedRecordIds.map((id) => `removed-record	${id}`)
+      ]);
+      return;
+    }
     case "start":
     case "stop": {
       rejectOptions(values, ["json", "help", "plot", "runtime"]);
@@ -29590,6 +29608,22 @@ function formatProvisionResult(result) {
     `readiness	${result.readiness.status}${result.readiness.detail ? `	${result.readiness.detail}` : ""}`
   ];
 }
+function formatWorkspaceStatePlan(plan) {
+  return [
+    `plan	${plan.planId}	retention-days	${plan.retentionDays}`,
+    `records	${plan.totalRecords}	active	${plan.activeRecords}	stale	${plan.staleRecords.length}	prunable	${plan.prunableRecordIds.length}`,
+    ...plan.storage.map(
+      (entry) => `storage	${entry.ownership}	${entry.bytes}	${entry.path}	${entry.note}`
+    ),
+    ...plan.staleRecords.map(
+      (record2) => `record	${record2.action}	${record2.workspaceId}	${record2.ageDays}d	${record2.path}${record2.reasons.length > 0 ? `	${record2.reasons.join(",")}` : ""}`
+    ),
+    ...plan.boundaries.map((boundary) => `boundary	${boundary}`),
+    ...plan.prunableRecordIds.length > 0 ? [
+      `confirmation	required	Run state-prune --confirm ${plan.planId} to remove only the listed Silvic records.`
+    ] : []
+  ];
+}
 function setRecoveryExitCode(result) {
   if (result.partialFailure) process.exitCode = 6;
   else if (result.failed) process.exitCode = 5;
@@ -29634,6 +29668,8 @@ Usage:
   silvic adoption-plan --plot ID [--scope single|family] [--json]
   silvic adopt --plot ID [--scope single|family] --confirm STABLE_ID [--json]
   silvic provision --plot ID --confirm STABLE_ID [--remedy convex-cli] [--json]
+  silvic state-plan [--json]
+  silvic state-prune --confirm PLAN_ID [--json]
   silvic start --plot ID [--runtime ID] [--json]
   silvic preview --plot ID [--timeout MS] [--open] [--json]
   silvic stop --plot ID [--runtime ID] [--json]
@@ -29642,8 +29678,9 @@ Usage:
 
 Plot selectors accept a stable Plot id or an absolute Plot path. Before adoption
 or provisioning, inspect adoption-plan and confirm with its selected stable Plot
-ID. Start never confirms provider changes implicitly. Start and stop without
---runtime apply to every declared runtime and are idempotent.
+ID. Start never confirms provider changes implicitly. State pruning requires the
+exact state-plan ID and removes only listed Silvic metadata, never worktrees.
+Start and stop without --runtime apply to every declared runtime and are idempotent.
 `
   );
 }
@@ -29681,6 +29718,12 @@ function buildMcpServer() {
     destructiveHint: false,
     idempotentHint: true,
     openWorldHint: true
+  };
+  const metadataPruneMutation = {
+    readOnlyHint: false,
+    destructiveHint: true,
+    idempotentHint: true,
+    openWorldHint: false
   };
   server.registerTool(
     "list_projects",
@@ -29779,6 +29822,31 @@ function buildMcpServer() {
     async ({ plot, confirmPlotId, remedy }, context) => mcpCall(
       "provision",
       { plot, confirmPlotId, ...remedy ? { remedy } : {} },
+      void 0,
+      context.mcpReq.signal
+    )
+  );
+  server.registerTool(
+    "plan_workspace_state",
+    {
+      description: "Inspect stale Silvic Workspace records, retention, protection reasons, and Silvic/Codex disk usage without changing state.",
+      inputSchema: external_exports.object({}),
+      outputSchema,
+      annotations: readOnly
+    },
+    async (_input, context) => mcpCall("workspaceStatePlan", {}, void 0, context.mcpReq.signal)
+  );
+  server.registerTool(
+    "prune_workspace_state",
+    {
+      description: "Remove only the stale Silvic metadata listed by a current plan_workspace_state result. Never removes directories, worktrees, branches, sessions, or processes.",
+      inputSchema: external_exports.object({ confirmPlanId: external_exports.string().min(1) }),
+      outputSchema,
+      annotations: metadataPruneMutation
+    },
+    async ({ confirmPlanId }, context) => mcpCall(
+      "pruneWorkspaceState",
+      { confirmPlanId },
       void 0,
       context.mcpReq.signal
     )
@@ -29958,7 +30026,7 @@ void main(process.argv.slice(2)).catch((error51) => {
     process.stderr.write(`silvic: ${payload.message}
 `);
   }
-  process.exitCode = usage ? 2 : automation && (error51.code === "SILVIC_UNAVAILABLE" || error51.code === "UNSUPPORTED_PROTOCOL" || error51.code === "INVALID_REPLY") ? 3 : automation && (error51.code === "PLOT_NOT_FOUND" || error51.code === "RUNTIME_NOT_FOUND") ? 4 : automation && error51.code === "READINESS_TIMEOUT" ? 7 : automation && error51.code === "CANCELLED" ? 130 : automation && (error51.code === "RUNTIME_FAILED" || error51.code === "NO_PREVIEW" || error51.code === "CONFIRMATION_REQUIRED" || error51.code === "ADOPTION_REQUIRED" || error51.code === "PROVISIONING_REQUIRED") ? 5 : 1;
+  process.exitCode = usage ? 2 : automation && (error51.code === "SILVIC_UNAVAILABLE" || error51.code === "UNSUPPORTED_PROTOCOL" || error51.code === "INVALID_REPLY") ? 3 : automation && (error51.code === "PLOT_NOT_FOUND" || error51.code === "RUNTIME_NOT_FOUND") ? 4 : automation && error51.code === "READINESS_TIMEOUT" ? 7 : automation && error51.code === "CANCELLED" ? 130 : automation && (error51.code === "RUNTIME_FAILED" || error51.code === "NO_PREVIEW" || error51.code === "CONFIRMATION_REQUIRED" || error51.code === "ADOPTION_REQUIRED" || error51.code === "PROVISIONING_REQUIRED" || error51.code === "STATE_PLAN_CONFIRMATION_REQUIRED") ? 5 : 1;
 });
 /*! Bundled license information:
 

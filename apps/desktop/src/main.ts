@@ -27,6 +27,7 @@ import { autoUpdater } from "electron-updater";
 
 import {
   AutomationController,
+  AutomationError,
   startAutomationServer,
   type AutomationServer,
 } from "@silvic/automation";
@@ -37,7 +38,10 @@ import {
   listGitHubIssues,
 } from "@silvic/connector-github";
 import { harnessById } from "@silvic/connector-harnesses";
-import { createLocalContextConnector } from "@silvic/connector-local";
+import {
+  createLocalContextConnector,
+  readActiveAgentSessionPaths,
+} from "@silvic/connector-local";
 import {
   appearancePreferenceSchema,
   codexEnvironmentRequestSchema,
@@ -124,12 +128,15 @@ import {
   runtimeStartResult,
   readRecipeSource,
   renameWorkspaceRecord,
+  applyWorkspaceStatePlan,
+  planWorkspaceState,
   writeRecipe,
   resolvedCommandPath,
   type SupervisedCommand,
   type PlotAddress,
   type ResolvedRecipe,
   type WorkspaceRecord,
+  type WorkspaceStatePlan,
 } from "@silvic/core";
 
 import { GateManager, type GateFailure, type GateWake } from "./gate-manager";
@@ -243,6 +250,8 @@ const automation = new AutomationController({
   planAdoption: planPlotAdoption,
   adopt: adoptPlots,
   provision: provisionPlot,
+  inspectWorkspaceState,
+  pruneWorkspaceState,
   processes: () => supervisor.list(),
   start: (plotPath, runtimeId) => startPlotCommand(plotPath, runtimeId, false),
   stop: (plotPath, runtimeId) => supervisor.stop(plotPath, runtimeId),
@@ -2382,7 +2391,9 @@ function publishSnapshot(
         }
       : record,
   );
-  const reconciled = workspaceRegistry.reconcile(rawSnapshot, existingRecords);
+  const reconciled = workspaceRegistry.reconcile(rawSnapshot, existingRecords, {
+    authoritative: mode === "replace",
+  });
   if (
     !workspaceRecordsEqual(settings.get("workspaceRecords"), reconciled.records)
   ) {
@@ -2397,6 +2408,106 @@ function publishSnapshot(
   latestSnapshot = candidate;
   mainWindow?.webContents.send(ipcChannels.snapshotChanged, latestSnapshot);
   return latestSnapshot;
+}
+
+async function inspectWorkspaceState(): Promise<WorkspaceStatePlan> {
+  return buildWorkspaceStatePlan(true);
+}
+
+async function buildWorkspaceStatePlan(
+  includeStorage: boolean,
+): Promise<WorkspaceStatePlan> {
+  await refreshSnapshot(true);
+  const records = settings.get("workspaceRecords");
+  const activeSessionPaths = await readActiveAgentSessionPaths(runner);
+  const existingPaths = new Set(
+    records
+      .filter((record) => existsSync(record.path))
+      .map((record) => record.path),
+  );
+  const activeRuntimePaths = new Set(
+    supervisor
+      .list()
+      .filter((runtime) =>
+        ["starting", "running", "stopping"].includes(runtime.status),
+      )
+      .map((runtime) => runtime.plotPath),
+  );
+  const observedWorkspaceIds = new Set(
+    latestSnapshot.projects.flatMap((project) =>
+      project.workspaces.map((workspace) => workspace.workspaceId),
+    ),
+  );
+  return planWorkspaceState({
+    records,
+    observedWorkspaceIds,
+    existingPaths,
+    activeRuntimePaths,
+    activeSessionPaths,
+    providerStatePaths: new Set(Object.keys(settings.get("plotProvisioning"))),
+    ...(includeStorage ? { storage: await workspaceStorageUsage() } : {}),
+  });
+}
+
+async function pruneWorkspaceState(confirmPlanId: string): Promise<{
+  plan: WorkspaceStatePlan;
+  removedRecordIds: readonly string[];
+}> {
+  const plan = await buildWorkspaceStatePlan(false);
+  let applied: ReturnType<typeof applyWorkspaceStatePlan>;
+  try {
+    applied = applyWorkspaceStatePlan(
+      settings.get("workspaceRecords"),
+      plan,
+      confirmPlanId,
+    );
+  } catch (error) {
+    throw new AutomationError(
+      "STATE_PLAN_CONFIRMATION_REQUIRED",
+      error instanceof Error ? error.message : String(error),
+      { planId: plan.planId, targets: plan.prunableRecordIds },
+    );
+  }
+  settings.set("workspaceRecords", applied.records);
+  return {
+    plan,
+    removedRecordIds: applied.removed.map((record) => record.workspaceId),
+  };
+}
+
+async function workspaceStorageUsage() {
+  const codexRoot = join(homedir(), ".codex");
+  const locations = [
+    {
+      path: app.getPath("userData"),
+      ownership: "silvic" as const,
+      note: "Silvic settings, logs, and local application state",
+    },
+    {
+      path: codexRoot,
+      ownership: "codex" as const,
+      note: "Observed Codex state; Silvic never removes it",
+    },
+    {
+      path: join(codexRoot, "worktrees"),
+      ownership: "codex" as const,
+      note: "Observed Codex worktrees; Silvic never removes them",
+    },
+  ];
+  const results = await Promise.all(
+    locations.map(async (location) => {
+      const result = await runner.run({
+        executable: "du",
+        arguments: ["-sk", location.path],
+        outputLimit: 4_000,
+      });
+      const kibibytes = Number(result.stdout.trim().split(/\s+/, 1)[0]);
+      return result.exitCode === 0 && Number.isFinite(kibibytes)
+        ? { ...location, bytes: kibibytes * 1_024 }
+        : undefined;
+    }),
+  );
+  return results.filter((result) => result !== undefined);
 }
 
 /**

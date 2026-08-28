@@ -25,3 +25,4 @@ export * from "./teardown";
 export * from "./workos-provisioner";
 export * from "./workspace-names";
 export * from "./workspace-registry";
+export * from "./workspace-state";

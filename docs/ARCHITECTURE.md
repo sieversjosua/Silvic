@@ -32,6 +32,11 @@ for every Workspace.
 `WorkspaceRegistry` reconciles those transient Git locations with records persisted
 by the main process. Exact-path matches are preferred, unique project/branch matches
 survive moves, and environments created in Silvic record their selected parent.
+Only authoritative full scans mark absent records stale; partial Git paints cannot
+age unrelated records. Stale metadata uses an inspect-first 30-day retention plan
+that protects live runtimes, active Sessions, existing paths, and provider state.
+Its confirmed apply can remove registry entries only. The complete ownership and
+deletion boundary is documented in [WORKSPACE_STATE.md](WORKSPACE_STATE.md).
 
 Connector execution is failure-isolated. An unavailable optional CLI or malformed
 provider file becomes a visible connector failure; it cannot prevent Git state or
