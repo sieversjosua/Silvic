@@ -40,6 +40,10 @@ export interface SupervisedCommand {
   externalProcessId?: number;
   /** The stable plot port offered to commands that honour PORT. */
   expectedPort?: number;
+  /** Reserved local inspector/debug side port for this command. */
+  inspectorPort?: number;
+  /** Public provider/runtime identity injected by Silvic, never a secret. */
+  identity?: string;
   startedAt?: string;
   exitCode?: number;
   /** Why this is not what was asked for, when Silvic had to settle. */
@@ -57,6 +61,8 @@ export interface StartRequest {
   /** `{command}-{plot}-{project}`, the name a routed command is published as. */
   routeName: string;
   environment: Record<string, string>;
+  /** Silvic-owned identity and port variables; recipe env cannot replace them. */
+  isolationEnvironment?: Record<string, string>;
   /** Whether the gate is ready when the recipe opted into publishing. */
   canRoute: boolean;
   /** Why it is not, in place of the generic advice. */
@@ -232,6 +238,7 @@ export class CommandSupervisor {
           }
         : {}),
       ...request.command.env,
+      ...request.isolationEnvironment,
     };
     const child = spawn("sh", ["-lc", request.command.run], {
       cwd: commandWorkingDirectory(request.plotPath, request.command.cwd),
@@ -246,6 +253,8 @@ export class CommandSupervisor {
     });
 
     const expectedPort = Number(environment["PORT"]);
+    const inspectorPort = Number(environment["SILVIC_INSPECTOR_PORT"]);
+    const identity = environment["SILVIC_AGENT_NAME"];
 
     const entry: SupervisedCommand = {
       plotPath: request.plotPath,
@@ -253,13 +262,17 @@ export class CommandSupervisor {
       status: routed ? "starting" : "running",
       startedAt: new Date().toISOString(),
       ...(child.pid === undefined ? {} : { processId: child.pid }),
+      ...(Number.isSafeInteger(expectedPort) && expectedPort > 0
+        ? { expectedPort }
+        : {}),
+      ...(Number.isSafeInteger(inspectorPort) && inspectorPort > 0
+        ? { inspectorPort }
+        : {}),
+      ...(identity ? { identity } : {}),
       ...(routed
         ? {
             url: namedUrl,
             routeName: request.routeName,
-            ...(Number.isSafeInteger(expectedPort) && expectedPort > 0
-              ? { expectedPort }
-              : {}),
           }
         : request.command.url === true && request.environment["SILVIC_URL"]
           ? { url: request.environment["SILVIC_URL"] }
@@ -515,19 +528,24 @@ export class CommandSupervisor {
     // could consequently overwhelm a warm Next dev server even though its
     // process, listener and named route had never stopped.
     if (entry.targetPort) {
+      const verified = await this.routePublisher.verify?.({
+        processId: entry.processId,
+        port: entry.targetPort,
+      });
       const diagnosis = await this.routeDiagnosis({
         routeName: entry.routeName,
         port: entry.targetPort,
       });
       const latest = this.running.get(key);
       if (!latest || latest.processId !== entry.processId) return;
-      if (diagnosis.status === "healthy") {
+      if (verified !== false && diagnosis.status === "healthy") {
         const { advice: _staleAdvice, ...healthy } = latest;
         this.running.set(key, { ...healthy, status: "running" });
         this.announce();
         this.scheduleRouteHealth(key, entry.processId);
         return;
       }
+      if (verified === false) await this.routePublisher.remove(entry.routeName);
     }
 
     this.running.set(key, {
@@ -605,6 +623,32 @@ export class CommandSupervisor {
         "The preview process is gone — it stopped without telling Silvic. Press Start to launch it again.",
       );
       this.settle(key, 1, processId, false);
+      return;
+    }
+    if (
+      this.routePublisher.verify &&
+      !(await this.routePublisher.verify({
+        processId,
+        port: entry.targetPort,
+      }))
+    ) {
+      await this.routePublisher.remove(entry.routeName);
+      this.running.set(key, {
+        ...entry,
+        status: "starting",
+        advice:
+          "The listener on the routed port no longer belongs to this Plot's process tree. Silvic removed the route and is looking for this Plot's listener again.",
+      });
+      this.announce();
+      const output = await this.output(entry.plotPath, entry.id);
+      await this.bindRoute({
+        key,
+        processId,
+        routeName: entry.routeName,
+        expectedPort: entry.expectedPort ?? entry.targetPort,
+        output: () => output,
+        timeoutMs: 15_000,
+      });
       return;
     }
     const diagnosis = await this.routeDiagnosis({

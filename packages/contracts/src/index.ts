@@ -944,6 +944,10 @@ export interface PlotProcess {
   ownership?: "external";
   /** Stable plot port offered through PORT before listener discovery. */
   expectedPort?: number;
+  /** Reserved local inspector/debug side port for this runtime. */
+  inspectorPort?: number;
+  /** Public provider/runtime identity injected by Silvic, never a secret. */
+  identity?: string;
   startedAt?: string;
   exitCode?: number;
   /** Why this is not what was asked for, when Silvic had to settle. */

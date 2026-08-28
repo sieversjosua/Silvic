@@ -5,6 +5,7 @@ import type {
   PlotAdoptionRunRequest,
   PlotAdoptionRunResult,
   PlotCommand,
+  PlotResourceDefinition,
   PlotProvisionRequest,
   PlotProvisionRunResult,
   ProjectSnapshot,
@@ -32,6 +33,8 @@ export interface AutomationRuntime {
   routeName?: string;
   targetPort?: number;
   expectedPort?: number;
+  inspectorPort?: number;
+  identity?: string;
   processId?: number;
   exitCode?: number;
   advice?: string;
@@ -50,7 +53,18 @@ export interface AutomationPlot {
   state: PlotLifecycleState;
   previewUrl?: string;
   runtimes: readonly AutomationRuntime[];
+  resources: readonly AutomationResource[];
   diagnostics: readonly string[];
+}
+
+export interface AutomationResource {
+  id: string;
+  provider: PlotResourceDefinition["provider"];
+  kind: PlotResourceDefinition["kind"];
+  isolation: PlotResourceDefinition["isolation"];
+  commandId?: string;
+  /** Local runtime identity is namespaced; the provider itself remains shared. */
+  runtimeIdentity?: "namespaced";
 }
 
 export interface AutomationProject {
@@ -62,6 +76,7 @@ export interface AutomationProject {
 
 interface PlotDefinition {
   commands: Readonly<Record<string, PlotCommand>>;
+  resources: Readonly<Record<string, PlotResourceDefinition>>;
   requiresProvisioning: boolean;
   previewUrl?: string;
 }
@@ -462,6 +477,10 @@ export class AutomationController {
           ...(process?.expectedPort === undefined
             ? {}
             : { expectedPort: process.expectedPort }),
+          ...(process?.inspectorPort === undefined
+            ? {}
+            : { inspectorPort: process.inspectorPort }),
+          ...(process?.identity ? { identity: process.identity } : {}),
           ...(process?.processId === undefined
             ? {}
             : { processId: process.processId }),
@@ -473,6 +492,36 @@ export class AutomationController {
         };
       },
     );
+    const resources = Object.entries(definition.resources).map(
+      ([id, resource]): AutomationResource => ({
+        id,
+        provider: resource.provider,
+        kind: resource.kind,
+        isolation: resource.isolation,
+        ...(resource.command ? { commandId: resource.command } : {}),
+        ...(resource.provider === "livekit" && resource.command
+          ? { runtimeIdentity: "namespaced" as const }
+          : {}),
+      }),
+    );
+    const isolationDiagnostics = resources.flatMap((resource) => {
+      if (resource.isolation === "manual") {
+        return [
+          `${resource.id}: ${resource.provider} isolation is manual; Silvic displays the attachment but cannot verify or configure provider isolation.`,
+        ];
+      }
+      if (resource.isolation === "shared") {
+        if (resource.runtimeIdentity === "namespaced") {
+          return [
+            `${resource.id}: ${resource.provider} infrastructure is shared; Silvic namespaces this runtime's agent identity per Attempt, but provider data and credentials remain shared.`,
+          ];
+        }
+        return [
+          `${resource.id}: ${resource.provider} infrastructure is shared; Silvic does not claim provider-level isolation.`,
+        ];
+      }
+      return [];
+    });
     return {
       id: plot.workspaceId,
       projectId: project.id,
@@ -485,13 +534,17 @@ export class AutomationController {
       state: lifecycleState(runtimes),
       ...(definition.previewUrl ? { previewUrl: definition.previewUrl } : {}),
       runtimes,
-      diagnostics: runtimes.flatMap((runtime) =>
-        runtime.advice
-          ? [`${runtime.id}: ${runtime.advice}`]
-          : runtime.status === "failed"
-            ? [`${runtime.id}: exited with code ${runtime.exitCode ?? 1}`]
-            : [],
-      ),
+      resources,
+      diagnostics: [
+        ...runtimes.flatMap((runtime) =>
+          runtime.advice
+            ? [`${runtime.id}: ${runtime.advice}`]
+            : runtime.status === "failed"
+              ? [`${runtime.id}: exited with code ${runtime.exitCode ?? 1}`]
+              : [],
+        ),
+        ...isolationDiagnostics,
+      ],
     };
   }
 

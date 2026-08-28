@@ -109,6 +109,8 @@ import {
   plotPort,
   resolvePlotAddress,
   provisionEnvironment,
+  reserveRuntimeSidePort,
+  runtimeIsolationEnvironment,
   primeResolvedCommandPath,
   provisionCompleted,
   provisionStepLabel,
@@ -149,12 +151,19 @@ interface Settings {
   defaultHarness: HarnessId;
   /** Plot path to the port it was assigned, so addresses stay stable. */
   plotPorts: Record<string, number>;
+  /** Stable per-Attempt runtime and inspector reservations. */
+  runtimePorts: Record<string, Record<string, RuntimePortReservation>>;
   /** Plot path to the outcome of the last provisioning run there. */
   plotProvisioning: Record<string, PlotProvisioning>;
   /** Whether a plot's commands outlive the window that started them. */
   keepCommandsRunning: boolean;
   /** What was left running, so a new window can take it back. */
   runningCommands: SupervisedCommand[];
+}
+
+interface RuntimePortReservation {
+  port: number;
+  inspectorPort: number;
 }
 
 /** Enough of a failure to show and act on, without keeping whole build logs. */
@@ -223,6 +232,7 @@ const settings = new Store<Settings>({
     activeProjects: [],
     defaultHarness: "codex",
     plotPorts: {},
+    runtimePorts: {},
     plotProvisioning: {},
     keepCommandsRunning: true,
     runningCommands: [],
@@ -1907,6 +1917,12 @@ async function startPlotCommand(
     storedPlotPort(workspace.path) ??
     plotPort(recipe.project, plot, takenPlotPorts());
   const address = addressFor(recipe, plot, port);
+  const runtimePorts = reserveRuntimePorts({
+    workspace,
+    recipe,
+    commandId: id,
+    plotPort: port,
+  });
   let routeAdvice: string | undefined;
   if (address.named) {
     // Starting a named runtime is the moment the gate must exist: set it up
@@ -1942,8 +1958,23 @@ async function startPlotCommand(
           : {}),
       }),
       // Ignored by a routed command: portless hands out its own.
-      PORT: String(port),
+      PORT: String(runtimePorts.port),
     },
+    isolationEnvironment: runtimeIsolationEnvironment({
+      project: recipe.project,
+      plot,
+      attemptId: workspace.workspaceId,
+      commandId: id,
+      port: runtimePorts.port,
+      inspectorPort: runtimePorts.inspectorPort,
+      resources: recipe.resources,
+      ...((command.env?.["NODE_OPTIONS"] ?? process.env["NODE_OPTIONS"])
+        ? {
+            nodeOptions:
+              command.env?.["NODE_OPTIONS"] ?? process.env["NODE_OPTIONS"]!,
+          }
+        : {}),
+    }),
     canRoute: await gate.available(),
     ...(routeAdvice ? { routeAdvice } : {}),
     detached: settings.get("keepCommandsRunning"),
@@ -1955,6 +1986,7 @@ async function automationPlotDefinition(
   workspace: WorkspaceSnapshot,
 ): Promise<{
   commands: Readonly<Record<string, PlotCommand>>;
+  resources: ResolvedRecipe["resources"];
   requiresProvisioning: boolean;
   previewUrl?: string;
 }> {
@@ -1972,11 +2004,67 @@ async function automationPlotDefinition(
   );
   return {
     commands: recipe.commands,
+    resources: recipe.resources,
     requiresProvisioning: recipe.provision.length > 0,
     ...(servesPreview
       ? { previewUrl: addressFor(recipe, plot, port).url }
       : {}),
   };
+}
+
+/**
+ * Claims both numbers synchronously before the first await in startup. This is
+ * the reservation boundary that prevents two parallel starts from observing
+ * the same candidate as free.
+ */
+function reserveRuntimePorts({
+  workspace,
+  recipe,
+  commandId,
+  plotPort: stablePlotPort,
+}: {
+  workspace: WorkspaceSnapshot;
+  recipe: ResolvedRecipe;
+  commandId: string;
+  plotPort: number;
+}): RuntimePortReservation {
+  const attemptPorts = settings.get("runtimePorts")[workspace.workspaceId];
+  const existing = attemptPorts?.[commandId];
+  if (existing) return existing;
+
+  const taken = new Set<number>([
+    ...Object.values(settings.get("plotPorts")),
+    ...Object.values(settings.get("plotPorts")).map((port) => port + 20_000),
+    ...Object.values(settings.get("runtimePorts")).flatMap((commands) =>
+      Object.values(commands).flatMap((reservation) => [
+        reservation.port,
+        reservation.inspectorPort,
+      ]),
+    ),
+    ...supervisor
+      .list()
+      .flatMap((runtime) => [runtime.expectedPort, runtime.targetPort])
+      .filter((port): port is number => port !== undefined),
+  ]);
+  const primaryServingCommand = Object.entries(recipe.commands).find(
+    ([, command]) => command.url === true,
+  )?.[0];
+  const identity = `${workspace.workspaceId}/${commandId}`;
+  const reservation = {
+    port:
+      commandId === primaryServingCommand
+        ? stablePlotPort
+        : reserveRuntimeSidePort(`${identity}/runtime`, taken),
+    inspectorPort: reserveRuntimeSidePort(`${identity}/inspector`, taken),
+  };
+  settings.set("runtimePorts", {
+    ...settings.get("runtimePorts"),
+    [workspace.workspaceId]: {
+      ...attemptPorts,
+      [commandId]: reservation,
+    },
+  });
+  return reservation;
 }
 
 /** The commands Silvic has running in a plot, by their recipe ids. */

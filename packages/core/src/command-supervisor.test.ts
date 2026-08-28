@@ -127,6 +127,7 @@ describe("CommandSupervisor", () => {
     expect(supervisor.list()[0]).toMatchObject({
       status: "starting",
       url: "https://web-monorepo-plot.localhost",
+      expectedPort: 8691,
     });
     expect(routePublisher.publish).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -402,6 +403,50 @@ describe("CommandSupervisor", () => {
     );
     expect(routePublisher.publish).toHaveBeenCalledTimes(1);
     expect(routePublisher.remove).toHaveBeenCalledWith("web-adopted-dead");
+  });
+
+  it("suspends an adopted route whose listener no longer belongs to its process tree", async () => {
+    const logDirectory = await mkdtemp(join(tmpdir(), "silvic-supervisor-"));
+    temporaryDirectories.push(logDirectory);
+    const routePublisher: NamedRoutePublisher = {
+      publish: vi.fn().mockRejectedValue(new Error("No verified listener")),
+      improve: vi.fn().mockResolvedValue(undefined),
+      healthy: vi.fn().mockResolvedValue(true),
+      diagnose: vi.fn().mockResolvedValue({ status: "healthy" }),
+      verify: vi.fn().mockResolvedValue(false),
+      remove: vi.fn().mockResolvedValue(undefined),
+    };
+    const supervisor = new CommandSupervisor({
+      logDirectory,
+      onChange: () => {},
+      routePublisher,
+    });
+
+    await supervisor.adopt([
+      {
+        plotPath: logDirectory,
+        id: "web",
+        status: "running",
+        processId: process.pid,
+        routeName: "web-adopted-foreign",
+        targetPort: 4321,
+        expectedPort: 8691,
+      },
+    ]);
+
+    await vi.waitFor(() =>
+      expect(routePublisher.remove).toHaveBeenCalledWith("web-adopted-foreign"),
+    );
+    expect(routePublisher.publish).toHaveBeenCalledWith(
+      expect.objectContaining({
+        processId: process.pid,
+        plotPath: logDirectory,
+        expectedPort: 8691,
+      }),
+    );
+    expect(supervisor.list()[0]).toMatchObject({
+      advice: expect.stringMatching(/No verified listener/),
+    });
   });
 
   it("stops a stale external Astro server, rebuilds, and starts again", async () => {
@@ -1126,6 +1171,49 @@ describe("CommandSupervisor", () => {
     expect(await supervisor.output(logDirectory, "convex")).toBe(
       `like-photo|${join(await realpath(logDirectory), "services", "convex")}`,
     );
+  });
+
+  it("keeps Silvic-owned identity and port variables authoritative", async () => {
+    const logDirectory = await mkdtemp(join(tmpdir(), "silvic-supervisor-"));
+    temporaryDirectories.push(logDirectory);
+    let resolveStopped: (() => void) | undefined;
+    const stopped = new Promise<void>((resolve) => {
+      resolveStopped = resolve;
+    });
+    const supervisor = new CommandSupervisor({
+      logDirectory,
+      onChange: (commands) => {
+        if (commands.length === 0) resolveStopped?.();
+      },
+    });
+
+    await supervisor.start({
+      plotPath: logDirectory,
+      id: "agent",
+      command: {
+        run: 'printf "%s|%s|%s" "$LIVEKIT_AGENT_NAME" "$SILVIC_INSPECTOR_PORT" "$PORT"',
+        env: {
+          LIVEKIT_AGENT_NAME: "shared-name",
+          SILVIC_INSPECTOR_PORT: "9231",
+          PORT: "4321",
+        },
+      },
+      routeName: "agent-test",
+      environment: { PORT: "31_100" },
+      isolationEnvironment: {
+        LIVEKIT_AGENT_NAME: "plot-agent-a1b2c3",
+        SILVIC_INSPECTOR_PORT: "31101",
+        PORT: "31100",
+      },
+      canRoute: false,
+      detached: false,
+    });
+    await stopped;
+
+    expect(await supervisor.output(logDirectory, "agent")).toBe(
+      "plot-agent-a1b2c3|31101|31100",
+    );
+    expect(supervisor.list()).toEqual([]);
   });
 
   it("forgets an explicitly stopped command even when its SIGTERM handler fails", async () => {

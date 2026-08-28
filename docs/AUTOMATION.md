@@ -52,6 +52,13 @@ silvic stop --plot plot_123 --json
 watched Plot. A runtime ID is the command key in `silvic.json`. Omitting
 `--runtime` applies start, stop, or logs to every declared runtime.
 
+Status also returns every declared resource's `provider`, `kind` and
+`isolation`. `shared` and `manual` resources always add a diagnostic: shared
+provider infrastructure is not presented as isolated, and manual resources
+are explicitly described as unverifiable by Silvic. A command-linked LiveKit
+resource reports `runtimeIdentity: "namespaced"`; that qualifies only the
+injected agent identity, not the shared provider account, data or credentials.
+
 Start and stop are idempotent and return an outcome for every requested
 runtime. Successful siblings stay successful when another runtime fails; the
 top-level result sets `partialFailure: true`. Stopping a runtime with

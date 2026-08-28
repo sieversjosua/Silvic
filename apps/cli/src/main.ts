@@ -310,7 +310,11 @@ function formatStatus(plot: AutomationPlot): string[] {
     `${plot.id}\t${plot.state}\t${plot.previewUrl ?? "-"}\t${plot.path}`,
     ...plot.runtimes.map(
       (runtime) =>
-        `${runtime.id}\t${runtime.status}\t${runtime.ownership}\t${runtime.url ?? "-"}`,
+        `${runtime.id}\t${runtime.status}\t${runtime.ownership}\t${runtime.url ?? "-"}\tport=${runtime.expectedPort ?? "-"}\tinspector=${runtime.inspectorPort ?? "-"}\tidentity=${runtime.identity ?? "-"}`,
+    ),
+    ...plot.resources.map(
+      (resource) =>
+        `resource\t${resource.id}\t${resource.provider}\t${resource.isolation}\t${resource.runtimeIdentity ?? "provider"}`,
     ),
     ...plot.diagnostics.map((diagnostic) => `diagnostic\t${diagnostic}`),
   ];

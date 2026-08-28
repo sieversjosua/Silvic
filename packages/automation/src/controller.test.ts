@@ -11,6 +11,7 @@ import type {
   PlotCommand,
   PlotProvisionRequest,
   PlotProvisionRunResult,
+  PlotResourceDefinition,
   ProjectSnapshot,
   SilvicSnapshot,
   WorkspaceSnapshot,
@@ -92,6 +93,7 @@ function controller(
   options: {
     workspace?: WorkspaceSnapshot;
     requiresProvisioning?: boolean;
+    resources?: Readonly<Record<string, PlotResourceDefinition>>;
     planAdoption?: (request: {
       workspaceId: string;
       scope: "single" | "family";
@@ -116,6 +118,7 @@ function controller(
     roots: () => [project.rootPath],
     definition: async () => ({
       commands,
+      resources: options.resources ?? {},
       previewUrl: "https://web-issue-9-silvic.localhost",
       requiresProvisioning: options.requiresProvisioning ?? false,
     }),
@@ -201,7 +204,15 @@ describe("automation lifecycle states", () => {
           ownership: "external",
           url: "https://web-issue-9-silvic.localhost",
         },
-        { plotPath: plot.path, id: "worker", status: "running", processId: 91 },
+        {
+          plotPath: plot.path,
+          id: "worker",
+          status: "running",
+          processId: 91,
+          expectedPort: 31_100,
+          inspectorPort: 31_101,
+          identity: "silvic-issue-9-agent-a1b2c3",
+        },
       ],
     }).handle(request("status", { plot: plot.workspaceId }));
 
@@ -210,13 +221,58 @@ describe("automation lifecycle states", () => {
       state: "ready",
       runtimes: [
         { id: "web", ownership: "external" },
-        { id: "worker", ownership: "silvic" },
+        {
+          id: "worker",
+          ownership: "silvic",
+          expectedPort: 31_100,
+          inspectorPort: 31_101,
+          identity: "silvic-issue-9-agent-a1b2c3",
+        },
       ],
     });
   });
 });
 
 describe("automation operations", () => {
+  it("makes shared and manual resource limits explicit in status and diagnostics", async () => {
+    const result = await controller({
+      resources: {
+        agent: {
+          provider: "livekit",
+          kind: "agent",
+          isolation: "shared",
+          command: "worker",
+        },
+        ingress: {
+          provider: "cloudflare",
+          kind: "ingress",
+          isolation: "manual",
+        },
+        auth: {
+          provider: "workos",
+          kind: "auth",
+          isolation: "manual",
+        },
+      },
+    }).handle(request("status", { plot: plot.workspaceId }));
+
+    expect(result).toMatchObject({
+      resources: [
+        {
+          id: "agent",
+          isolation: "shared",
+          runtimeIdentity: "namespaced",
+        },
+        { id: "ingress", isolation: "manual" },
+        { id: "auth", isolation: "manual" },
+      ],
+      diagnostics: [
+        expect.stringMatching(/agent: livekit infrastructure is shared/),
+        expect.stringMatching(/ingress: cloudflare isolation is manual/),
+        expect.stringMatching(/auth: workos isolation is manual/),
+      ],
+    });
+  });
   it("shows adoption and provisioning state in Plot status", async () => {
     const status = await controller({
       workspace: {
