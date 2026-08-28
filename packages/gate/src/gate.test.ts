@@ -354,6 +354,21 @@ describe("gate daemon", () => {
         response.end();
         return;
       }
+      if (
+        request.url ===
+        "/node_modules/.vite/deps/DialogHandle-CZGYFVO9.js?v=f5012159"
+      ) {
+        // Vite 8 returns an empty 404 when a cached optimizer graph asks for
+        // a chunk that no longer exists in the persistent deps directory.
+        response.writeHead(404);
+        response.end();
+        return;
+      }
+      if (request.url === "/ordinary-missing.js") {
+        response.writeHead(404);
+        response.end();
+        return;
+      }
       if (request.url === "/application-error") {
         response.writeHead(500, { "content-type": "text/html" });
         response.end("<h1>The application failed</h1>");
@@ -537,6 +552,55 @@ describe("gate daemon", () => {
 
     try {
       const stale = await get("web-live-shop.localhost", "/vite-outdated");
+      expect(stale.status).toBe(503);
+      expect(stale.body).toContain("The page reloads by itself");
+      await vi.waitFor(() =>
+        expect(failed).toHaveBeenCalledWith({
+          route: "web-live-shop",
+          plotPath: "/tmp/plot",
+          commandId: "web",
+          failure: "vite-stale-optimized-dependency",
+        }),
+      );
+      await listener.routeSet({
+        name: "web-live-shop",
+        host: "127.0.0.1",
+        port: upstreamPort,
+        plotPath: "/tmp/plot",
+        commandId: "web",
+      });
+    } finally {
+      listener.close();
+    }
+  });
+
+  it("recovers a missing versioned Vite optimizer chunk but preserves ordinary 404s", async () => {
+    const failed = vi.fn();
+    const listener = new GateClient({
+      socketPath: controlSocketPath(directory),
+      onFailure: failed,
+    });
+    await listener.status();
+    await listener.routeSet({
+      name: "web-live-shop",
+      host: "127.0.0.1",
+      port: upstreamPort,
+      plotPath: "/tmp/plot",
+      commandId: "web",
+    });
+
+    try {
+      const ordinary = await get(
+        "web-live-shop.localhost",
+        "/ordinary-missing.js",
+      );
+      expect(ordinary.status).toBe(404);
+      expect(failed).not.toHaveBeenCalled();
+
+      const stale = await get(
+        "web-live-shop.localhost",
+        "/node_modules/.vite/deps/DialogHandle-CZGYFVO9.js?v=f5012159",
+      );
       expect(stale.status).toBe(503);
       expect(stale.body).toContain("The page reloads by itself");
       await vi.waitFor(() =>
