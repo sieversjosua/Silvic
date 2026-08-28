@@ -24,23 +24,11 @@ beforeAll(async () => {
     ["Scripts/build-codex-plugin.mjs", "--output", outputRoot],
     { cwd: repositoryRoot },
   );
-  const electronExecutable = execFileSync(
-    "pnpm",
-    [
-      "--filter",
-      "@silvic/desktop",
-      "exec",
-      "node",
-      "-p",
-      "require('electron')",
-    ],
-    { cwd: repositoryRoot, encoding: "utf8" },
-  ).trim();
   appPath = join(outputRoot, "Silvic.app");
   await mkdir(join(appPath, "Contents/MacOS"), { recursive: true });
   await mkdir(join(appPath, "Contents/Resources/bin"), { recursive: true });
   await mkdir(join(appPath, "Contents/Resources/lib"), { recursive: true });
-  await symlink(electronExecutable, join(appPath, "Contents/MacOS/Silvic"));
+  await symlink(process.execPath, join(appPath, "Contents/MacOS/Silvic"));
   await cp(
     join(repositoryRoot, "apps/cli/bin/silvic"),
     join(appPath, "Contents/Resources/bin/silvic"),
