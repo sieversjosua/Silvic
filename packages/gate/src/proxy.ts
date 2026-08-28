@@ -138,7 +138,7 @@ function forwardResponse(
     decided = true;
     const buffered = Buffer.concat(chunks, length);
     const prefix = buffered.subarray(0, failurePrefixLimit).toString("utf8");
-    if (viteOptimizerFailure(prefix)) {
+    if (viteOptimizerFailure(prefix, upstream.statusMessage)) {
       context.recover(route, "vite-stale-optimized-dependency");
       upstream.destroy();
       respondHtml(response, 503, recoveryPage(route));
@@ -175,7 +175,13 @@ function writeUpstreamHead(
   );
 }
 
-function viteOptimizerFailure(prefix: string): boolean {
+function viteOptimizerFailure(
+  prefix: string,
+  statusMessage: string | undefined,
+): boolean {
+  const normalizedStatus = statusMessage?.trim().toLowerCase();
+  if (normalizedStatus === "outdated optimize dep") return true;
+
   const normalized = prefix.toLowerCase();
   return (
     normalized.includes("the file does not exist at") &&
