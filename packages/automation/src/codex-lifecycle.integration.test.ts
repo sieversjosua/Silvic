@@ -298,6 +298,7 @@ it("integrates automation recovery with production adoption, provisioning, super
     roots: () => [fixture.primary],
     definition: async () => ({
       commands: definition,
+      resources: {},
       previewUrl: canonicalUrl,
       requiresProvisioning: true,
     }),
