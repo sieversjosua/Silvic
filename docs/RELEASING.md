@@ -2,7 +2,8 @@
 
 Silvic ships directly from GitHub Releases. Each macOS release contains a
 universal Developer ID-signed and Apple-notarized app in a DMG, plus the ZIP and
-`latest-mac.yml` that the in-app updater needs.
+`latest-mac.yml` that the in-app updater needs. The same release also contains a
+version-equal installable Codex marketplace bundle and its SHA-256 checksum.
 
 ## One-time GitHub setup
 
@@ -29,7 +30,7 @@ Start from a clean, reviewed `main`:
 ```bash
 pnpm release:version 0.1.1
 pnpm check
-git add package.json apps/desktop/package.json
+git add package.json apps/desktop/package.json apps/cli/package.json plugins/silvic/.codex-plugin/plugin.json
 git commit -m "release: v0.1.1"
 git tag v0.1.1
 git push origin main v0.1.1
@@ -45,11 +46,13 @@ gh workflow run release-macos.yml --ref v0.1.1
 The tag must exactly match `apps/desktop/package.json`. GitHub Actions then:
 
 1. repeats the full source checks;
-2. builds one Universal macOS app;
-3. signs every executable with Developer ID and enables Hardened Runtime;
-4. submits the app to Apple's notary service and staples the ticket;
-5. verifies the signature, Gatekeeper assessment, ticket and update metadata;
-6. creates the public GitHub Release only after every verification passes.
+2. builds the CLI/MCP bundle and the versioned Codex marketplace artifact;
+3. validates the plugin, skill, complete tool catalog, checksum, and version parity;
+4. builds one Universal macOS app;
+5. signs every executable with Developer ID and enables Hardened Runtime;
+6. submits the app to Apple's notary service and staples the ticket;
+7. verifies the signature, Gatekeeper assessment, ticket and update metadata;
+8. creates the public GitHub Release only after every verification passes.
 
 An installed Silvic checks at every launch and every four hours, and downloads
 a release it finds without being asked. Installing stays a click: only
@@ -81,3 +84,17 @@ xcrun stapler validate /Applications/Silvic.app
 ```
 
 Gatekeeper should report `source=Notarized Developer ID`.
+
+Verify the plugin from the same release independently:
+
+```bash
+shasum -a 256 -c Silvic-Codex-Plugin-0.1.53.tar.gz.sha256
+tar -tzf Silvic-Codex-Plugin-0.1.53.tar.gz
+```
+
+The archive must contain `.agents/plugins/marketplace.json`,
+`plugins/silvic/.codex-plugin/plugin.json`, `plugins/silvic/bin/silvic`, and
+`plugins/silvic/bin/silvic.mjs`. Follow its `INSTALL.md`, then confirm
+`codex plugin list` reports the same version as the app. Start a new Codex task
+and verify that its Silvic MCP catalog includes `plan_plot_adoption`,
+`adopt_plot`, and `provision_plot`.

@@ -5,6 +5,7 @@ import {
   AutomationError,
   automationProtocolVersion,
   isRecord,
+  type AutomationPeer,
   type AutomationMethod,
 } from "./protocol";
 import { automationSocketPath } from "./state-dir";
@@ -14,6 +15,7 @@ export class AutomationClient {
     private readonly options: {
       socketPath?: string;
       timeoutMs?: number;
+      client?: AutomationPeer;
     } = {},
   ) {}
 
@@ -24,6 +26,10 @@ export class AutomationClient {
   ): Promise<T> {
     const id = randomUUID();
     const path = this.options.socketPath ?? automationSocketPath();
+    const client = this.options.client ?? {
+      name: "silvic-cli",
+      version: "development",
+    };
     const readinessTimeout =
       method === "wait" && typeof params["timeoutMs"] === "number"
         ? params["timeoutMs"]
@@ -69,7 +75,7 @@ export class AutomationClient {
       options.signal?.addEventListener("abort", aborted, { once: true });
       socket.once("connect", () => {
         socket.write(
-          `${JSON.stringify({ jsonrpc: "2.0", protocolVersion: automationProtocolVersion, id, method, params })}\n`,
+          `${JSON.stringify({ jsonrpc: "2.0", protocolVersion: automationProtocolVersion, client, id, method, params })}\n`,
         );
       });
       socket.on("data", (chunk: string) => {
@@ -89,7 +95,7 @@ export class AutomationClient {
         if (newline < 0) return;
         let reply: ReturnType<typeof parseReply>;
         try {
-          reply = parseReply(buffered.slice(0, newline), id);
+          reply = parseReply(buffered.slice(0, newline), id, client.version);
         } catch (error) {
           finish(() => reject(error));
           return;
@@ -126,6 +132,7 @@ export class AutomationClient {
 function parseReply(
   line: string,
   id: string,
+  clientVersion: string,
 ):
   | { ok: true; result: unknown }
   | {
@@ -142,12 +149,27 @@ function parseReply(
     !isRecord(value) ||
     value["jsonrpc"] !== "2.0" ||
     value["protocolVersion"] !== automationProtocolVersion ||
+    !isRecord(value["server"]) ||
+    value["server"]["name"] !== "silvic-desktop" ||
+    typeof value["server"]["version"] !== "string" ||
     value["id"] !== id ||
     typeof value["ok"] !== "boolean"
   ) {
     throw new AutomationError(
       "INVALID_REPLY",
       "Silvic returned an invalid reply.",
+    );
+  }
+  if (value["server"]["version"] !== clientVersion && value["ok"]) {
+    throw new AutomationError(
+      "INCOMPATIBLE_SERVER",
+      `This client is ${clientVersion}, but the Silvic app is ${value["server"]["version"]}. Install matching versions before continuing.`,
+      {
+        clientVersion,
+        serverVersion: value["server"]["version"],
+        action:
+          "Install the Codex plugin artifact from the matching Silvic GitHub release, then start a new Codex task.",
+      },
     );
   }
   if (value["ok"]) return { ok: true, result: value["result"] };

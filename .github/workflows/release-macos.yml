@@ -37,8 +37,10 @@ jobs:
         run: |
           root_version="$(node -p "require('./package.json').version")"
           desktop_version="$(node -p "require('./apps/desktop/package.json').version")"
-          if [[ "$root_version" != "$desktop_version" ]]; then
-            echo "::error::Root version $root_version does not match app version $desktop_version"
+          cli_version="$(node -p "require('./apps/cli/package.json').version")"
+          plugin_version="$(node -p "require('./plugins/silvic/.codex-plugin/plugin.json').version")"
+          if [[ "$root_version" != "$desktop_version" || "$root_version" != "$cli_version" || "$root_version" != "$plugin_version" ]]; then
+            echo "::error::Release versions differ: root=$root_version desktop=$desktop_version cli=$cli_version plugin=$plugin_version"
             exit 1
           fi
           expected="v$desktop_version"
@@ -52,6 +54,13 @@ jobs:
 
       - name: Verify source
         run: pnpm check
+
+      - name: Build and validate Codex plugin artifact
+        run: |
+          pnpm package:plugin
+          test -f "release/Silvic-Codex-Plugin-${GITHUB_REF_NAME#v}.tar.gz"
+          cd release
+          shasum -a 256 -c "Silvic-Codex-Plugin-${GITHUB_REF_NAME#v}.tar.gz.sha256"
 
       - name: Prepare Apple notarization key
         env:
@@ -100,8 +109,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           shopt -s nullglob
-          artifacts=(release/*.dmg release/*.zip release/latest-mac.yml release/*.blockmap)
-          if (( ${#artifacts[@]} < 3 )); then
+          artifacts=(release/*.dmg release/*.zip release/latest-mac.yml release/*.blockmap release/Silvic-Codex-Plugin-*.tar.gz release/Silvic-Codex-Plugin-*.tar.gz.sha256)
+          if (( ${#artifacts[@]} < 5 )); then
             echo "::error::Release artifacts are incomplete"
             exit 1
           fi

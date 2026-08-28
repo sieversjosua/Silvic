@@ -138,6 +138,10 @@ import {
   type UpdateMenuAction,
 } from "./application-menu";
 import { DesktopUpdater } from "./updater";
+import {
+  inspectPluginCompatibility,
+  pluginMismatchMessage,
+} from "./plugin-compatibility";
 import { startSessionRefreshLoop } from "./session-refresh";
 
 interface Settings {
@@ -289,6 +293,7 @@ if (!app.requestSingleInstanceLock()) {
     await supervisor.adopt(leftRunning);
     try {
       automationServer = await startAutomationServer({
+        serverVersion: app.getVersion(),
         handle: (request, signal) => automation.handle(request, signal),
       });
     } catch (error) {
@@ -315,6 +320,7 @@ if (!app.requestSingleInstanceLock()) {
     registerIpc();
     installRootWatchers();
     createWindow();
+    void warnAboutPluginMismatch();
     scheduleAutomaticUpdateChecks();
     await paintFromGit(settings.get("roots"), "replace");
     void refreshConnectorObservations();
@@ -329,6 +335,30 @@ if (!app.requestSingleInstanceLock()) {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();
     });
   });
+}
+
+async function warnAboutPluginMismatch(): Promise<void> {
+  if (!app.isPackaged) return;
+  const compatibility = await inspectPluginCompatibility({
+    homeDirectory: homedir(),
+    appVersion: app.getVersion(),
+  });
+  const warning = pluginMismatchMessage(compatibility);
+  if (!warning) return;
+  const options = {
+    type: "warning" as const,
+    title: "Update Silvic Codex Plugin",
+    message: warning.message,
+    detail: warning.detail,
+    buttons: ["Open update instructions", "Later"],
+    defaultId: 0,
+    cancelId: 1,
+    noLink: true,
+  };
+  const result = mainWindow
+    ? await dialog.showMessageBox(mainWindow, options)
+    : await dialog.showMessageBox(options);
+  if (result.response === 0) await shell.openExternal(compatibility.updateUrl);
 }
 
 app.on("before-quit", () => {

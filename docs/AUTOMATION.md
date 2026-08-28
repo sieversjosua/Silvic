@@ -8,7 +8,7 @@ own.
 
 ## Install the CLI
 
-Packaged macOS applications contain the standalone executable at:
+Packaged macOS applications contain the portable launcher at:
 
 ```text
 /Applications/Silvic.app/Contents/Resources/bin/silvic
@@ -20,7 +20,11 @@ Put it on `PATH` with a symlink in a directory your shell already searches:
 sudo ln -s "/Applications/Silvic.app/Contents/Resources/bin/silvic" /usr/local/bin/silvic
 ```
 
-For repository development, build the same self-contained executable with:
+The launcher uses the Electron runtime signed and shipped inside `Silvic.app`;
+it does not resolve `node` through the invoking shell's `PATH`. This makes the
+installed CLI work from SSH, launchd, Codex MCP, and other non-interactive
+environments. For repository development, build the same bundled JavaScript
+program with:
 
 ```sh
 pnpm --filter @silvic/cli build
@@ -135,7 +139,7 @@ Human-mode diagnostics go to stderr. No command reads from stdin or prompts.
 ## Local protocol and security
 
 The app listens on `automation.sock` under its per-user application-support
-directory. Protocol revision 1 uses JSON-RPC 2.0-shaped, newline-delimited JSON
+directory. Protocol revision 2 uses JSON-RPC 2.0-shaped, newline-delimited JSON
 with a 64 KiB request-frame limit. The parent directory is mode `0700` and the
 socket is mode `0600`. Requests only resolve stable IDs and paths already in the
 authoritative snapshot; the interface accepts neither arbitrary working
@@ -143,21 +147,55 @@ directories nor shell commands. Adoption and provisioning accept a stable-ID
 confirmation and, for a known repair, a closed remedy identifier; they never
 accept a command string.
 
+Every request identifies `silvic-cli` or `silvic-codex-plugin` and its release
+version; every reply identifies the desktop server version. Protocol and release
+versions must match exactly. A stale client receives `UNSUPPORTED_PROTOCOL` or
+`INCOMPATIBLE_CLIENT` with the detected versions and the matching-release update
+action. It cannot continue with an older tool catalog.
+
 Set `SILVIC_AUTOMATION_DIR` only when running an isolated development or test
 instance. The app and every client must receive the same value.
 
 ## Codex plugin
 
-The distributable plugin is in `plugins/silvic`. It contains the manifest,
+The plugin source is in `plugins/silvic`. It contains the manifest,
 preview-lifecycle skill, and a bundled MCP server built from the same
 `AutomationClient` as the CLI. The MCP process uses the current MCP 2026-07-28
 wire implementation while retaining legacy-client negotiation.
+
+### Install or update the Codex plugin
+
+Each GitHub release includes `Silvic-Codex-Plugin-<version>.tar.gz` and its
+`.sha256` file. Use the artifact whose version exactly matches the installed
+Silvic app. Do not copy a plugin directory from a moving branch.
+
+1. Quit running Codex tasks that use Silvic. Download both plugin files from the
+   matching GitHub release.
+2. Verify and extract the artifact without administrator privileges:
+
+   ```sh
+   shasum -a 256 -c Silvic-Codex-Plugin-0.1.53.tar.gz.sha256
+   tar -xzf Silvic-Codex-Plugin-0.1.53.tar.gz
+   ```
+
+3. Read the extracted `INSTALL.md`. It contains the version-specific local
+   marketplace and `codex plugin add` commands. Before replacing an older
+   install, use `codex plugin list` to find its full `silvic@marketplace`
+   selector and remove only that selector with `codex plugin remove`.
+4. Fully restart Codex and open a new task so no old MCP process remains.
+
+Silvic checks cached Codex plugin manifests at app startup. If it finds Silvic
+plugins but none match the app version, it shows the detected versions and an
+**Open update instructions** action for this exact release. Codex does not expose
+a safe in-place plugin update API to Silvic, so the app never rewrites Codex
+configuration or cache directories itself.
 
 After changing CLI or MCP source, refresh the bundled plugin executable and
 validate both packages:
 
 ```sh
 pnpm --filter @silvic/cli build
+pnpm package:plugin
 python3 ~/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py plugins/silvic
 python3 ~/.codex/skills/.system/skill-creator/scripts/quick_validate.py plugins/silvic/skills/silvic-preview
 ```

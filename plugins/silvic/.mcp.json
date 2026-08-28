@@ -1,10 +1,10 @@
 {
   "mcpServers": {
     "silvic": {
-      "command": "node",
-      "args": ["./bin/silvic.mjs", "mcp"],
+      "command": "./bin/silvic",
+      "args": ["mcp"],
       "cwd": ".",
-      "env_vars": ["HOME", "SILVIC_AUTOMATION_DIR"],
+      "env_vars": ["HOME", "SILVIC_APP_EXECUTABLE", "SILVIC_AUTOMATION_DIR"],
       "startup_timeout_sec": 10,
       "tool_timeout_sec": 610
     }

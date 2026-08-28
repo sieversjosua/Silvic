@@ -1,6 +1,7 @@
 import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { connect } from "node:net";
 
 import { afterEach, expect, it, vi } from "vitest";
 
@@ -77,3 +78,73 @@ it("preserves machine-readable server errors", async () => {
     }),
   );
 });
+
+it("rejects a version-skewed plugin with an actionable structured error", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "silvic-automation-"));
+  directories.push(directory);
+  const socketPath = join(directory, "automation.sock");
+  server = await startAutomationServer({
+    socketPath,
+    serverVersion: "0.1.53",
+    handle: async () => ({ shouldNotRun: true }),
+  });
+
+  const client = new AutomationClient({
+    socketPath,
+    client: { name: "silvic-codex-plugin", version: "0.1.46" },
+  });
+  await expect(client.call("snapshot")).rejects.toEqual(
+    expect.objectContaining({
+      code: "INCOMPATIBLE_CLIENT",
+      details: expect.objectContaining({
+        client: { name: "silvic-codex-plugin", version: "0.1.46" },
+        server: { name: "silvic-desktop", version: "0.1.53" },
+        action: expect.stringContaining("matching Silvic GitHub release"),
+      }),
+    }),
+  );
+});
+
+it("answers a legacy protocol in its own envelope so old clients see the remedy", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "silvic-automation-"));
+  directories.push(directory);
+  const socketPath = join(directory, "automation.sock");
+  server = await startAutomationServer({
+    socketPath,
+    serverVersion: "0.1.53",
+    handle: async () => ({ shouldNotRun: true }),
+  });
+
+  const reply = await rawCall(socketPath, {
+    jsonrpc: "2.0",
+    protocolVersion: 1,
+    id: "legacy-request",
+    method: "snapshot",
+    params: {},
+  });
+
+  expect(reply).toMatchObject({
+    protocolVersion: 1,
+    id: "legacy-request",
+    ok: false,
+    error: {
+      code: "UNSUPPORTED_PROTOCOL",
+      details: { supported: [2] },
+    },
+  });
+});
+
+function rawCall(
+  socketPath: string,
+  request: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  return new Promise((resolve, reject) => {
+    const socket = connect({ path: socketPath });
+    socket.setEncoding("utf8");
+    let output = "";
+    socket.once("connect", () => socket.end(`${JSON.stringify(request)}\n`));
+    socket.on("data", (chunk: string) => (output += chunk));
+    socket.once("error", reject);
+    socket.once("close", () => resolve(JSON.parse(output)));
+  });
+}

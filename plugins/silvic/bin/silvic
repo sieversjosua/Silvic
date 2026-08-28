@@ -1,0 +1,39 @@
+#!/bin/sh
+set -eu
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+
+if [ -n "${SILVIC_APP_EXECUTABLE:-}" ]; then
+  runtime=$SILVIC_APP_EXECUTABLE
+else
+  case "$script_dir" in
+    */Silvic.app/Contents/Resources/bin)
+      runtime=${script_dir%/Contents/Resources/bin}/Contents/MacOS/Silvic
+      ;;
+    *)
+      runtime=/Applications/Silvic.app/Contents/MacOS/Silvic
+      if [ ! -x "$runtime" ] && [ -n "${HOME:-}" ]; then
+        runtime=$HOME/Applications/Silvic.app/Contents/MacOS/Silvic
+      fi
+      ;;
+  esac
+fi
+
+if [ ! -x "$runtime" ]; then
+  echo "silvic: the packaged Silvic runtime was not found." >&2
+  echo "Install Silvic in /Applications, or set SILVIC_APP_EXECUTABLE to its executable." >&2
+  exit 3
+fi
+
+if [ -f "$script_dir/silvic.mjs" ]; then
+  program=$script_dir/silvic.mjs
+else
+  program=$script_dir/../lib/silvic.mjs
+fi
+
+if [ ! -f "$program" ]; then
+  echo "silvic: the bundled CLI program is missing from this installation." >&2
+  exit 3
+fi
+
+ELECTRON_RUN_AS_NODE=1 exec "$runtime" "$program" "$@"
