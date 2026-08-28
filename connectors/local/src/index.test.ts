@@ -11,6 +11,7 @@ import type {
 } from "@silvic/core";
 
 import {
+  activeHarnessSessionWorkspaceIds,
   createLocalContextConnector,
   readT3Sessions,
   parseCodexSessions,
@@ -267,6 +268,41 @@ describe("createLocalContextConnector", () => {
     expect(sessionMatches("/dev/mono", task("/dev"), () => undefined)).toBe(
       false,
     );
+  });
+
+  it("protects inaccessible Workspaces with production Harness matching semantics", () => {
+    const inaccessible = {
+      workspaceId: "offline-workspace",
+      path: "/Volumes/offline/worktree",
+    };
+    const codexContainer = {
+      workspaceId: "codex-workspace",
+      path: "/w/65e0/mono",
+    };
+    const session = (cwd: string) => ({
+      id: `session:${cwd}`,
+      cwd,
+      title: "Active recovery",
+      updatedAtMs: 1_786_610_000_123,
+      harness: "codex" as const,
+      active: true,
+    });
+    const ids = activeHarnessSessionWorkspaceIds(
+      [inaccessible, codexContainer],
+      [
+        // Path containment is lexical, so an inaccessible location remains
+        // protected while the Harness still reports work inside it.
+        session("/Volumes/offline/worktree/apps/web"),
+        // Codex records the container above the sole repository it created.
+        session("/w/65e0"),
+      ],
+      (path, active) =>
+        sessionMatches(path, active, (cwd) =>
+          cwd === "/w/65e0" ? "/w/65e0/mono" : undefined,
+        ),
+    );
+
+    expect([...ids]).toEqual(["offline-workspace", "codex-workspace"]);
   });
 
   it("keeps the Codex task activity timestamp used by the grove", () => {

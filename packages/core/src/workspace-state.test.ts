@@ -24,7 +24,7 @@ describe("workspace state reconciliation", () => {
     const state = buildPlan({
       records,
       activeRuntimePaths: new Set(["/gone/runtime"]),
-      activeSessionPaths: new Set(["/gone/session/apps/web"]),
+      activeHarnessWorkspaceIds: new Set(["session"]),
       existingPaths: new Set(["/still/here"]),
     });
 

@@ -10,6 +10,7 @@ import {
   adoptionMembers,
   buildAdoptionPlan,
   executeAdoption,
+  executePlannedAdoption,
 } from "./adoption";
 
 function workspace(id: string, parentWorkspaceId?: string): WorkspaceSnapshot {
@@ -189,6 +190,53 @@ describe("worktree adoption", () => {
     expect(states.get("middle")).toEqual(
       expect.objectContaining({ status: "adopted", attempt: 2 }),
     );
+  });
+
+  it("runs the shared confirmed adoption, reservation, and provisioning transaction", async () => {
+    const states = new Map<string, PlotAdoption>();
+    const reserve = vi.fn();
+    const provision = vi.fn(async () => ({
+      provision: [],
+      runtime: { status: "not-required" as const, durationMs: 0 },
+      readiness: { status: "not-required" as const, durationMs: 0 },
+    }));
+    const plan = buildAdoptionPlan({
+      project,
+      selectedWorkspaceId: "leaf",
+      scope: "single",
+      steps: [{ label: "Provider setup", run: "provider setup" }],
+      member: () => ({ port: 43123, url: "https://leaf.localhost" }),
+    });
+
+    await expect(
+      executePlannedAdoption({
+        plan,
+        confirmProviderChanges: false,
+        state: (id) => states.get(id),
+        persist: (id, adoption) => void states.set(id, adoption),
+        reserve,
+        provision,
+      }),
+    ).rejects.toThrow("Confirm the listed provider changes");
+    expect(reserve).not.toHaveBeenCalled();
+    expect(provision).not.toHaveBeenCalled();
+
+    await expect(
+      executePlannedAdoption({
+        plan,
+        confirmProviderChanges: true,
+        state: (id) => states.get(id),
+        persist: (id, adoption) => void states.set(id, adoption),
+        reserve,
+        provision,
+      }),
+    ).resolves.toMatchObject({
+      members: [{ workspaceId: "leaf", status: "adopted" }],
+    });
+    expect(reserve).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceId: "leaf", port: 43123 }),
+    );
+    expect(states.get("leaf")).toMatchObject({ status: "adopted" });
   });
 });
 

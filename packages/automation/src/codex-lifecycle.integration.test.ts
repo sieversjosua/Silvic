@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { writeFileSync } from "node:fs";
+import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, normalize } from "node:path";
@@ -7,17 +8,28 @@ import { join, normalize } from "node:path";
 import { afterEach, expect, it } from "vitest";
 
 import type {
-  PlotAdoption,
+  PlotAdoptionPlan,
   PlotCommand,
+  PlotProvisioning,
+  PlotProvisionRunResult,
+  ProvisionStep,
   SilvicSnapshot,
 } from "@silvic/contracts";
 import {
+  CommandSupervisor,
   ConnectorRegistry,
+  GateRoutePublisher,
   LocalCommandRunner,
   ProjectService,
+  Provisioner,
   WorkspaceRegistry,
   applyWorkspaceStatePlan,
+  buildAdoptionPlan,
+  executePlannedAdoption,
   planWorkspaceState,
+  runtimeStartResult,
+  waitForReadiness,
+  type GateRouteLink,
   type SupervisedCommand,
   type WorkspaceRecord,
 } from "@silvic/core";
@@ -28,11 +40,14 @@ import { startAutomationServer, type AutomationServer } from "./server";
 
 const temporaryDirectories: string[] = [];
 const cleanupProcesses: ChildProcess[] = [];
+const cleanupSupervisors: CommandSupervisor[] = [];
 let automationServer: AutomationServer | undefined;
 
 afterEach(async () => {
   await automationServer?.close();
   automationServer = undefined;
+  for (const supervisor of cleanupSupervisors.splice(0)) supervisor.stopAll();
+  await new Promise((resolve) => setTimeout(resolve, 300));
   for (const child of cleanupProcesses.splice(0)) stopChild(child);
   await Promise.all(
     temporaryDirectories
@@ -41,7 +56,7 @@ afterEach(async () => {
   );
 });
 
-it("recovers a freshly discovered Codex worktree and proves PID/listener/CWD ownership", async () => {
+it("integrates automation recovery with production adoption, provisioning, supervisor, and routing services", async () => {
   const fixture = await gitWorktreeFixture();
   const runner = new LocalCommandRunner();
   const projectService = new ProjectService({
@@ -70,19 +85,7 @@ it("recovers a freshly discovered Codex worktree and proves PID/listener/CWD own
   const stablePlotId = discovered.workspaceId;
   const port = await availablePort();
   const canonicalUrl = `http://127.0.0.1:${port}`;
-  const processes = new TestRuntimeManager(fixture.worktree, port);
-  const foreign = spawn(
-    process.execPath,
-    ["-e", "setInterval(() => {}, 1000)"],
-    {
-      cwd: fixture.primary,
-      stdio: "ignore",
-    },
-  );
-  cleanupProcesses.push(foreign);
-  await childStarted(foreign);
-  const foreignPid = foreign.pid;
-  if (!foreignPid) throw new Error("Foreign process did not start");
+  const foreignPid = await startForeignChild(fixture.primary);
   const branchesBefore = await git(runner, fixture.primary, [
     "branch",
     "--format=%(refname)",
@@ -92,10 +95,203 @@ it("recovers a freshly discovered Codex worktree and proves PID/listener/CWD own
     "list",
     "--porcelain",
   ]);
-
+  const settingsPath = join(fixture.root, "persisted-settings.json");
+  let records = [...reconciled.records];
+  const persistedSettings: {
+    workspaceRecords: WorkspaceRecord[];
+    plotPorts: Record<string, number>;
+    plotProvisioning: Record<string, PlotProvisioning>;
+    runningCommands: SupervisedCommand[];
+    routes: Record<string, { host: "127.0.0.1" | "::1"; port: number }>;
+  } = {
+    workspaceRecords: records,
+    plotPorts: {},
+    plotProvisioning: {},
+    runningCommands: [],
+    routes: {},
+  };
+  const persistSettings = () =>
+    writeFileSync(settingsPath, JSON.stringify(persistedSettings), "utf8");
+  persistSettings();
+  const publishedRouteNames: string[] = [];
+  const link: GateRouteLink = {
+    set: async (route) => {
+      publishedRouteNames.push(route.name);
+      persistedSettings.routes[route.name] = {
+        host: route.host,
+        port: route.port,
+      };
+      persistSettings();
+    },
+    suspend: async (name) => {
+      delete persistedSettings.routes[name];
+      persistSettings();
+    },
+    inspect: async (name) => persistedSettings.routes[name],
+  };
+  const publisher = new GateRoutePublisher({
+    link,
+    inspect: async (processId) =>
+      (await listenerPorts(runner, processId)).map((listenerPort) => ({
+        processId,
+        port: listenerPort,
+      })),
+    probe: async (url) => {
+      try {
+        const response = await fetch(url);
+        const contentType = response.headers.get("content-type");
+        return {
+          status: response.status,
+          ...(contentType ? { contentType } : {}),
+        };
+      } catch {
+        return undefined;
+      }
+    },
+    settleMs: 0,
+  });
+  const supervisor = new CommandSupervisor({
+    logDirectory: join(fixture.root, "runtime-logs"),
+    routePublisher: publisher,
+    routeHealthIntervalMs: 60_000,
+    onChange: (processes) => {
+      persistedSettings.runningCommands = [...processes];
+      persistSettings();
+    },
+  });
+  cleanupSupervisors.push(supervisor);
   const definition: Readonly<Record<string, PlotCommand>> = {
-    web: { run: "test web runtime", url: true },
-    worker: { run: "test worker runtime" },
+    web: {
+      run: shellCommand(
+        process.execPath,
+        `require("http").createServer((_req,res)=>{res.writeHead(200,{"content-type":"text/html"});res.end("ready");}).listen(Number(process.env.PORT),"127.0.0.1",()=>console.log("web-ready"));`,
+      ),
+      url: true,
+    },
+    worker: {
+      run: shellCommand(
+        process.execPath,
+        `console.log("worker-ready"); setInterval(() => {}, 1000);`,
+      ),
+    },
+  };
+  const provisionSteps: readonly ProvisionStep[] = [
+    {
+      label: "Create isolated test state",
+      run: "printf provisioned > .silvic-provisioned",
+    },
+  ];
+  const provisioner = new Provisioner(runner);
+  const currentProject = () => {
+    const project = snapshot.projects.find((candidate) =>
+      candidate.workspaces.some(
+        (candidateWorkspace) => candidateWorkspace.workspaceId === stablePlotId,
+      ),
+    );
+    if (!project) throw new Error("Integration Project disappeared");
+    return project;
+  };
+  const buildPlan = (
+    workspaceId: string,
+    scope: "single" | "family",
+  ): PlotAdoptionPlan =>
+    buildAdoptionPlan({
+      project: currentProject(),
+      selectedWorkspaceId: workspaceId,
+      scope,
+      steps: provisionSteps,
+      member: () => ({ port, url: canonicalUrl }),
+    });
+  const persistAdoption = (
+    workspaceId: string,
+    adoption: NonNullable<WorkspaceRecord["adoption"]>,
+  ) => {
+    records = records.map((record) =>
+      record.workspaceId === workspaceId ? { ...record, adoption } : record,
+    );
+    persistedSettings.workspaceRecords = records;
+    snapshot = updateWorkspace(snapshot, workspaceId, { adoption });
+    persistSettings();
+  };
+  const startRuntime = async (path: string, runtimeId: string) => {
+    const command = definition[runtimeId];
+    if (!command) throw new Error(`Unknown integration runtime ${runtimeId}`);
+    await supervisor.start({
+      plotPath: path,
+      id: runtimeId,
+      command,
+      routeName: `${runtimeId}-codex-integration`,
+      environment: {
+        PORT: String(port),
+        SILVIC_URL: canonicalUrl,
+      },
+      canRoute: true,
+      detached: false,
+    });
+  };
+  const productionProvision = async (
+    path: string,
+  ): Promise<PlotProvisionRunResult> => {
+    const provision = await provisioner.run(provisionSteps, {
+      root: path,
+      sourceRoot: fixture.primary,
+      project: "silvic-integration",
+      plot: "codex-integration",
+      branch: "codex/e2e",
+      url: canonicalUrl,
+      port,
+    });
+    const provisioning: PlotProvisioning = {
+      status: provision.every((step) => step.exitCode === 0)
+        ? "complete"
+        : "failed",
+      at: new Date().toISOString(),
+      steps: provision,
+    };
+    persistedSettings.plotProvisioning[path] = provisioning;
+    snapshot = updateWorkspace(snapshot, stablePlotId, { provisioning });
+    persistSettings();
+    if (provisioning.status !== "complete") {
+      return {
+        provision,
+        runtime: {
+          status: "failed",
+          durationMs: 0,
+          detail: "Provisioning failed before runtime startup",
+        },
+        readiness: {
+          status: "failed",
+          durationMs: 0,
+          detail: "Provisioning failed before readiness",
+        },
+      };
+    }
+    const startedAt = Date.now();
+    const failures: Record<string, string> = {};
+    for (const runtimeId of Object.keys(definition)) {
+      try {
+        await startRuntime(path, runtimeId);
+      } catch (error) {
+        failures[runtimeId] =
+          error instanceof Error ? error.message : String(error);
+      }
+    }
+    const runtime = runtimeStartResult({
+      commands: Object.keys(definition),
+      processes: supervisor.list(),
+      failures,
+      durationMs: Date.now() - startedAt,
+    });
+    const readiness = await waitForReadiness({
+      url: canonicalUrl,
+      timeoutMs: 5_000,
+      intervalMs: 50,
+      probe: async (url) => {
+        const web = supervisor.list().find((process) => process.id === "web");
+        return web?.status === "running" && (await fetch(url)).ok;
+      },
+    });
+    return { provision, runtime, readiness };
   };
   const controller = new AutomationController({
     snapshot: () => snapshot,
@@ -105,69 +301,33 @@ it("recovers a freshly discovered Codex worktree and proves PID/listener/CWD own
       previewUrl: canonicalUrl,
       requiresProvisioning: true,
     }),
-    planAdoption: async ({ workspaceId, scope }) => ({
-      projectId: discovered.projectId,
-      scope,
-      members: [
-        {
-          workspaceId,
-          name: discovered.name,
-          branch: discovered.branch,
-          path: discovered.path,
-          port,
-          url: canonicalUrl,
-          status:
-            workspace(snapshot, workspaceId).adoption?.status ?? "not-adopted",
+    planAdoption: async ({ workspaceId, scope }) =>
+      buildPlan(workspaceId, scope),
+    adopt: async (request) =>
+      executePlannedAdoption({
+        plan: buildPlan(request.workspaceId, request.scope),
+        confirmProviderChanges: request.confirmProviderChanges,
+        state: (workspaceId) =>
+          records.find((record) => record.workspaceId === workspaceId)
+            ?.adoption,
+        persist: persistAdoption,
+        reserve: (member) => {
+          persistedSettings.plotPorts[member.path] = member.port;
+          persistSettings();
         },
-      ],
-      steps: [
-        { label: "Confirm stable Plot identity", providerChanging: false },
-        { label: "Provision isolated provider state", providerChanging: true },
-      ],
-      requiresProviderConfirmation: true,
-    }),
-    adopt: async ({ workspaceId }) => {
-      const adoption: PlotAdoption = {
-        status: "adopted",
-        at: "2026-08-28T10:01:00.000Z",
-        attempt: 1,
-      };
-      snapshot = updateWorkspace(snapshot, workspaceId, { adoption });
-      return {
-        members: [
-          {
-            workspaceId,
-            name: discovered.name,
-            status: "adopted",
-          },
-        ],
-      };
-    },
-    provision: async ({ path }) => {
-      snapshot = updateWorkspace(snapshot, stablePlotId, {
-        provisioning: {
-          status: "complete",
-          at: "2026-08-28T10:02:00.000Z",
-          steps: [provisionStep()],
-        },
-      });
-      expect(normalize(path)).toBe(normalize(fixture.worktree));
-      return {
-        provision: [provisionStep()],
-        runtime: { status: "not-required", durationMs: 0 },
-        readiness: { status: "not-required", durationMs: 0 },
-      };
-    },
+        provision: (member) => productionProvision(member.path),
+      }),
+    provision: ({ path }) => productionProvision(path),
     inspectWorkspaceState: async () => emptyStatePlan(),
     pruneWorkspaceState: async () => ({
       plan: emptyStatePlan(),
       removedRecordIds: [],
     }),
-    processes: () => processes.list(),
-    start: (path, runtimeId) => processes.start(path, runtimeId),
-    stop: (path, runtimeId) => processes.stop(path, runtimeId),
-    output: (_path, runtimeId, limit) =>
-      Promise.resolve(processes.output(runtimeId).slice(-limit)),
+    processes: () => supervisor.list(),
+    start: startRuntime,
+    stop: (path, runtimeId) => supervisor.stop(path, runtimeId),
+    output: (path, runtimeId, limit) =>
+      supervisor.output(path, runtimeId, limit),
     probe: async (url) => (await fetch(url)).ok,
   });
   const socketPath = join(fixture.root, "automation.sock");
@@ -186,14 +346,14 @@ it("recovers a freshly discovered Codex worktree and proves PID/listener/CWD own
   await expect(
     client.call("start", { plot: fixture.worktree }),
   ).rejects.toMatchObject({ code: "ADOPTION_REQUIRED" });
-  expect(processes.list()).toEqual([]);
+  expect(supervisor.list()).toEqual([]);
 
-  const adoptionPlan = await client.call<{
+  const planned = await client.call<{
     selectedPlotId: string;
     steps: { providerChanging: boolean }[];
   }>("adoptionPlan", { plot: fixture.worktree });
-  expect(adoptionPlan).toMatchObject({ selectedPlotId: stablePlotId });
-  expect(adoptionPlan.steps.some((step) => step.providerChanging)).toBe(true);
+  expect(planned).toMatchObject({ selectedPlotId: stablePlotId });
+  expect(planned.steps.some((step) => step.providerChanging)).toBe(true);
   await expect(
     client.call("adopt", {
       plot: fixture.worktree,
@@ -203,21 +363,51 @@ it("recovers a freshly discovered Codex worktree and proves PID/listener/CWD own
   expect(workspace(snapshot, stablePlotId).adoption?.status).toBe(
     "not-adopted",
   );
-  await client.call("adopt", {
+  const adopted = await client.call<{
+    members: { workspaceId: string; status: string }[];
+  }>("adopt", {
     plot: fixture.worktree,
     confirmPlotId: stablePlotId,
   });
+  expect(adopted.members).toEqual([
+    expect.objectContaining({ workspaceId: stablePlotId, status: "adopted" }),
+  ]);
+  expect(persistedSettings.plotPorts[fixture.worktree]).toBe(port);
+  expect(persistedSettings.plotProvisioning[fixture.worktree]?.status).toBe(
+    "complete",
+  );
+  await expect(
+    client.call("wait", { plot: stablePlotId, timeoutMs: 5_000 }),
+  ).resolves.toMatchObject({ url: canonicalUrl });
+
+  await client.call("stop", { plot: stablePlotId });
+  const failedProvisioning: PlotProvisioning = {
+    status: "failed",
+    at: new Date().toISOString(),
+    steps: [],
+  };
+  persistedSettings.plotProvisioning[fixture.worktree] = failedProvisioning;
+  snapshot = updateWorkspace(snapshot, stablePlotId, {
+    provisioning: failedProvisioning,
+  });
+  persistSettings();
   await expect(
     client.call("start", { plot: stablePlotId }),
   ).rejects.toMatchObject({ code: "PROVISIONING_REQUIRED" });
-  expect(processes.list()).toEqual([]);
+  expect(
+    supervisor
+      .list()
+      .filter((process) =>
+        ["starting", "running", "stopping"].includes(process.status),
+      ),
+  ).toEqual([]);
   await expect(
     client.call("provision", {
       plot: stablePlotId,
       confirmPlotId: "not-the-stable-id",
     }),
   ).rejects.toMatchObject({ code: "CONFIRMATION_REQUIRED" });
-  expect(workspace(snapshot, stablePlotId).provisioning).toBeUndefined();
+  expect(workspace(snapshot, stablePlotId).provisioning?.status).toBe("failed");
   await client.call("provision", {
     plot: stablePlotId,
     confirmPlotId: stablePlotId,
@@ -227,8 +417,8 @@ it("recovers a freshly discovered Codex worktree and proves PID/listener/CWD own
     results: { runtimeId: string; action: string }[];
   }>("start", { plot: stablePlotId });
   expect(started.results).toEqual([
-    { runtimeId: "web", action: "started" },
-    { runtimeId: "worker", action: "started" },
+    { runtimeId: "web", action: "already-running" },
+    { runtimeId: "worker", action: "already-running" },
   ]);
   const ready = await client.call<{ url: string }>("wait", {
     plot: stablePlotId,
@@ -271,6 +461,18 @@ it("recovers a freshly discovered Codex worktree and proves PID/listener/CWD own
       output: expect.stringContaining("worker-ready"),
     }),
   ]);
+  expect(publishedRouteNames).toContain("web-codex-integration");
+  const persistedWhileRunning = JSON.parse(
+    await readFile(settingsPath, "utf8"),
+  ) as typeof persistedSettings;
+  expect(
+    persistedWhileRunning.runningCommands.filter(
+      (process) => process.status === "running",
+    ),
+  ).toHaveLength(2);
+  expect(persistedWhileRunning.routes["web-codex-integration"]?.port).toBe(
+    port,
+  );
 
   const stopped = await client.call<{
     results: { runtimeId: string; action: string }[];
@@ -286,23 +488,21 @@ it("recovers a freshly discovered Codex worktree and proves PID/listener/CWD own
   expect(
     await git(runner, fixture.primary, ["worktree", "list", "--porcelain"]),
   ).toBe(worktreesBefore);
+  const persistedAfterStop = JSON.parse(
+    await readFile(settingsPath, "utf8"),
+  ) as typeof persistedSettings;
+  expect(persistedAfterStop.routes).toEqual({});
+  expect(
+    persistedAfterStop.runningCommands.some((process) =>
+      ["starting", "running", "stopping"].includes(process.status),
+    ),
+  ).toBe(false);
 }, 30_000);
 
 it("prunes stale metadata beside an active Plot without touching foreign state", async () => {
   const fixture = await gitWorktreeFixture();
   const runner = new LocalCommandRunner();
-  const foreign = spawn(
-    process.execPath,
-    ["-e", "setInterval(() => {}, 1000)"],
-    {
-      cwd: fixture.worktree,
-      stdio: "ignore",
-    },
-  );
-  cleanupProcesses.push(foreign);
-  await childStarted(foreign);
-  const foreignPid = foreign.pid;
-  if (!foreignPid) throw new Error("Foreign process did not start");
+  const foreignPid = await startForeignChild(fixture.worktree);
   const branchesBefore = await git(runner, fixture.primary, [
     "branch",
     "--format=%(refname)",
@@ -351,106 +551,15 @@ it("prunes stale metadata beside an active Plot without touching foreign state",
   ).toBe(worktreesBefore);
 });
 
-class TestRuntimeManager {
-  private readonly commands = new Map<string, SupervisedCommand>();
-  private readonly children = new Map<string, ChildProcess>();
-  private readonly logs = new Map<string, string>();
-
-  constructor(
-    private readonly plotPath: string,
-    private readonly port: number,
-  ) {}
-
-  list(): readonly SupervisedCommand[] {
-    return [...this.commands.values()];
-  }
-
-  async start(plotPath: string, id: string): Promise<void> {
-    expect(normalize(plotPath)).toBe(normalize(this.plotPath));
-    const script =
-      id === "web"
-        ? `require("http").createServer((_req,res)=>res.end("ready")).listen(${this.port},"127.0.0.1",()=>console.log("web-ready"));`
-        : `console.log("worker-ready"); setInterval(() => {}, 1000);`;
-    const child = spawn(process.execPath, ["-e", script], {
-      cwd: this.plotPath,
-      detached: true,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    cleanupProcesses.push(child);
-    this.children.set(id, child);
-    this.logs.set(id, "");
-    const ready = new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(
-        () => reject(new Error(`${id} did not start`)),
-        5_000,
-      );
-      const record = (chunk: Buffer) => {
-        const next = `${this.logs.get(id) ?? ""}${chunk.toString("utf8")}`;
-        this.logs.set(id, next);
-        if (next.includes(`${id}-ready`)) {
-          clearTimeout(timer);
-          resolve();
-        }
-      };
-      child.stdout?.on("data", record);
-      child.stderr?.on("data", record);
-      child.once("error", reject);
-      child.once("exit", (code) => {
-        const current = this.commands.get(id);
-        if (current) {
-          this.commands.set(id, {
-            ...current,
-            status: code === 0 || code === null ? "stopped" : "failed",
-            ...(code === null ? {} : { exitCode: code }),
-          });
-        }
-      });
-    });
-    if (!child.pid) throw new Error(`${id} has no PID`);
-    this.commands.set(id, {
-      plotPath: this.plotPath,
-      id,
-      status: "starting",
-      processId: child.pid,
-      ...(id === "web"
-        ? {
-            url: `http://127.0.0.1:${this.port}`,
-            targetPort: this.port,
-            expectedPort: this.port,
-          }
-        : {}),
-    });
-    await ready;
-    this.commands.set(id, { ...this.commands.get(id)!, status: "running" });
-  }
-
-  stop(plotPath: string, id: string): void {
-    expect(normalize(plotPath)).toBe(normalize(this.plotPath));
-    const current = this.commands.get(id);
-    const child = this.children.get(id);
-    if (!current || !child?.pid) return;
-    this.commands.set(id, { ...current, status: "stopping" });
-    try {
-      process.kill(-child.pid, "SIGTERM");
-    } catch {
-      child.kill("SIGTERM");
-    }
-  }
-
-  output(id: string): string {
-    return this.logs.get(id) ?? "";
-  }
-}
-
 async function gitWorktreeFixture() {
-  const root = await mkdtemp(join(tmpdir(), "silvic-codex-e2e-"));
+  const root = await mkdtemp(join(tmpdir(), "silvic-codex-integration-"));
   temporaryDirectories.push(root);
   const primary = join(root, "project");
   const worktree = join(root, "codex-worktree");
   const runner = new LocalCommandRunner();
   await git(runner, root, ["init", "-b", "main", primary]);
   await git(runner, primary, ["config", "user.email", "silvic@example.test"]);
-  await git(runner, primary, ["config", "user.name", "Silvic E2E"]);
+  await git(runner, primary, ["config", "user.name", "Silvic Integration"]);
   await writeFile(join(primary, "README.md"), "fixture\n", "utf8");
   await git(runner, primary, ["add", "README.md"]);
   await git(runner, primary, ["commit", "-m", "fixture"]);
@@ -518,6 +627,17 @@ function childStarted(child: ChildProcess): Promise<void> {
     child.once("spawn", resolve);
     child.once("error", reject);
   });
+}
+
+async function startForeignChild(cwd: string): Promise<number> {
+  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    cwd,
+    stdio: "ignore",
+  });
+  cleanupProcesses.push(child);
+  await childStarted(child);
+  if (!child.pid) throw new Error("Foreign process did not start");
+  return child.pid;
 }
 
 function stopChild(child: ChildProcess): void {
@@ -590,12 +710,10 @@ function emptyStatePlan() {
   };
 }
 
-function provisionStep() {
-  return {
-    label: "Create isolated test state",
-    command: "fixture-provision",
-    exitCode: 0,
-    output: "provisioned",
-    durationMs: 1,
-  };
+function shellCommand(executable: string, script: string): string {
+  return `exec ${shellQuote(executable)} -e ${shellQuote(script)}`;
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
 }

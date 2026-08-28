@@ -104,11 +104,13 @@ silvic state-plan --json
 silvic state-prune --confirm state_0123456789abcdef --json
 ```
 
-`state-plan` performs a fresh authoritative discovery pass, reports stale
-records and protection reasons, and measures Silvic/Codex storage without
-changing it. `state-prune` accepts only the exact current plan ID and removes
-only the listed stale Silvic registry records. It never removes a Git or Codex
-worktree, directory, branch, Session, process, or provider resource. See the
+`state-plan` reads the already reconciled registry and current observations,
+reports stale records and protection reasons, and measures Silvic/Codex storage
+without refreshing or persisting state. `state-prune` is the explicitly
+mutating operation: it performs a fresh authoritative discovery pass, accepts
+only the exact resulting plan ID, and removes only the listed stale Silvic
+registry records. It never removes a Git or Codex worktree, directory, branch,
+Session, process, or provider resource. See the
 [workspace-state and ownership guide](WORKSPACE_STATE.md) for retention and
 safety boundaries.
 

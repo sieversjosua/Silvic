@@ -51,7 +51,9 @@ Inspection is read-only:
 silvic state-plan --json
 ```
 
-The result lists every stale record with `protect`, `retain`, or
+It does not trigger discovery, reconcile records, or persist timestamps. The
+result reflects the latest reconciliation already held by the desktop control
+plane and lists every stale record with `protect`, `retain`, or
 `prune-metadata`, its protection reasons, the 30-day retention, and measured
 disk usage for Silvic state, `~/.codex`, and `~/.codex/worktrees`. Codex disk
 usage is diagnostic only.
@@ -63,8 +65,9 @@ decisions, and protection reasons. Apply requires that exact ID:
 silvic state-prune --confirm state_0123456789abcdef --json
 ```
 
-Silvic performs a fresh authoritative scan and recomputes the plan immediately
-before applying it. A changed target set or protection reason produces
+The explicitly mutating apply performs a fresh authoritative scan and
+recomputes the plan immediately before writing settings. A changed target set
+or protection reason produces
 `STATE_PLAN_CONFIRMATION_REQUIRED`; the caller must inspect and confirm the new
 plan. A successful apply removes exactly the listed `workspaceRecords` entries
 and reports their stable IDs.

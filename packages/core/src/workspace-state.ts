@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
-import { isAbsolute, normalize, relative } from "node:path";
+import { normalize } from "node:path";
 
 import type { WorkspaceRecord } from "./workspace-registry";
 
-export const workspaceRecordRetentionMs = 30 * 24 * 60 * 60 * 1_000;
+export const dayDurationMs = 24 * 60 * 60 * 1_000;
+export const workspaceRecordRetentionMs = 30 * dayDurationMs;
 
 export type WorkspaceStateProtection =
   | "active-runtime"
@@ -48,7 +49,7 @@ export interface WorkspaceStatePlanInput {
   observedWorkspaceIds?: ReadonlySet<string>;
   existingPaths?: ReadonlySet<string>;
   activeRuntimePaths?: ReadonlySet<string>;
-  activeSessionPaths?: ReadonlySet<string>;
+  activeHarnessWorkspaceIds?: ReadonlySet<string>;
   providerStatePaths?: ReadonlySet<string>;
   storage?: readonly WorkspaceStateStorage[];
   now?: Date;
@@ -63,7 +64,8 @@ export function planWorkspaceState(
   const observed = input.observedWorkspaceIds ?? new Set<string>();
   const existing = normalized(input.existingPaths);
   const runtimes = normalized(input.activeRuntimePaths);
-  const sessions = normalized(input.activeSessionPaths);
+  const harnessWorkspaces =
+    input.activeHarnessWorkspaceIds ?? new Set<string>();
   const providerPaths = normalized(input.providerStatePaths);
   const staleRecords = input.records
     .filter((record) => record.missingSince !== undefined)
@@ -73,8 +75,10 @@ export function planWorkspaceState(
       if (observed.has(record.workspaceId)) reasons.add("discovered-workspace");
       if (existing.has(path)) reasons.add("existing-location");
       if (runtimes.has(path)) reasons.add("active-runtime");
-      if (containsAnyPath(path, sessions)) reasons.add("active-session");
-      if (providerPaths.has(path) || hasProviderState(record)) {
+      if (harnessWorkspaces.has(record.workspaceId)) {
+        reasons.add("active-session");
+      }
+      if (providerPaths.has(path) || hasTaskOrAdoptionProtection(record)) {
         reasons.add("provider-state");
       }
       const missingAt = Date.parse(record.missingSince!);
@@ -94,7 +98,7 @@ export function planWorkspaceState(
         path: record.path,
         branch: record.branch,
         missingSince: record.missingSince!,
-        ageDays: Math.floor(ageMs / (24 * 60 * 60 * 1_000)),
+        ageDays: Math.floor(ageMs / dayDurationMs),
         action,
         reasons: [...reasons].sort(),
       };
@@ -122,7 +126,7 @@ export function planWorkspaceState(
   return {
     planId,
     generatedAt,
-    retentionDays: retentionMs / (24 * 60 * 60 * 1_000),
+    retentionDays: retentionMs / dayDurationMs,
     totalRecords: input.records.length,
     activeRecords: input.records.length - staleRecords.length,
     staleRecords,
@@ -131,7 +135,7 @@ export function planWorkspaceState(
     boundaries: [
       "Apply removes only the listed Silvic workspace records.",
       "Git/Codex worktrees, directories, branches, sessions, and processes are never removed.",
-      "Existing locations, active runtimes/sessions, and provider-backed state are protected.",
+      "Existing locations, active runtimes/Harness Sessions, and task/adoption/provisioning state are protected.",
     ],
   };
 }
@@ -161,16 +165,7 @@ function normalized(paths: ReadonlySet<string> | undefined): Set<string> {
   return new Set([...(paths ?? [])].map(normalize));
 }
 
-function containsAnyPath(parent: string, paths: ReadonlySet<string>): boolean {
-  return [...paths].some((path) => {
-    const relation = relative(parent, path);
-    return (
-      relation === "" || (!relation.startsWith("..") && !isAbsolute(relation))
-    );
-  });
-}
-
-function hasProviderState(record: WorkspaceRecord): boolean {
+function hasTaskOrAdoptionProtection(record: WorkspaceRecord): boolean {
   return (
     record.task?.issue !== undefined ||
     record.adoption?.status === "adopted" ||

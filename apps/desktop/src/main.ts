@@ -27,7 +27,6 @@ import { autoUpdater } from "electron-updater";
 
 import {
   AutomationController,
-  AutomationError,
   startAutomationServer,
   type AutomationServer,
 } from "@silvic/automation";
@@ -39,8 +38,9 @@ import {
 } from "@silvic/connector-github";
 import { harnessById } from "@silvic/connector-harnesses";
 import {
+  activeHarnessSessionWorkspaceIds,
   createLocalContextConnector,
-  readActiveAgentSessionPaths,
+  readActiveHarnessSessions,
 } from "@silvic/connector-local";
 import {
   appearancePreferenceSchema,
@@ -92,7 +92,7 @@ import {
   CommandSupervisor,
   buildAdoptionPlan,
   configureCodexEnvironment,
-  executeAdoption,
+  executePlannedAdoption,
   ConnectorRegistry,
   DeliveryService,
   EnvironmentService,
@@ -128,15 +128,12 @@ import {
   runtimeStartResult,
   readRecipeSource,
   renameWorkspaceRecord,
-  applyWorkspaceStatePlan,
-  planWorkspaceState,
   writeRecipe,
   resolvedCommandPath,
   type SupervisedCommand,
   type PlotAddress,
   type ResolvedRecipe,
   type WorkspaceRecord,
-  type WorkspaceStatePlan,
 } from "@silvic/core";
 
 import { GateManager, type GateFailure, type GateWake } from "./gate-manager";
@@ -151,6 +148,7 @@ import {
   reserveRuntimePorts,
   type RuntimePortReservations,
 } from "./runtime-reservations";
+import { WorkspaceStateService } from "./workspace-state";
 
 interface Settings {
   roots: string[];
@@ -243,6 +241,22 @@ const settings = new Store<Settings>({
     runningCommands: [],
   },
 });
+const workspaceStateService = new WorkspaceStateService({
+  records: () => settings.get("workspaceRecords"),
+  persist: (records) => settings.set("workspaceRecords", [...records]),
+  snapshot: () => latestSnapshot,
+  refreshAuthoritative: () => refreshSnapshot(true).then(() => undefined),
+  existing: existsSync,
+  activeRuntimes: () => supervisor.list(),
+  activeHarnessWorkspaceIds: async (records) =>
+    activeHarnessSessionWorkspaceIds(
+      records,
+      await readActiveHarnessSessions(runner),
+    ),
+  providerStatePaths: () =>
+    new Set(Object.keys(settings.get("plotProvisioning"))),
+  storage: workspaceStorageUsage,
+});
 const automation = new AutomationController({
   snapshot: () => latestSnapshot,
   roots: () => settings.get("roots"),
@@ -250,8 +264,9 @@ const automation = new AutomationController({
   planAdoption: planPlotAdoption,
   adopt: adoptPlots,
   provision: provisionPlot,
-  inspectWorkspaceState,
-  pruneWorkspaceState,
+  inspectWorkspaceState: () => workspaceStateService.inspect(),
+  pruneWorkspaceState: (confirmPlanId) =>
+    workspaceStateService.prune(confirmPlanId),
   processes: () => supervisor.list(),
   start: (plotPath, runtimeId) => startPlotCommand(plotPath, runtimeId, false),
   stop: (plotPath, runtimeId) => supervisor.stop(plotPath, runtimeId),
@@ -1445,44 +1460,23 @@ async function adoptPlots(
   request: PlotAdoptionRunRequest,
 ): Promise<PlotAdoptionRunResult> {
   const plan = await planPlotAdoption(request);
-  if (plan.requiresProviderConfirmation && !request.confirmProviderChanges) {
-    throw new Error(
-      "Confirm the listed provider changes before adopting these plots",
-    );
-  }
-  const members = await executeAdoption({
-    members: plan.members,
+  const result = await executePlannedAdoption({
+    plan,
+    confirmProviderChanges: request.confirmProviderChanges,
     state: workspaceAdoption,
     persist: setWorkspaceAdoption,
-    run: async (member) => {
+    reserve: (member) => {
       // Claim exactly the route shown in the preview before provisioning.
       settings.set("plotPorts", {
         ...settings.get("plotPorts"),
         [member.path]: member.port,
       });
-      const result = await provisionPlot({ path: member.path });
-      const failed = result.provision.find((step) => step.exitCode !== 0);
-      if (failed) throw new Error(`${failed.label} failed`);
-      if (result.runtime.status === "failed") {
-        throw new Error(
-          result.runtime.detail ?? "Plot runtimes failed to start",
-        );
-      }
-      if (result.readiness.status === "failed") {
-        throw new Error(
-          result.readiness.detail ?? "Plot preview did not become ready",
-        );
-      }
-      return {
-        provision: result.provision,
-        runtime: result.runtime,
-        readiness: result.readiness,
-      };
     },
+    provision: (member) => provisionPlot({ path: member.path }),
   });
   await paintFromGit(plan.members.map((member) => member.path));
   void refreshSnapshot(true);
-  return { members };
+  return result;
 }
 
 function workspaceAdoption(workspaceId: string): PlotAdoption | undefined {
@@ -2408,71 +2402,6 @@ function publishSnapshot(
   latestSnapshot = candidate;
   mainWindow?.webContents.send(ipcChannels.snapshotChanged, latestSnapshot);
   return latestSnapshot;
-}
-
-async function inspectWorkspaceState(): Promise<WorkspaceStatePlan> {
-  return buildWorkspaceStatePlan(true);
-}
-
-async function buildWorkspaceStatePlan(
-  includeStorage: boolean,
-): Promise<WorkspaceStatePlan> {
-  await refreshSnapshot(true);
-  const records = settings.get("workspaceRecords");
-  const activeSessionPaths = await readActiveAgentSessionPaths(runner);
-  const existingPaths = new Set(
-    records
-      .filter((record) => existsSync(record.path))
-      .map((record) => record.path),
-  );
-  const activeRuntimePaths = new Set(
-    supervisor
-      .list()
-      .filter((runtime) =>
-        ["starting", "running", "stopping"].includes(runtime.status),
-      )
-      .map((runtime) => runtime.plotPath),
-  );
-  const observedWorkspaceIds = new Set(
-    latestSnapshot.projects.flatMap((project) =>
-      project.workspaces.map((workspace) => workspace.workspaceId),
-    ),
-  );
-  return planWorkspaceState({
-    records,
-    observedWorkspaceIds,
-    existingPaths,
-    activeRuntimePaths,
-    activeSessionPaths,
-    providerStatePaths: new Set(Object.keys(settings.get("plotProvisioning"))),
-    ...(includeStorage ? { storage: await workspaceStorageUsage() } : {}),
-  });
-}
-
-async function pruneWorkspaceState(confirmPlanId: string): Promise<{
-  plan: WorkspaceStatePlan;
-  removedRecordIds: readonly string[];
-}> {
-  const plan = await buildWorkspaceStatePlan(false);
-  let applied: ReturnType<typeof applyWorkspaceStatePlan>;
-  try {
-    applied = applyWorkspaceStatePlan(
-      settings.get("workspaceRecords"),
-      plan,
-      confirmPlanId,
-    );
-  } catch (error) {
-    throw new AutomationError(
-      "STATE_PLAN_CONFIRMATION_REQUIRED",
-      error instanceof Error ? error.message : String(error),
-      { planId: plan.planId, targets: plan.prunableRecordIds },
-    );
-  }
-  settings.set("workspaceRecords", applied.records);
-  return {
-    plan,
-    removedRecordIds: applied.removed.map((record) => record.workspaceId),
-  };
 }
 
 async function workspaceStorageUsage() {

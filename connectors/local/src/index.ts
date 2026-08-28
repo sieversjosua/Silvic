@@ -223,19 +223,33 @@ async function readAgentSessions(
  * Active Harness sessions protect their Workspace metadata during cleanup,
  * even when the directory disappeared between Harness and filesystem scans.
  */
-export async function readActiveAgentSessionPaths(
+export async function readActiveHarnessSessions(
   runner: CommandRunner,
   sources: LocalContextSources = {},
   now = Date.now(),
-): Promise<ReadonlySet<string>> {
+): Promise<readonly AgentSession[]> {
   const sessions = await readAgentSessions(runner, sources);
+  return sessions.filter(
+    (session) =>
+      session.active || session.updatedAtMs >= now - activeSessionWindowMs,
+  );
+}
+
+/** Apply the same Harness-to-Workspace semantics used by connector observations. */
+export function activeHarnessSessionWorkspaceIds(
+  workspaces: readonly { workspaceId: string; path: string }[],
+  sessions: readonly AgentSession[],
+  matches: (
+    workspacePath: string,
+    session: AgentSession,
+  ) => boolean = sessionMatches,
+): ReadonlySet<string> {
   return new Set(
-    sessions
-      .filter(
-        (session) =>
-          session.active || session.updatedAtMs >= now - activeSessionWindowMs,
+    workspaces
+      .filter((workspace) =>
+        sessions.some((session) => matches(workspace.path, session)),
       )
-      .map((session) => normalize(session.cwd)),
+      .map((workspace) => workspace.workspaceId),
   );
 }
 
