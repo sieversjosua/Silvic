@@ -27,6 +27,10 @@ export interface WorkspaceRecord {
   purpose?: string;
   task?: TaskContext;
   adoption?: WorkspaceSnapshot["adoption"];
+  /** Last authoritative scan that found this Workspace. */
+  lastSeenAt?: string;
+  /** First authoritative scan that no longer found this Workspace. */
+  missingSince?: string;
 }
 
 export interface ReconciledWorkspaces {
@@ -54,7 +58,10 @@ export class WorkspaceRegistry {
   reconcile(
     snapshot: SilvicSnapshot,
     existingRecords: readonly WorkspaceRecord[],
+    options: { authoritative?: boolean; now?: Date } = {},
   ): ReconciledWorkspaces {
+    const authoritative = options.authoritative ?? true;
+    const observedAt = (options.now ?? new Date()).toISOString();
     const records = existingRecords.map((record) => ({ ...record }));
     const claimed = new Set<string>();
     const projects = snapshot.projects.map((project) => {
@@ -81,6 +88,7 @@ export class WorkspaceRegistry {
             projectId: project.id,
             path: workspace.path,
             branch: workspace.branch,
+            lastSeenAt: observedAt,
             ...(!workspace.isPrimary
               ? {
                   adoption: {
@@ -101,6 +109,10 @@ export class WorkspaceRegistry {
         record.projectId = project.id;
         record.path = workspace.path;
         record.branch = workspace.branch;
+        if (!record.lastSeenAt || record.missingSince) {
+          record.lastSeenAt = observedAt;
+        }
+        delete record.missingSince;
         if (!workspace.isPrimary && !record.adoption) {
           record.adoption = {
             status: "not-adopted",
@@ -119,6 +131,13 @@ export class WorkspaceRegistry {
       );
       return { ...project, workspaces };
     });
+    if (authoritative) {
+      for (const record of records) {
+        if (!claimed.has(record.workspaceId) && !record.missingSince) {
+          record.missingSince = observedAt;
+        }
+      }
+    }
     return {
       snapshot: { ...snapshot, projects },
       records,

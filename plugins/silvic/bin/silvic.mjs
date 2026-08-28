@@ -29326,6 +29326,277 @@ function parseReply(line, id) {
   };
 }
 
+// ../../packages/contracts/src/index.ts
+var connectorManifestSchema = external_exports.object({
+  id: external_exports.string().max(80).regex(/^[a-z][a-z0-9-]*$/),
+  name: external_exports.string().min(1).max(120),
+  kind: external_exports.enum(["service", "harness"]),
+  capabilities: external_exports.array(external_exports.enum(["observe", "open", "provision"])).min(1).max(3)
+}).strict();
+var connectorObservationSchema = external_exports.object({
+  connectorId: external_exports.string().max(80).regex(/^[a-z][a-z0-9-]*$/),
+  workspaceId: external_exports.string().min(1).max(200),
+  kind: external_exports.enum([
+    "runtime",
+    "deployment",
+    "review",
+    "session",
+    "authentication"
+  ]),
+  state: external_exports.enum([
+    "active",
+    "ready",
+    "waiting",
+    "attention",
+    "quiet",
+    "unknown"
+  ]),
+  label: external_exports.string().min(1).max(500),
+  detail: external_exports.string().max(2e3).optional(),
+  url: external_exports.url().max(4e3).refine((value) => ["http:", "https:"].includes(new URL(value).protocol)).optional(),
+  metadata: external_exports.record(
+    external_exports.string().max(120),
+    external_exports.union([
+      external_exports.string().max(2e3),
+      external_exports.number().finite(),
+      external_exports.boolean(),
+      external_exports.array(external_exports.number().int()).max(32)
+    ])
+  ).refine((value) => Object.keys(value).length <= 50).optional()
+}).strict();
+var issueSummarySchema = external_exports.object({
+  provider: external_exports.literal("github"),
+  number: external_exports.number().int().positive(),
+  title: external_exports.string().min(1).max(500),
+  body: external_exports.string().max(5e4),
+  url: external_exports.url().max(4e3),
+  labels: external_exports.array(external_exports.string().min(1).max(120)).max(100),
+  assignees: external_exports.array(external_exports.string().min(1).max(120)).max(100)
+}).strict();
+var pullRequestSummarySchema = external_exports.object({
+  provider: external_exports.literal("github"),
+  number: external_exports.number().int().positive(),
+  title: external_exports.string().max(500),
+  url: external_exports.url().max(4e3),
+  state: external_exports.enum(["open", "closed", "merged"]),
+  draft: external_exports.boolean(),
+  headRefName: external_exports.string().min(1).max(280),
+  headRepository: external_exports.string().min(1).max(280).optional(),
+  headGone: external_exports.boolean().optional(),
+  author: external_exports.string().max(120)
+}).strict();
+var taskContextSchema = external_exports.object({
+  title: external_exports.string().min(1).max(500),
+  description: external_exports.string().max(5e4).optional(),
+  issue: issueSummarySchema.optional()
+}).strict();
+var harnessIdSchema = external_exports.enum([
+  "codex",
+  "claude",
+  "t3-code",
+  "opencode",
+  "vscode",
+  "terminal",
+  "finder"
+]);
+var openWorkspaceRequestSchema = external_exports.object({
+  path: external_exports.string().min(1),
+  target: external_exports.enum([
+    "codex",
+    "claude",
+    "t3-code",
+    "opencode",
+    "vscode",
+    "terminal",
+    "finder"
+  ])
+}).strict();
+var shellStepSchema = external_exports.object({
+  run: external_exports.string().min(1).max(2e3),
+  label: external_exports.string().min(1).max(120).optional()
+}).strict();
+var convexStepSchema = external_exports.object({
+  convex: external_exports.object({
+    team: external_exports.string().min(1).max(120).optional(),
+    project: external_exports.string().min(1).max(120).optional(),
+    /** Deployment name; `{plot}` is replaced with the plot's name. */
+    name: external_exports.string().min(1).max(200).default("dev/{plot}"),
+    /** Optional Convex expiration expression, for example `in 7 days`. */
+    expiration: external_exports.string().min(1).max(120).optional()
+  }).strict(),
+  label: external_exports.string().min(1).max(120).optional()
+}).strict();
+var workosStepSchema = external_exports.object({
+  workos: external_exports.object({
+    /** Emulator port; derived from the plot's own port when left out. */
+    port: external_exports.number().int().min(1024).max(65535).optional(),
+    /** Appended to the plot address to form the app's redirect URI. */
+    callbackPath: external_exports.string().min(1).max(400).startsWith("/").default("/callback")
+  }).strict(),
+  label: external_exports.string().min(1).max(120).optional()
+}).strict();
+var provisionStepSchema = external_exports.union([
+  shellStepSchema,
+  convexStepSchema,
+  workosStepSchema
+]);
+var packageManagerSchema = external_exports.enum(["bun", "pnpm", "npm", "yarn"]);
+var plotCommandSchema = external_exports.object({
+  run: external_exports.string().min(1).max(2e3),
+  /** Working directory relative to the plot root. */
+  cwd: external_exports.string().min(1).max(400).optional(),
+  /** Additional variables declared by the repository for this command. */
+  env: external_exports.record(external_exports.string().max(120), external_exports.string().max(4e3)).refine((value) => Object.keys(value).length <= 50).optional(),
+  /** Serves the plot's canonical browser and auth address. */
+  url: external_exports.boolean().optional(),
+  autoStart: external_exports.boolean().optional(),
+  /** First segment of that name; the command's id when left out. */
+  routeName: external_exports.string().min(1).max(60).optional(),
+  /** Named HTTPS routing is the default; false keeps the stable port URL. */
+  portless: external_exports.boolean().optional()
+}).strict();
+var plotResourceProviderSchema = external_exports.enum([
+  "web",
+  "convex",
+  "livekit",
+  "stripe",
+  "cloudflare",
+  "vercel",
+  "clerk",
+  "workos",
+  "github",
+  "custom"
+]);
+var plotResourceKindSchema = external_exports.enum([
+  "runtime",
+  "agent",
+  "backend",
+  "auth",
+  "payments",
+  "ingress",
+  "deployment",
+  "review",
+  "service"
+]);
+var resourceIsolationSchema = external_exports.enum([
+  "isolated",
+  "namespaced",
+  "shared",
+  "manual"
+]);
+var plotResourceDefinitionSchema = external_exports.object({
+  provider: plotResourceProviderSchema,
+  label: external_exports.string().min(1).max(120).optional(),
+  kind: plotResourceKindSchema.default("service"),
+  isolation: resourceIsolationSchema.default("shared"),
+  /** Optional recipe command whose process is this resource's live status. */
+  command: external_exports.string().min(1).max(60).optional(),
+  url: external_exports.url().max(4e3).optional(),
+  dashboardUrl: external_exports.url().max(4e3).optional(),
+  detail: external_exports.string().min(1).max(2e3).optional()
+}).strict();
+var recipeSchema = external_exports.object({
+  project: external_exports.string().min(1).max(120).optional(),
+  packageManager: packageManagerSchema.optional(),
+  plots: external_exports.object({ directory: external_exports.string().min(1).max(400).optional() }).strict().optional(),
+  commands: external_exports.record(
+    external_exports.string().regex(/^[a-z][a-z0-9-]*$/).max(60),
+    plotCommandSchema
+  ).optional(),
+  resources: external_exports.record(
+    external_exports.string().regex(/^[a-z][a-z0-9-]*$/).max(60),
+    plotResourceDefinitionSchema
+  ).optional(),
+  provision: external_exports.array(provisionStepSchema).max(50).optional()
+}).strict();
+var provisionRemedyIdSchema = external_exports.enum(["convex-cli"]);
+var recipeSaveRequestSchema = external_exports.object({
+  projectId: external_exports.string().min(1).max(400),
+  recipe: recipeSchema
+}).strict();
+var plotPreviewRequestSchema = external_exports.object({
+  projectId: external_exports.string().min(1).max(400),
+  branch: external_exports.string().max(240)
+}).strict();
+var plotRenameRequestSchema = external_exports.object({
+  workspaceId: external_exports.string().min(1).max(200),
+  name: external_exports.string().trim().min(1).max(120)
+}).strict();
+var testStepRequestSchema = external_exports.object({
+  projectId: external_exports.string().min(1).max(400),
+  step: shellStepSchema
+}).strict();
+var teardownScopeSchema = external_exports.enum(["stop", "archive", "remove"]);
+var teardownRequestSchema = external_exports.object({
+  path: external_exports.string().min(1),
+  scope: teardownScopeSchema,
+  deleteBranch: external_exports.boolean(),
+  /** Throw away uncommitted work rather than refusing to remove the plot. */
+  discardChanges: external_exports.boolean().default(false)
+}).strict();
+var openLinkRequestSchema = external_exports.object({
+  url: external_exports.url().max(4e3).refine((value) => ["http:", "https:"].includes(new URL(value).protocol))
+}).strict();
+var createEnvironmentRequestSchema = external_exports.object({
+  sourcePath: external_exports.string().min(1),
+  branch: external_exports.string().min(1).max(240),
+  mode: external_exports.enum(["worktree", "clone"]),
+  /**
+   * A branch that already exists, taken up rather than cut: either a local
+   * one nothing has checked out, or `origin/feature-x`, which becomes a
+   * local branch tracking it. Absent means a new branch, as before.
+   */
+  adopt: external_exports.string().min(1).max(280).optional(),
+  task: taskContextSchema.optional()
+}).strict();
+var issueListRequestSchema = external_exports.object({
+  projectId: external_exports.string().min(1).max(400),
+  query: external_exports.string().trim().max(500).default("")
+}).strict();
+var pullRequestLookupRequestSchema = external_exports.object({
+  projectId: external_exports.string().min(1).max(400),
+  /** The pull request's number in the project's own repository. */
+  number: external_exports.number().int().positive().max(1e6)
+}).strict();
+var plotProvisionRequestSchema = external_exports.object({
+  path: external_exports.string().min(1),
+  /** Runs before the recipe, when a failure named a repair Silvic can make. */
+  remedy: provisionRemedyIdSchema.optional()
+}).strict();
+var plotAdoptionPlanRequestSchema = external_exports.object({
+  workspaceId: external_exports.string().min(1).max(200),
+  scope: external_exports.enum(["single", "family"])
+}).strict();
+var plotAdoptionRunRequestSchema = external_exports.object({
+  workspaceId: external_exports.string().min(1).max(200),
+  scope: external_exports.enum(["single", "family"]),
+  /** A literal acknowledgement; the main process independently enforces it. */
+  confirmProviderChanges: external_exports.boolean().default(false)
+}).strict();
+var workspacePathRequestSchema = external_exports.object({ path: external_exports.string().min(1) }).strict();
+var deliveryExecuteRequestSchema = external_exports.object({
+  path: external_exports.string().min(1),
+  commitMessage: external_exports.string().trim().min(1).max(500),
+  push: external_exports.boolean(),
+  createPullRequest: external_exports.boolean(),
+  pullRequestTitle: external_exports.string().trim().max(500),
+  pullRequestBody: external_exports.string().max(2e4),
+  reviewDigest: external_exports.string().regex(/^[a-f0-9]{64}$/),
+  confirmed: external_exports.literal(true)
+}).strict().refine((value) => !value.createPullRequest || value.push, {
+  message: "A pull request requires pushing the branch"
+});
+var plotCommandRequestSchema = external_exports.object({ path: external_exports.string().min(1), id: external_exports.string().min(1).max(60) }).strict();
+var appearancePreferenceSchema = external_exports.enum(["system", "light", "dark"]);
+var projectActivationRequestSchema = external_exports.object({
+  projectId: external_exports.string().min(1).max(400),
+  active: external_exports.boolean()
+}).strict();
+var codexEnvironmentRequestSchema = external_exports.object({
+  projectId: external_exports.string().min(1).max(400),
+  enabled: external_exports.boolean()
+}).strict();
+
 // package.json
 var package_default = {
   name: "@silvic/cli",
@@ -29465,6 +29736,24 @@ async function main(argv) {
       setRecoveryExitCode(result);
       return;
     }
+    case "state-plan": {
+      rejectOptions(values, ["json", "help"]);
+      const result = await automationCall("workspaceStatePlan");
+      output(result, values.json, formatWorkspaceStatePlan(result));
+      return;
+    }
+    case "state-prune": {
+      rejectOptions(values, ["json", "help", "confirm"]);
+      const result = await automationCall(
+        "pruneWorkspaceState",
+        { confirmPlanId: requireOption(values.confirm, "--confirm") }
+      );
+      output(result, values.json, [
+        `plan	${result.plan.planId}`,
+        ...result.removedRecordIds.map((id) => `removed-record	${id}`)
+      ]);
+      return;
+    }
     case "start":
     case "stop": {
       rejectOptions(values, ["json", "help", "plot", "runtime"]);
@@ -29554,7 +29843,10 @@ function formatStatus(plot) {
   return [
     `${plot.id}	${plot.state}	${plot.previewUrl ?? "-"}	${plot.path}`,
     ...plot.runtimes.map(
-      (runtime) => `${runtime.id}	${runtime.status}	${runtime.ownership}	${runtime.url ?? "-"}`
+      (runtime) => `${runtime.id}	${runtime.status}	${runtime.ownership}	${runtime.url ?? "-"}	port=${runtime.expectedPort ?? "-"}	inspector=${runtime.inspectorPort ?? "-"}	identity=${runtime.identity ?? "-"}`
+    ),
+    ...plot.resources.map(
+      (resource) => `resource	${resource.id}	${resource.provider}	${resource.kind}	${resource.isolation}	${resource.runtimeIdentity ?? "provider"}`
     ),
     ...plot.diagnostics.map((diagnostic) => `diagnostic	${diagnostic}`)
   ];
@@ -29588,6 +29880,22 @@ function formatProvisionResult(result) {
     ),
     `runtime	${result.runtime.status}${result.runtime.detail ? `	${result.runtime.detail}` : ""}`,
     `readiness	${result.readiness.status}${result.readiness.detail ? `	${result.readiness.detail}` : ""}`
+  ];
+}
+function formatWorkspaceStatePlan(plan) {
+  return [
+    `plan	${plan.planId}	retention-days	${plan.retentionDays}`,
+    `records	${plan.totalRecords}	active	${plan.activeRecords}	stale	${plan.staleRecords.length}	prunable	${plan.prunableRecordIds.length}`,
+    ...plan.storage.map(
+      (entry) => `storage	${entry.ownership}	${entry.bytes}	${entry.path}	${entry.note}`
+    ),
+    ...plan.staleRecords.map(
+      (record2) => `record	${record2.action}	${record2.workspaceId}	${record2.ageDays}d	${record2.path}${record2.reasons.length > 0 ? `	${record2.reasons.join(",")}` : ""}`
+    ),
+    ...plan.boundaries.map((boundary) => `boundary	${boundary}`),
+    ...plan.prunableRecordIds.length > 0 ? [
+      `confirmation	required	Run state-prune --confirm ${plan.planId} to remove only the listed Silvic records.`
+    ] : []
   ];
 }
 function setRecoveryExitCode(result) {
@@ -29634,6 +29942,8 @@ Usage:
   silvic adoption-plan --plot ID [--scope single|family] [--json]
   silvic adopt --plot ID [--scope single|family] --confirm STABLE_ID [--json]
   silvic provision --plot ID --confirm STABLE_ID [--remedy convex-cli] [--json]
+  silvic state-plan [--json]
+  silvic state-prune --confirm PLAN_ID [--json]
   silvic start --plot ID [--runtime ID] [--json]
   silvic preview --plot ID [--timeout MS] [--open] [--json]
   silvic stop --plot ID [--runtime ID] [--json]
@@ -29642,8 +29952,9 @@ Usage:
 
 Plot selectors accept a stable Plot id or an absolute Plot path. Before adoption
 or provisioning, inspect adoption-plan and confirm with its selected stable Plot
-ID. Start never confirms provider changes implicitly. Start and stop without
---runtime apply to every declared runtime and are idempotent.
+ID. Start never confirms provider changes implicitly. State pruning requires the
+exact state-plan ID and removes only listed Silvic metadata, never worktrees.
+Start and stop without --runtime apply to every declared runtime and are idempotent.
 `
   );
 }
@@ -29681,6 +29992,12 @@ function buildMcpServer() {
     destructiveHint: false,
     idempotentHint: true,
     openWorldHint: true
+  };
+  const metadataPruneMutation = {
+    readOnlyHint: false,
+    destructiveHint: true,
+    idempotentHint: true,
+    openWorldHint: false
   };
   server.registerTool(
     "list_projects",
@@ -29779,6 +30096,31 @@ function buildMcpServer() {
     async ({ plot, confirmPlotId, remedy }, context) => mcpCall(
       "provision",
       { plot, confirmPlotId, ...remedy ? { remedy } : {} },
+      void 0,
+      context.mcpReq.signal
+    )
+  );
+  server.registerTool(
+    "plan_workspace_state",
+    {
+      description: "Inspect stale Silvic Workspace records, retention, protection reasons, and Silvic/Codex disk usage without changing state.",
+      inputSchema: external_exports.object({}),
+      outputSchema,
+      annotations: readOnly
+    },
+    async (_input, context) => mcpCall("workspaceStatePlan", {}, void 0, context.mcpReq.signal)
+  );
+  server.registerTool(
+    "prune_workspace_state",
+    {
+      description: "Remove only the stale Silvic metadata listed by a current plan_workspace_state result. Never removes directories, worktrees, branches, sessions, or processes.",
+      inputSchema: external_exports.object({ confirmPlanId: external_exports.string().min(1) }),
+      outputSchema,
+      annotations: metadataPruneMutation
+    },
+    async ({ confirmPlanId }, context) => mcpCall(
+      "pruneWorkspaceState",
+      { confirmPlanId },
       void 0,
       context.mcpReq.signal
     )
@@ -29958,7 +30300,7 @@ void main(process.argv.slice(2)).catch((error51) => {
     process.stderr.write(`silvic: ${payload.message}
 `);
   }
-  process.exitCode = usage ? 2 : automation && (error51.code === "SILVIC_UNAVAILABLE" || error51.code === "UNSUPPORTED_PROTOCOL" || error51.code === "INVALID_REPLY") ? 3 : automation && (error51.code === "PLOT_NOT_FOUND" || error51.code === "RUNTIME_NOT_FOUND") ? 4 : automation && error51.code === "READINESS_TIMEOUT" ? 7 : automation && error51.code === "CANCELLED" ? 130 : automation && (error51.code === "RUNTIME_FAILED" || error51.code === "NO_PREVIEW" || error51.code === "CONFIRMATION_REQUIRED" || error51.code === "ADOPTION_REQUIRED" || error51.code === "PROVISIONING_REQUIRED") ? 5 : 1;
+  process.exitCode = usage ? 2 : automation && (error51.code === "SILVIC_UNAVAILABLE" || error51.code === "UNSUPPORTED_PROTOCOL" || error51.code === "INVALID_REPLY") ? 3 : automation && (error51.code === "PLOT_NOT_FOUND" || error51.code === "RUNTIME_NOT_FOUND") ? 4 : automation && error51.code === "READINESS_TIMEOUT" ? 7 : automation && error51.code === "CANCELLED" ? 130 : automation && (error51.code === "RUNTIME_FAILED" || error51.code === "NO_PREVIEW" || error51.code === "CONFIRMATION_REQUIRED" || error51.code === "ADOPTION_REQUIRED" || error51.code === "PROVISIONING_REQUIRED" || error51.code === "STATE_PLAN_CONFIRMATION_REQUIRED") ? 5 : 1;
 });
 /*! Bundled license information:
 

@@ -37,7 +37,11 @@ import {
   listGitHubIssues,
 } from "@silvic/connector-github";
 import { harnessById } from "@silvic/connector-harnesses";
-import { createLocalContextConnector } from "@silvic/connector-local";
+import {
+  activeHarnessSessionWorkspaceIds,
+  createLocalContextConnector,
+  readActiveHarnessSessions,
+} from "@silvic/connector-local";
 import {
   appearancePreferenceSchema,
   codexEnvironmentRequestSchema,
@@ -88,7 +92,7 @@ import {
   CommandSupervisor,
   buildAdoptionPlan,
   configureCodexEnvironment,
-  executeAdoption,
+  executePlannedAdoption,
   ConnectorRegistry,
   DeliveryService,
   EnvironmentService,
@@ -144,6 +148,7 @@ import {
   reserveRuntimePorts,
   type RuntimePortReservations,
 } from "./runtime-reservations";
+import { WorkspaceStateService } from "./workspace-state";
 
 interface Settings {
   roots: string[];
@@ -236,6 +241,22 @@ const settings = new Store<Settings>({
     runningCommands: [],
   },
 });
+const workspaceStateService = new WorkspaceStateService({
+  records: () => settings.get("workspaceRecords"),
+  persist: (records) => settings.set("workspaceRecords", [...records]),
+  snapshot: () => latestSnapshot,
+  refreshAuthoritative: () => refreshSnapshot(true).then(() => undefined),
+  existing: existsSync,
+  activeRuntimes: () => supervisor.list(),
+  activeHarnessWorkspaceIds: async (records) =>
+    activeHarnessSessionWorkspaceIds(
+      records,
+      await readActiveHarnessSessions(runner),
+    ),
+  providerStatePaths: () =>
+    new Set(Object.keys(settings.get("plotProvisioning"))),
+  storage: workspaceStorageUsage,
+});
 const automation = new AutomationController({
   snapshot: () => latestSnapshot,
   roots: () => settings.get("roots"),
@@ -243,6 +264,9 @@ const automation = new AutomationController({
   planAdoption: planPlotAdoption,
   adopt: adoptPlots,
   provision: provisionPlot,
+  inspectWorkspaceState: () => workspaceStateService.inspect(),
+  pruneWorkspaceState: (confirmPlanId) =>
+    workspaceStateService.prune(confirmPlanId),
   processes: () => supervisor.list(),
   start: (plotPath, runtimeId) => startPlotCommand(plotPath, runtimeId, false),
   stop: (plotPath, runtimeId) => supervisor.stop(plotPath, runtimeId),
@@ -1436,44 +1460,23 @@ async function adoptPlots(
   request: PlotAdoptionRunRequest,
 ): Promise<PlotAdoptionRunResult> {
   const plan = await planPlotAdoption(request);
-  if (plan.requiresProviderConfirmation && !request.confirmProviderChanges) {
-    throw new Error(
-      "Confirm the listed provider changes before adopting these plots",
-    );
-  }
-  const members = await executeAdoption({
-    members: plan.members,
+  const result = await executePlannedAdoption({
+    plan,
+    confirmProviderChanges: request.confirmProviderChanges,
     state: workspaceAdoption,
     persist: setWorkspaceAdoption,
-    run: async (member) => {
+    reserve: (member) => {
       // Claim exactly the route shown in the preview before provisioning.
       settings.set("plotPorts", {
         ...settings.get("plotPorts"),
         [member.path]: member.port,
       });
-      const result = await provisionPlot({ path: member.path });
-      const failed = result.provision.find((step) => step.exitCode !== 0);
-      if (failed) throw new Error(`${failed.label} failed`);
-      if (result.runtime.status === "failed") {
-        throw new Error(
-          result.runtime.detail ?? "Plot runtimes failed to start",
-        );
-      }
-      if (result.readiness.status === "failed") {
-        throw new Error(
-          result.readiness.detail ?? "Plot preview did not become ready",
-        );
-      }
-      return {
-        provision: result.provision,
-        runtime: result.runtime,
-        readiness: result.readiness,
-      };
     },
+    provision: (member) => provisionPlot({ path: member.path }),
   });
   await paintFromGit(plan.members.map((member) => member.path));
   void refreshSnapshot(true);
-  return { members };
+  return result;
 }
 
 function workspaceAdoption(workspaceId: string): PlotAdoption | undefined {
@@ -2382,7 +2385,9 @@ function publishSnapshot(
         }
       : record,
   );
-  const reconciled = workspaceRegistry.reconcile(rawSnapshot, existingRecords);
+  const reconciled = workspaceRegistry.reconcile(rawSnapshot, existingRecords, {
+    authoritative: mode === "replace",
+  });
   if (
     !workspaceRecordsEqual(settings.get("workspaceRecords"), reconciled.records)
   ) {
@@ -2397,6 +2402,41 @@ function publishSnapshot(
   latestSnapshot = candidate;
   mainWindow?.webContents.send(ipcChannels.snapshotChanged, latestSnapshot);
   return latestSnapshot;
+}
+
+async function workspaceStorageUsage() {
+  const codexRoot = join(homedir(), ".codex");
+  const locations = [
+    {
+      path: app.getPath("userData"),
+      ownership: "silvic" as const,
+      note: "Silvic settings, logs, and local application state",
+    },
+    {
+      path: codexRoot,
+      ownership: "codex" as const,
+      note: "Observed Codex state; Silvic never removes it",
+    },
+    {
+      path: join(codexRoot, "worktrees"),
+      ownership: "codex" as const,
+      note: "Observed Codex worktrees; Silvic never removes them",
+    },
+  ];
+  const results = await Promise.all(
+    locations.map(async (location) => {
+      const result = await runner.run({
+        executable: "du",
+        arguments: ["-sk", location.path],
+        outputLimit: 4_000,
+      });
+      const kibibytes = Number(result.stdout.trim().split(/\s+/, 1)[0]);
+      return result.exitCode === 0 && Number.isFinite(kibibytes)
+        ? { ...location, bytes: kibibytes * 1_024 }
+        : undefined;
+    }),
+  );
+  return results.filter((result) => result !== undefined);
 }
 
 /**

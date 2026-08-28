@@ -16,7 +16,7 @@ import type {
   SilvicSnapshot,
   WorkspaceSnapshot,
 } from "@silvic/contracts";
-import type { SupervisedCommand } from "@silvic/core";
+import type { SupervisedCommand, WorkspaceStatePlan } from "@silvic/core";
 
 import {
   AutomationController,
@@ -102,6 +102,11 @@ function controller(
     provision?: (
       request: PlotProvisionRequest,
     ) => Promise<PlotProvisionRunResult>;
+    inspectWorkspaceState?: () => Promise<WorkspaceStatePlan>;
+    pruneWorkspaceState?: (confirmPlanId: string) => Promise<{
+      plan: WorkspaceStatePlan;
+      removedRecordIds: readonly string[];
+    }>;
     processes?: readonly SupervisedCommand[];
     start?: (plotPath: string, runtimeId: string) => Promise<void>;
     stop?: (plotPath: string, runtimeId: string) => void;
@@ -159,6 +164,14 @@ function controller(
         runtime: { status: "not-required", durationMs: 0 },
         readiness: { status: "not-required", durationMs: 0 },
       })),
+    inspectWorkspaceState:
+      options.inspectWorkspaceState ?? (async () => statePlan("state_empty")),
+    pruneWorkspaceState:
+      options.pruneWorkspaceState ??
+      (async (confirmPlanId) => ({
+        plan: statePlan(confirmPlanId),
+        removedRecordIds: [],
+      })),
     processes: () => options.processes ?? [],
     start: options.start ?? (async () => undefined),
     stop: options.stop ?? (() => undefined),
@@ -168,6 +181,58 @@ function controller(
     ...(options.now ? { now: options.now } : {}),
   });
 }
+
+function statePlan(planId: string): WorkspaceStatePlan {
+  return {
+    planId,
+    generatedAt: "2026-08-28T00:00:00.000Z",
+    retentionDays: 30,
+    totalRecords: 0,
+    activeRecords: 0,
+    staleRecords: [],
+    prunableRecordIds: [],
+    storage: [],
+    boundaries: [],
+  };
+}
+
+describe("workspace state automation", () => {
+  it("returns a read-only plan before forwarding an exact confirmation", async () => {
+    const inspectWorkspaceState = vi.fn(async () => statePlan("state_exact"));
+    const pruneWorkspaceState = vi.fn(async (confirmPlanId: string) => ({
+      plan: statePlan(confirmPlanId),
+      removedRecordIds: ["stale-1"],
+    }));
+    const automation = controller({
+      inspectWorkspaceState,
+      pruneWorkspaceState,
+    });
+
+    await expect(
+      automation.handle(request("workspaceStatePlan", {})),
+    ).resolves.toMatchObject({ planId: "state_exact" });
+    await expect(
+      automation.handle(
+        request("pruneWorkspaceState", { confirmPlanId: "state_exact" }),
+      ),
+    ).resolves.toMatchObject({ removedRecordIds: ["stale-1"] });
+    expect(inspectWorkspaceState).toHaveBeenCalledOnce();
+    expect(pruneWorkspaceState).toHaveBeenCalledWith("state_exact");
+  });
+
+  it("rejects unknown pruning parameters before state can change", async () => {
+    const pruneWorkspaceState = vi.fn();
+    await expect(
+      controller({ pruneWorkspaceState }).handle(
+        request("pruneWorkspaceState", {
+          confirmPlanId: "state_exact",
+          path: "/arbitrary/worktree",
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+    expect(pruneWorkspaceState).not.toHaveBeenCalled();
+  });
+});
 
 describe("automation lifecycle states", () => {
   const runtime = (
