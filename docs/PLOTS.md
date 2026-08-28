@@ -131,6 +131,45 @@ but cannot configure it. Convex and emulated WorkOS provisioning remain typed
 and Silvic-owned; the other provider entries are currently visibility, links
 and process supervision where a command is attached.
 
+Every supervised command receives a stable per-Attempt runtime context:
+
+- `SILVIC_ATTEMPT_ID` and `SILVIC_RUNTIME_ID` identify the Workspace Attempt
+  and recipe command;
+- `PORT` and `SILVIC_RUNTIME_PORT` are the command's reserved main port;
+- `SILVIC_INSPECTOR_PORT` is a separately reserved side port; and
+- Node's own inspector follows that port through `NODE_OPTIONS` when enabled.
+
+Reservations are persisted before launch, so parallel starts cannot choose the
+same candidate. The first browser-serving command keeps the Plot's established
+main port; every other command and every inspector receives a distinct port.
+Repeated Start reuses the same reservation.
+
+A LiveKit resource linked to a command additionally receives
+`SILVIC_AGENT_NAME`, `LIVEKIT_AGENT_NAME`, and
+`SILVIC_RESOURCE_<ID>_IDENTITY`. These are public, stable runtime identities
+derived from the Project, Plot and Attempt — no API keys or secrets are read or
+logged. The provider remains `shared`; only the agent identity is namespaced.
+Link the resource with `"command": "agent"` for this injection to apply.
+
+`NODE_OPTIONS` does not configure provider-owned inspectors. In particular,
+the Cloudflare/Vite Worker inspector is separate from Node's inspector. Generic
+Silvic cannot safely rewrite an arbitrary Vite or Astro configuration, so a
+project using that plugin must explicitly consume the reserved contract from
+`SILVIC_INSPECTOR_PORT`:
+
+```ts
+cloudflare({
+  inspectorPort: Number(process.env.SILVIC_INSPECTOR_PORT),
+});
+```
+
+The same pattern applies when Astro composes the Cloudflare Vite plugin. A
+project must not call a “find a free inspector port” helper independently;
+that check-and-bind sequence can race another Plot. Silvic's reserved value is
+the cross-Plot coordination point. Until the project passes this value to the
+plugin, Silvic reserves and reports the port but does not claim that the
+Cloudflare/Vite inspector itself is isolated.
+
 ## Stable named URLs
 
 A Plot's address has to satisfy two audiences: a person reading it, and an

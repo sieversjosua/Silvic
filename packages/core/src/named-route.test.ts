@@ -120,6 +120,35 @@ describe("descendantListenerPorts", () => {
   });
 });
 
+describe("persisted route identity", () => {
+  it("revalidates five parallel Plot listeners against their own process trees", async () => {
+    const listenerByRoot = new Map(
+      Array.from({ length: 5 }, (_, index) => [
+        10_000 + index,
+        { processId: 20_000 + index, port: 31_000 + index },
+      ]),
+    );
+    const publisher = new GateRoutePublisher({
+      link: recordingLink().link,
+      inspect: async (rootProcessId) => {
+        const listener = listenerByRoot.get(rootProcessId);
+        return listener ? [listener] : [];
+      },
+    });
+
+    await expect(
+      Promise.all(
+        [...listenerByRoot].map(([processId, listener]) =>
+          publisher.verify({ processId, port: listener.port }),
+        ),
+      ),
+    ).resolves.toEqual([true, true, true, true, true]);
+    await expect(
+      publisher.verify({ processId: 10_000, port: 31_001 }),
+    ).resolves.toBe(false);
+  });
+});
+
 describe("GateRoutePublisher", () => {
   it("checks an established route without requesting the application", async () => {
     const server = createServer();

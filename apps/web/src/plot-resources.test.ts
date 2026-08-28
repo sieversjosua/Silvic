@@ -160,6 +160,27 @@ describe("plotResources", () => {
     expect(web).not.toHaveProperty("url");
   });
 
+  it("preserves custom detail while appending the isolation warning", () => {
+    const [resource] = plotResources({
+      workspace,
+      commands: {},
+      processes: [],
+      declared: {
+        ingress: {
+          provider: "cloudflare",
+          kind: "ingress",
+          isolation: "manual",
+          detail: "Tunnel maintained by the platform team.",
+        },
+      },
+    });
+
+    expect(resource?.detail).toContain(
+      "Tunnel maintained by the platform team.",
+    );
+    expect(resource?.detail).toContain("isolation is manual");
+  });
+
   it("keeps coding sessions out of the provider resource list", () => {
     const resources = plotResources({
       workspace: {

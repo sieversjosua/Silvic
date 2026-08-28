@@ -5,12 +5,14 @@ import type {
   PlotAdoptionRunRequest,
   PlotAdoptionRunResult,
   PlotCommand,
+  PlotResourceDefinition,
   PlotProvisionRequest,
   PlotProvisionRunResult,
   ProjectSnapshot,
   SilvicSnapshot,
   WorkspaceSnapshot,
 } from "@silvic/contracts";
+import { assessResourceIsolation } from "@silvic/contracts";
 import type { SupervisedCommand } from "@silvic/core";
 
 import { AutomationError, type AutomationRequest } from "./protocol";
@@ -32,6 +34,8 @@ export interface AutomationRuntime {
   routeName?: string;
   targetPort?: number;
   expectedPort?: number;
+  inspectorPort?: number;
+  identity?: string;
   processId?: number;
   exitCode?: number;
   advice?: string;
@@ -50,7 +54,18 @@ export interface AutomationPlot {
   state: PlotLifecycleState;
   previewUrl?: string;
   runtimes: readonly AutomationRuntime[];
+  resources: readonly AutomationResource[];
   diagnostics: readonly string[];
+}
+
+export interface AutomationResource {
+  id: string;
+  provider: PlotResourceDefinition["provider"];
+  kind: PlotResourceDefinition["kind"];
+  isolation: PlotResourceDefinition["isolation"];
+  commandId?: string;
+  /** Local runtime identity is namespaced; the provider itself remains shared. */
+  runtimeIdentity?: "namespaced";
 }
 
 export interface AutomationProject {
@@ -62,6 +77,7 @@ export interface AutomationProject {
 
 interface PlotDefinition {
   commands: Readonly<Record<string, PlotCommand>>;
+  resources: Readonly<Record<string, PlotResourceDefinition>>;
   requiresProvisioning: boolean;
   previewUrl?: string;
 }
@@ -462,6 +478,10 @@ export class AutomationController {
           ...(process?.expectedPort === undefined
             ? {}
             : { expectedPort: process.expectedPort }),
+          ...(process?.inspectorPort === undefined
+            ? {}
+            : { inspectorPort: process.inspectorPort }),
+          ...(process?.identity ? { identity: process.identity } : {}),
           ...(process?.processId === undefined
             ? {}
             : { processId: process.processId }),
@@ -472,6 +492,29 @@ export class AutomationController {
           ...(process?.notice ? { notice: process.notice } : {}),
         };
       },
+    );
+    const resourceAssessments = Object.entries(definition.resources).map(
+      ([id, resource]) => ({
+        id,
+        resource,
+        assessment: assessResourceIsolation(resource),
+      }),
+    );
+    const resources = resourceAssessments.map(
+      ({ id, resource, assessment }): AutomationResource => ({
+        id,
+        provider: resource.provider,
+        kind: resource.kind,
+        isolation: resource.isolation,
+        ...(resource.command ? { commandId: resource.command } : {}),
+        ...(assessment.runtimeIdentity
+          ? { runtimeIdentity: assessment.runtimeIdentity }
+          : {}),
+      }),
+    );
+    const isolationDiagnostics = resourceAssessments.flatMap(
+      ({ id, assessment }) =>
+        assessment.warning ? [`${id}: ${assessment.warning}`] : [],
     );
     return {
       id: plot.workspaceId,
@@ -485,13 +528,17 @@ export class AutomationController {
       state: lifecycleState(runtimes),
       ...(definition.previewUrl ? { previewUrl: definition.previewUrl } : {}),
       runtimes,
-      diagnostics: runtimes.flatMap((runtime) =>
-        runtime.advice
-          ? [`${runtime.id}: ${runtime.advice}`]
-          : runtime.status === "failed"
-            ? [`${runtime.id}: exited with code ${runtime.exitCode ?? 1}`]
-            : [],
-      ),
+      resources,
+      diagnostics: [
+        ...runtimes.flatMap((runtime) =>
+          runtime.advice
+            ? [`${runtime.id}: ${runtime.advice}`]
+            : runtime.status === "failed"
+              ? [`${runtime.id}: exited with code ${runtime.exitCode ?? 1}`]
+              : [],
+        ),
+        ...isolationDiagnostics,
+      ],
     };
   }
 

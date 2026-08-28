@@ -109,6 +109,7 @@ import {
   plotPort,
   resolvePlotAddress,
   provisionEnvironment,
+  runtimeIsolationEnvironment,
   primeResolvedCommandPath,
   provisionCompleted,
   provisionStepLabel,
@@ -139,6 +140,10 @@ import {
 } from "./application-menu";
 import { DesktopUpdater } from "./updater";
 import { startSessionRefreshLoop } from "./session-refresh";
+import {
+  reserveRuntimePorts,
+  type RuntimePortReservations,
+} from "./runtime-reservations";
 
 interface Settings {
   roots: string[];
@@ -149,6 +154,8 @@ interface Settings {
   defaultHarness: HarnessId;
   /** Plot path to the port it was assigned, so addresses stay stable. */
   plotPorts: Record<string, number>;
+  /** Stable per-Attempt runtime and inspector reservations. */
+  runtimePorts: RuntimePortReservations;
   /** Plot path to the outcome of the last provisioning run there. */
   plotProvisioning: Record<string, PlotProvisioning>;
   /** Whether a plot's commands outlive the window that started them. */
@@ -223,6 +230,7 @@ const settings = new Store<Settings>({
     activeProjects: [],
     defaultHarness: "codex",
     plotPorts: {},
+    runtimePorts: {},
     plotProvisioning: {},
     keepCommandsRunning: true,
     runningCommands: [],
@@ -1907,6 +1915,21 @@ async function startPlotCommand(
     storedPlotPort(workspace.path) ??
     plotPort(recipe.project, plot, takenPlotPorts());
   const address = addressFor(recipe, plot, port);
+  const runtimePorts = reserveRuntimePorts({
+    store: {
+      read: () => settings.get("runtimePorts"),
+      write: (reservations) => settings.set("runtimePorts", reservations),
+    },
+    workspaceId: workspace.workspaceId,
+    commands: recipe.commands,
+    commandId: id,
+    plotPort: port,
+    claimedPlotPorts: Object.values(settings.get("plotPorts")),
+    activePorts: supervisor
+      .list()
+      .flatMap((runtime) => [runtime.expectedPort, runtime.targetPort])
+      .filter((candidate): candidate is number => candidate !== undefined),
+  });
   let routeAdvice: string | undefined;
   if (address.named) {
     // Starting a named runtime is the moment the gate must exist: set it up
@@ -1942,8 +1965,23 @@ async function startPlotCommand(
           : {}),
       }),
       // Ignored by a routed command: portless hands out its own.
-      PORT: String(port),
+      PORT: String(runtimePorts.port),
     },
+    isolationEnvironment: runtimeIsolationEnvironment({
+      project: recipe.project,
+      plot,
+      attemptId: workspace.workspaceId,
+      commandId: id,
+      port: runtimePorts.port,
+      inspectorPort: runtimePorts.inspectorPort,
+      resources: recipe.resources,
+      ...((command.env?.["NODE_OPTIONS"] ?? process.env["NODE_OPTIONS"])
+        ? {
+            nodeOptions:
+              command.env?.["NODE_OPTIONS"] ?? process.env["NODE_OPTIONS"]!,
+          }
+        : {}),
+    }),
     canRoute: await gate.available(),
     ...(routeAdvice ? { routeAdvice } : {}),
     detached: settings.get("keepCommandsRunning"),
@@ -1955,6 +1993,7 @@ async function automationPlotDefinition(
   workspace: WorkspaceSnapshot,
 ): Promise<{
   commands: Readonly<Record<string, PlotCommand>>;
+  resources: ResolvedRecipe["resources"];
   requiresProvisioning: boolean;
   previewUrl?: string;
 }> {
@@ -1972,6 +2011,7 @@ async function automationPlotDefinition(
   );
   return {
     commands: recipe.commands,
+    resources: recipe.resources,
     requiresProvisioning: recipe.provision.length > 0,
     ...(servesPreview
       ? { previewUrl: addressFor(recipe, plot, port).url }

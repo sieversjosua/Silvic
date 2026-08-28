@@ -19,6 +19,7 @@ export * from "./provisioner";
 export * from "./readiness";
 export * from "./recipe";
 export * from "./runtime-start";
+export * from "./runtime-isolation";
 export * from "./snapshot-merge";
 export * from "./teardown";
 export * from "./workos-provisioner";
