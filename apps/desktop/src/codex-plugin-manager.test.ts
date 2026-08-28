@@ -6,6 +6,8 @@ import { promisify } from "node:util";
 
 import { afterEach, expect, it, vi } from "vitest";
 
+import packageMetadata from "../package.json" with { type: "json" };
+
 import {
   packagedCodexMarketplaceRoot,
   reconcileCodexPlugin as reconcileCodexPluginImplementation,
@@ -19,6 +21,7 @@ const codexAvailable =
   spawnSync("codex", ["--version"], {
     stdio: "ignore",
   }).status === 0;
+const appVersion = packageMetadata.version;
 
 function reconcileCodexPlugin(
   options: Parameters<typeof reconcileCodexPluginImplementation>[0],
@@ -72,7 +75,7 @@ it("offers one stable selector for a first installation", async () => {
 
   const result = await reconcileCodexPlugin({
     marketplaceRoot,
-    appVersion: "0.1.56",
+    appVersion,
     installIfMissing: false,
     execute,
     verifyInstalledPlugin: vi.fn(),
@@ -81,7 +84,7 @@ it("offers one stable selector for a first installation", async () => {
   expect(result).toMatchObject({
     status: "not-installed",
     selector: "silvic@silvic",
-    appVersion: "0.1.56",
+    appVersion,
     restartRequired: false,
   });
   expect(execute.calls).toEqual([
@@ -98,13 +101,13 @@ it("installs the packaged marketplace and plugin only after consent", async () =
     pluginInventory(),
     { marketplaceName: "silvic", installedRoot: marketplaceRoot },
     installResult(installedRoot),
-    pluginInventory(stablePlugin("0.1.56", marketplaceRoot)),
+    pluginInventory(stablePlugin(appVersion, marketplaceRoot)),
   ]);
   const verifyInstalledPlugin = vi.fn(async () => undefined);
 
   const result = await reconcileCodexPlugin({
     marketplaceRoot,
-    appVersion: "0.1.56",
+    appVersion,
     installIfMissing: true,
     execute,
     verifyInstalledPlugin,
@@ -131,7 +134,7 @@ it("installs the packaged marketplace and plugin only after consent", async () =
   expect(execute.calls.some((args) => args.includes("remove"))).toBe(false);
   expect(verifyInstalledPlugin).toHaveBeenCalledWith({
     pluginRoot: installedRoot,
-    appVersion: "0.1.56",
+    appVersion,
   });
 });
 
@@ -140,13 +143,13 @@ it("upgrades the stable selector without removing or reinstalling it", async () 
   const execute = sequence([
     marketplaceInventory(marketplaceRoot),
     pluginInventory(stablePlugin("0.1.55", marketplaceRoot)),
-    installResult("/installed/silvic/0.1.56"),
-    pluginInventory(stablePlugin("0.1.56", marketplaceRoot)),
+    installResult(`/installed/silvic/${appVersion}`),
+    pluginInventory(stablePlugin(appVersion, marketplaceRoot)),
   ]);
 
   const result = await reconcileCodexPlugin({
     marketplaceRoot,
-    appVersion: "0.1.56",
+    appVersion,
     installIfMissing: false,
     execute,
     verifyInstalledPlugin: vi.fn(async () => undefined),
@@ -165,14 +168,14 @@ it("re-verifies a current install without requiring another restart", async () =
   const marketplaceRoot = await packagedMarketplace();
   const execute = sequence([
     marketplaceInventory(marketplaceRoot),
-    pluginInventory(stablePlugin("0.1.56", marketplaceRoot)),
-    installResult("/installed/silvic/0.1.56"),
-    pluginInventory(stablePlugin("0.1.56", marketplaceRoot)),
+    pluginInventory(stablePlugin(appVersion, marketplaceRoot)),
+    installResult(`/installed/silvic/${appVersion}`),
+    pluginInventory(stablePlugin(appVersion, marketplaceRoot)),
   ]);
 
   const result = await reconcileCodexPlugin({
     marketplaceRoot,
-    appVersion: "0.1.56",
+    appVersion,
     installIfMissing: false,
     execute,
     verifyInstalledPlugin: vi.fn(async () => undefined),
@@ -190,12 +193,12 @@ it.each(["silvic@silvic-0-1-55", "silvic@personal"])(
       "0.1.55",
       join(marketplaceRoot, "plugins/silvic"),
     );
-    const stable = stablePlugin("0.1.56", marketplaceRoot);
+    const stable = stablePlugin(appVersion, marketplaceRoot);
     const execute = sequence([
       marketplaceInventory(),
       pluginInventory(legacy),
       { marketplaceName: "silvic", installedRoot: marketplaceRoot },
-      installResult("/installed/silvic/0.1.56"),
+      installResult(`/installed/silvic/${appVersion}`),
       pluginInventory(stable, legacy),
       { pluginId: legacy.pluginId },
       pluginInventory(stable),
@@ -204,7 +207,7 @@ it.each(["silvic@silvic-0-1-55", "silvic@personal"])(
 
     const result = await reconcileCodexPlugin({
       marketplaceRoot,
-      appVersion: "0.1.56",
+      appVersion,
       installIfMissing: false,
       execute,
       verifyInstalledPlugin,
@@ -240,7 +243,7 @@ it("rejects a partial or mismatched packaged source before running Codex", async
 
   const result = await reconcileCodexPlugin({
     marketplaceRoot,
-    appVersion: "0.1.56",
+    appVersion,
     installIfMissing: true,
     execute,
     verifyInstalledPlugin: vi.fn(),
@@ -257,7 +260,7 @@ it("rejects a packaged CLI mismatch before changing the installed plugin", async
 
   const result = await reconcileCodexPlugin({
     marketplaceRoot,
-    appVersion: "0.1.56",
+    appVersion,
     installIfMissing: true,
     execute,
     verifyPackagedCli: vi.fn(async () => {
@@ -284,12 +287,12 @@ it("does not remove a personal plugin whose source manifest is not Silvic", asyn
   await writeFile(manifestPath, `${JSON.stringify(manifest, undefined, 2)}\n`);
   const execute = sequence([
     marketplaceInventory(),
-    pluginInventory(plugin("silvic@personal", "0.1.56", foreignRoot)),
+    pluginInventory(plugin("silvic@personal", appVersion, foreignRoot)),
   ]);
 
   const result = await reconcileCodexPlugin({
     marketplaceRoot,
-    appVersion: "0.1.56",
+    appVersion,
     installIfMissing: false,
     execute,
     verifyInstalledPlugin: vi.fn(),
@@ -312,7 +315,7 @@ it("stops on a marketplace name collision without mutating Codex", async () => {
 
   const result = await reconcileCodexPlugin({
     marketplaceRoot,
-    appVersion: "0.1.56",
+    appVersion,
     installIfMissing: false,
     execute,
     verifyInstalledPlugin: vi.fn(),
@@ -339,7 +342,7 @@ it("keeps the legacy selector when the refreshed version does not match", async 
 
   const result = await reconcileCodexPlugin({
     marketplaceRoot,
-    appVersion: "0.1.56",
+    appVersion,
     installIfMissing: false,
     execute,
     verifyInstalledPlugin: vi.fn(),
@@ -357,18 +360,18 @@ it("keeps the legacy selector when the real MCP verification fails", async () =>
     "0.1.55",
     join(marketplaceRoot, "plugins/silvic"),
   );
-  const stable = stablePlugin("0.1.56", marketplaceRoot);
+  const stable = stablePlugin(appVersion, marketplaceRoot);
   const execute = sequence([
     marketplaceInventory(),
     pluginInventory(legacy),
     { marketplaceName: "silvic", installedRoot: marketplaceRoot },
-    installResult("/installed/silvic/0.1.56"),
+    installResult(`/installed/silvic/${appVersion}`),
     pluginInventory(stable, legacy),
   ]);
 
   const result = await reconcileCodexPlugin({
     marketplaceRoot,
-    appVersion: "0.1.56",
+    appVersion,
     installIfMissing: false,
     execute,
     verifyInstalledPlugin: vi.fn(async () => {
@@ -393,12 +396,12 @@ it("restores an already removed legacy selector when migration later fails", asy
     "0.1.55",
     join(marketplaceRoot, "plugins/silvic"),
   );
-  const stable = stablePlugin("0.1.56", marketplaceRoot);
+  const stable = stablePlugin(appVersion, marketplaceRoot);
   const execute = sequence([
     marketplaceInventory(),
     pluginInventory(generated, personal),
     { marketplaceName: "silvic", installedRoot: marketplaceRoot },
-    installResult("/installed/silvic/0.1.56"),
+    installResult(`/installed/silvic/${appVersion}`),
     pluginInventory(stable, generated, personal),
     { pluginId: generated.pluginId },
     new Error("personal removal failed"),
@@ -408,7 +411,7 @@ it("restores an already removed legacy selector when migration later fails", asy
 
   const result = await reconcileCodexPlugin({
     marketplaceRoot,
-    appVersion: "0.1.56",
+    appVersion,
     installIfMissing: false,
     execute,
     verifyInstalledPlugin: vi.fn(async () => undefined),
@@ -434,12 +437,12 @@ it("reports a legacy selector when migration rollback cannot restore it", async 
     "0.1.55",
     join(marketplaceRoot, "plugins/silvic"),
   );
-  const stable = stablePlugin("0.1.56", marketplaceRoot);
+  const stable = stablePlugin(appVersion, marketplaceRoot);
   const execute = sequence([
     marketplaceInventory(),
     pluginInventory(generated, personal),
     { marketplaceName: "silvic", installedRoot: marketplaceRoot },
-    installResult("/installed/silvic/0.1.56"),
+    installResult(`/installed/silvic/${appVersion}`),
     pluginInventory(stable, generated, personal),
     { pluginId: generated.pluginId },
     new Error("personal removal failed"),
@@ -449,7 +452,7 @@ it("reports a legacy selector when migration rollback cannot restore it", async 
 
   const result = await reconcileCodexPlugin({
     marketplaceRoot,
-    appVersion: "0.1.56",
+    appVersion,
     installIfMissing: false,
     execute,
     verifyInstalledPlugin: vi.fn(async () => undefined),
@@ -474,12 +477,12 @@ it("does not trust a successful restore command without inventory confirmation",
     "0.1.55",
     join(marketplaceRoot, "plugins/silvic"),
   );
-  const stable = stablePlugin("0.1.56", marketplaceRoot);
+  const stable = stablePlugin(appVersion, marketplaceRoot);
   const execute = sequence([
     marketplaceInventory(),
     pluginInventory(generated, personal),
     { marketplaceName: "silvic", installedRoot: marketplaceRoot },
-    installResult("/installed/silvic/0.1.56"),
+    installResult(`/installed/silvic/${appVersion}`),
     pluginInventory(stable, generated, personal),
     { pluginId: generated.pluginId },
     new Error("personal removal failed"),
@@ -489,7 +492,7 @@ it("does not trust a successful restore command without inventory confirmation",
 
   const result = await reconcileCodexPlugin({
     marketplaceRoot,
-    appVersion: "0.1.56",
+    appVersion,
     installIfMissing: false,
     execute,
     verifyInstalledPlugin: vi.fn(async () => undefined),
@@ -522,7 +525,7 @@ it.runIf(codexAvailable)(
     await expect(
       reconcileCodexPlugin({
         marketplaceRoot,
-        appVersion: "0.1.56",
+        appVersion,
         installIfMissing: true,
         execute,
         verifyInstalledPlugin,
@@ -534,7 +537,8 @@ it.runIf(codexAvailable)(
       "plugins/silvic/.codex-plugin/plugin.json",
     );
     const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
-    manifest.version = "0.1.57";
+    const upgradedVersion = nextPatchVersion(appVersion);
+    manifest.version = upgradedVersion;
     await writeFile(
       manifestPath,
       `${JSON.stringify(manifest, undefined, 2)}\n`,
@@ -543,7 +547,7 @@ it.runIf(codexAvailable)(
     await expect(
       reconcileCodexPlugin({
         marketplaceRoot,
-        appVersion: "0.1.57",
+        appVersion: upgradedVersion,
         installIfMissing: false,
         execute,
         verifyInstalledPlugin,
@@ -555,7 +559,7 @@ it.runIf(codexAvailable)(
       installed: [
         {
           pluginId: "silvic@silvic",
-          version: "0.1.57",
+          version: upgradedVersion,
           installed: true,
           enabled: true,
         },
@@ -622,7 +626,7 @@ function plugin(
   };
 }
 
-function installResult(installedPath: string, version = "0.1.56") {
+function installResult(installedPath: string, version = appVersion) {
   return {
     pluginId: "silvic@silvic",
     name: "silvic",
@@ -630,6 +634,14 @@ function installResult(installedPath: string, version = "0.1.56") {
     version,
     installedPath,
   };
+}
+
+function nextPatchVersion(version: string): string {
+  const [major, minor, patch] = version.split(".").map(Number);
+  if (![major, minor, patch].every(Number.isSafeInteger)) {
+    throw new Error(`Expected a stable release version, received ${version}`);
+  }
+  return `${major}.${minor}.${patch! + 1}`;
 }
 
 function sequence(results: unknown[]) {
