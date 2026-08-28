@@ -3,6 +3,8 @@ import type {
   PlotAdoptionMemberResult,
   PlotAdoptionPlan,
   PlotAdoptionPlanMember,
+  PlotAdoptionRunResult,
+  PlotProvisionRunResult,
   ProjectSnapshot,
   ProvisionStep,
   WorkspaceSnapshot,
@@ -144,4 +146,58 @@ export async function executeAdoption({
     }
   }
   return results;
+}
+
+/**
+ * The shared desktop/automation adoption transaction: confirm the displayed
+ * provider plan, reserve its exact local identity, provision, and persist each
+ * member outcome.
+ */
+export async function executePlannedAdoption({
+  plan,
+  confirmProviderChanges,
+  state,
+  persist,
+  reserve,
+  provision,
+}: {
+  plan: PlotAdoptionPlan;
+  confirmProviderChanges: boolean;
+  state(workspaceId: string): PlotAdoption | undefined;
+  persist(workspaceId: string, adoption: PlotAdoption): void | Promise<void>;
+  reserve(member: PlotAdoptionPlanMember): void | Promise<void>;
+  provision(member: PlotAdoptionPlanMember): Promise<PlotProvisionRunResult>;
+}): Promise<PlotAdoptionRunResult> {
+  if (plan.requiresProviderConfirmation && !confirmProviderChanges) {
+    throw new Error(
+      "Confirm the listed provider changes before adopting these plots",
+    );
+  }
+  const members = await executeAdoption({
+    members: plan.members,
+    state,
+    persist,
+    run: async (member) => {
+      await reserve(member);
+      const result = await provision(member);
+      const failed = result.provision.find((step) => step.exitCode !== 0);
+      if (failed) throw new Error(`${failed.label} failed`);
+      if (result.runtime.status === "failed") {
+        throw new Error(
+          result.runtime.detail ?? "Plot runtimes failed to start",
+        );
+      }
+      if (result.readiness.status === "failed") {
+        throw new Error(
+          result.readiness.detail ?? "Plot preview did not become ready",
+        );
+      }
+      return {
+        provision: result.provision,
+        runtime: result.runtime,
+        readiness: result.readiness,
+      };
+    },
+  });
+  return { members };
 }

@@ -37,7 +37,11 @@ import {
   listGitHubIssues,
 } from "@silvic/connector-github";
 import { harnessById } from "@silvic/connector-harnesses";
-import { createLocalContextConnector } from "@silvic/connector-local";
+import {
+  activeHarnessSessionWorkspaceIds,
+  createLocalContextConnector,
+  readActiveHarnessSessions,
+} from "@silvic/connector-local";
 import {
   appearancePreferenceSchema,
   codexEnvironmentRequestSchema,
@@ -88,7 +92,7 @@ import {
   CommandSupervisor,
   buildAdoptionPlan,
   configureCodexEnvironment,
-  executeAdoption,
+  executePlannedAdoption,
   ConnectorRegistry,
   DeliveryService,
   EnvironmentService,
@@ -109,6 +113,7 @@ import {
   plotPort,
   resolvePlotAddress,
   provisionEnvironment,
+  runtimeIsolationEnvironment,
   primeResolvedCommandPath,
   provisionCompleted,
   provisionStepLabel,
@@ -144,6 +149,11 @@ import {
   readCodexPluginInventory,
 } from "./plugin-compatibility";
 import { startSessionRefreshLoop } from "./session-refresh";
+import {
+  reserveRuntimePorts,
+  type RuntimePortReservations,
+} from "./runtime-reservations";
+import { WorkspaceStateService } from "./workspace-state";
 
 interface Settings {
   roots: string[];
@@ -154,6 +164,8 @@ interface Settings {
   defaultHarness: HarnessId;
   /** Plot path to the port it was assigned, so addresses stay stable. */
   plotPorts: Record<string, number>;
+  /** Stable per-Attempt runtime and inspector reservations. */
+  runtimePorts: RuntimePortReservations;
   /** Plot path to the outcome of the last provisioning run there. */
   plotProvisioning: Record<string, PlotProvisioning>;
   /** Whether a plot's commands outlive the window that started them. */
@@ -228,10 +240,27 @@ const settings = new Store<Settings>({
     activeProjects: [],
     defaultHarness: "codex",
     plotPorts: {},
+    runtimePorts: {},
     plotProvisioning: {},
     keepCommandsRunning: true,
     runningCommands: [],
   },
+});
+const workspaceStateService = new WorkspaceStateService({
+  records: () => settings.get("workspaceRecords"),
+  persist: (records) => settings.set("workspaceRecords", [...records]),
+  snapshot: () => latestSnapshot,
+  refreshAuthoritative: () => refreshSnapshot(true).then(() => undefined),
+  existing: existsSync,
+  activeRuntimes: () => supervisor.list(),
+  activeHarnessWorkspaceIds: async (records) =>
+    activeHarnessSessionWorkspaceIds(
+      records,
+      await readActiveHarnessSessions(runner),
+    ),
+  providerStatePaths: () =>
+    new Set(Object.keys(settings.get("plotProvisioning"))),
+  storage: workspaceStorageUsage,
 });
 const automation = new AutomationController({
   snapshot: () => latestSnapshot,
@@ -240,6 +269,9 @@ const automation = new AutomationController({
   planAdoption: planPlotAdoption,
   adopt: adoptPlots,
   provision: provisionPlot,
+  inspectWorkspaceState: () => workspaceStateService.inspect(),
+  pruneWorkspaceState: (confirmPlanId) =>
+    workspaceStateService.prune(confirmPlanId),
   processes: () => supervisor.list(),
   start: (plotPath, runtimeId) => startPlotCommand(plotPath, runtimeId, false),
   stop: (plotPath, runtimeId) => supervisor.stop(plotPath, runtimeId),
@@ -1460,44 +1492,23 @@ async function adoptPlots(
   request: PlotAdoptionRunRequest,
 ): Promise<PlotAdoptionRunResult> {
   const plan = await planPlotAdoption(request);
-  if (plan.requiresProviderConfirmation && !request.confirmProviderChanges) {
-    throw new Error(
-      "Confirm the listed provider changes before adopting these plots",
-    );
-  }
-  const members = await executeAdoption({
-    members: plan.members,
+  const result = await executePlannedAdoption({
+    plan,
+    confirmProviderChanges: request.confirmProviderChanges,
     state: workspaceAdoption,
     persist: setWorkspaceAdoption,
-    run: async (member) => {
+    reserve: (member) => {
       // Claim exactly the route shown in the preview before provisioning.
       settings.set("plotPorts", {
         ...settings.get("plotPorts"),
         [member.path]: member.port,
       });
-      const result = await provisionPlot({ path: member.path });
-      const failed = result.provision.find((step) => step.exitCode !== 0);
-      if (failed) throw new Error(`${failed.label} failed`);
-      if (result.runtime.status === "failed") {
-        throw new Error(
-          result.runtime.detail ?? "Plot runtimes failed to start",
-        );
-      }
-      if (result.readiness.status === "failed") {
-        throw new Error(
-          result.readiness.detail ?? "Plot preview did not become ready",
-        );
-      }
-      return {
-        provision: result.provision,
-        runtime: result.runtime,
-        readiness: result.readiness,
-      };
     },
+    provision: (member) => provisionPlot({ path: member.path }),
   });
   await paintFromGit(plan.members.map((member) => member.path));
   void refreshSnapshot(true);
-  return { members };
+  return result;
 }
 
 function workspaceAdoption(workspaceId: string): PlotAdoption | undefined {
@@ -1939,6 +1950,21 @@ async function startPlotCommand(
     storedPlotPort(workspace.path) ??
     plotPort(recipe.project, plot, takenPlotPorts());
   const address = addressFor(recipe, plot, port);
+  const runtimePorts = reserveRuntimePorts({
+    store: {
+      read: () => settings.get("runtimePorts"),
+      write: (reservations) => settings.set("runtimePorts", reservations),
+    },
+    workspaceId: workspace.workspaceId,
+    commands: recipe.commands,
+    commandId: id,
+    plotPort: port,
+    claimedPlotPorts: Object.values(settings.get("plotPorts")),
+    activePorts: supervisor
+      .list()
+      .flatMap((runtime) => [runtime.expectedPort, runtime.targetPort])
+      .filter((candidate): candidate is number => candidate !== undefined),
+  });
   let routeAdvice: string | undefined;
   if (address.named) {
     // Starting a named runtime is the moment the gate must exist: set it up
@@ -1974,8 +2000,23 @@ async function startPlotCommand(
           : {}),
       }),
       // Ignored by a routed command: portless hands out its own.
-      PORT: String(port),
+      PORT: String(runtimePorts.port),
     },
+    isolationEnvironment: runtimeIsolationEnvironment({
+      project: recipe.project,
+      plot,
+      attemptId: workspace.workspaceId,
+      commandId: id,
+      port: runtimePorts.port,
+      inspectorPort: runtimePorts.inspectorPort,
+      resources: recipe.resources,
+      ...((command.env?.["NODE_OPTIONS"] ?? process.env["NODE_OPTIONS"])
+        ? {
+            nodeOptions:
+              command.env?.["NODE_OPTIONS"] ?? process.env["NODE_OPTIONS"]!,
+          }
+        : {}),
+    }),
     canRoute: await gate.available(),
     ...(routeAdvice ? { routeAdvice } : {}),
     detached: settings.get("keepCommandsRunning"),
@@ -1987,6 +2028,7 @@ async function automationPlotDefinition(
   workspace: WorkspaceSnapshot,
 ): Promise<{
   commands: Readonly<Record<string, PlotCommand>>;
+  resources: ResolvedRecipe["resources"];
   requiresProvisioning: boolean;
   previewUrl?: string;
 }> {
@@ -2004,6 +2046,7 @@ async function automationPlotDefinition(
   );
   return {
     commands: recipe.commands,
+    resources: recipe.resources,
     requiresProvisioning: recipe.provision.length > 0,
     ...(servesPreview
       ? { previewUrl: addressFor(recipe, plot, port).url }
@@ -2374,7 +2417,9 @@ function publishSnapshot(
         }
       : record,
   );
-  const reconciled = workspaceRegistry.reconcile(rawSnapshot, existingRecords);
+  const reconciled = workspaceRegistry.reconcile(rawSnapshot, existingRecords, {
+    authoritative: mode === "replace",
+  });
   if (
     !workspaceRecordsEqual(settings.get("workspaceRecords"), reconciled.records)
   ) {
@@ -2389,6 +2434,41 @@ function publishSnapshot(
   latestSnapshot = candidate;
   mainWindow?.webContents.send(ipcChannels.snapshotChanged, latestSnapshot);
   return latestSnapshot;
+}
+
+async function workspaceStorageUsage() {
+  const codexRoot = join(homedir(), ".codex");
+  const locations = [
+    {
+      path: app.getPath("userData"),
+      ownership: "silvic" as const,
+      note: "Silvic settings, logs, and local application state",
+    },
+    {
+      path: codexRoot,
+      ownership: "codex" as const,
+      note: "Observed Codex state; Silvic never removes it",
+    },
+    {
+      path: join(codexRoot, "worktrees"),
+      ownership: "codex" as const,
+      note: "Observed Codex worktrees; Silvic never removes them",
+    },
+  ];
+  const results = await Promise.all(
+    locations.map(async (location) => {
+      const result = await runner.run({
+        executable: "du",
+        arguments: ["-sk", location.path],
+        outputLimit: 4_000,
+      });
+      const kibibytes = Number(result.stdout.trim().split(/\s+/, 1)[0]);
+      return result.exitCode === 0 && Number.isFinite(kibibytes)
+        ? { ...location, bytes: kibibytes * 1_024 }
+        : undefined;
+    }),
+  );
+  return results.filter((result) => result !== undefined);
 }
 
 /**

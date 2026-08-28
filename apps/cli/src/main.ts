@@ -145,6 +145,25 @@ async function main(argv: readonly string[]): Promise<void> {
       setRecoveryExitCode(result);
       return;
     }
+    case "state-plan": {
+      rejectOptions(values, ["json", "help"]);
+      const result =
+        await automationCall<WorkspaceStatePlanResult>("workspaceStatePlan");
+      output(result, values.json, formatWorkspaceStatePlan(result));
+      return;
+    }
+    case "state-prune": {
+      rejectOptions(values, ["json", "help", "confirm"]);
+      const result = await automationCall<WorkspaceStatePruneResult>(
+        "pruneWorkspaceState",
+        { confirmPlanId: requireOption(values.confirm, "--confirm") },
+      );
+      output(result, values.json, [
+        `plan\t${result.plan.planId}`,
+        ...result.removedRecordIds.map((id) => `removed-record\t${id}`),
+      ]);
+      return;
+    }
     case "start":
     case "stop": {
       rejectOptions(values, ["json", "help", "plot", "runtime"]);
@@ -289,6 +308,34 @@ interface RecoveryResult {
   partialFailure: boolean;
 }
 
+interface WorkspaceStatePlanResult {
+  planId: string;
+  retentionDays: number;
+  totalRecords: number;
+  activeRecords: number;
+  staleRecords: readonly {
+    workspaceId: string;
+    path: string;
+    missingSince: string;
+    ageDays: number;
+    action: "protect" | "retain" | "prune-metadata";
+    reasons: readonly string[];
+  }[];
+  prunableRecordIds: readonly string[];
+  storage: readonly {
+    path: string;
+    bytes: number;
+    ownership: "silvic" | "codex" | "observed";
+    note: string;
+  }[];
+  boundaries: readonly string[];
+}
+
+interface WorkspaceStatePruneResult {
+  plan: WorkspaceStatePlanResult;
+  removedRecordIds: readonly string[];
+}
+
 function projectSummary(project: AutomationProject) {
   return {
     id: project.id,
@@ -315,7 +362,11 @@ function formatStatus(plot: AutomationPlot): string[] {
     `${plot.id}\t${plot.state}\t${plot.previewUrl ?? "-"}\t${plot.path}`,
     ...plot.runtimes.map(
       (runtime) =>
-        `${runtime.id}\t${runtime.status}\t${runtime.ownership}\t${runtime.url ?? "-"}`,
+        `${runtime.id}\t${runtime.status}\t${runtime.ownership}\t${runtime.url ?? "-"}\tport=${runtime.expectedPort ?? "-"}\tinspector=${runtime.inspectorPort ?? "-"}\tidentity=${runtime.identity ?? "-"}`,
+    ),
+    ...plot.resources.map(
+      (resource) =>
+        `resource\t${resource.id}\t${resource.provider}\t${resource.kind}\t${resource.isolation}\t${resource.runtimeIdentity ?? "provider"}`,
     ),
     ...plot.diagnostics.map((diagnostic) => `diagnostic\t${diagnostic}`),
   ];
@@ -358,6 +409,27 @@ function formatProvisionResult(result: ProvisionResult): string[] {
     ),
     `runtime\t${result.runtime.status}${result.runtime.detail ? `\t${result.runtime.detail}` : ""}`,
     `readiness\t${result.readiness.status}${result.readiness.detail ? `\t${result.readiness.detail}` : ""}`,
+  ];
+}
+
+function formatWorkspaceStatePlan(plan: WorkspaceStatePlanResult): string[] {
+  return [
+    `plan\t${plan.planId}\tretention-days\t${plan.retentionDays}`,
+    `records\t${plan.totalRecords}\tactive\t${plan.activeRecords}\tstale\t${plan.staleRecords.length}\tprunable\t${plan.prunableRecordIds.length}`,
+    ...plan.storage.map(
+      (entry) =>
+        `storage\t${entry.ownership}\t${entry.bytes}\t${entry.path}\t${entry.note}`,
+    ),
+    ...plan.staleRecords.map(
+      (record) =>
+        `record\t${record.action}\t${record.workspaceId}\t${record.ageDays}d\t${record.path}${record.reasons.length > 0 ? `\t${record.reasons.join(",")}` : ""}`,
+    ),
+    ...plan.boundaries.map((boundary) => `boundary\t${boundary}`),
+    ...(plan.prunableRecordIds.length > 0
+      ? [
+          `confirmation\trequired\tRun state-prune --confirm ${plan.planId} to remove only the listed Silvic records.`,
+        ]
+      : []),
   ];
 }
 
@@ -406,7 +478,7 @@ function provisionRemedy(value: string): "convex-cli" {
 
 function writeHelp(): void {
   process.stdout.write(
-    `Silvic ${version}\n\nUsage:\n  silvic projects [--json]\n  silvic plots [--project ID] [--json]\n  silvic status --plot ID [--json]\n  silvic adoption-plan --plot ID [--scope single|family] [--json]\n  silvic adopt --plot ID [--scope single|family] --confirm STABLE_ID [--json]\n  silvic provision --plot ID --confirm STABLE_ID [--remedy convex-cli] [--json]\n  silvic start --plot ID [--runtime ID] [--json]\n  silvic preview --plot ID [--timeout MS] [--open] [--json]\n  silvic stop --plot ID [--runtime ID] [--json]\n  silvic wait --plot ID [--timeout MS] [--json]\n  silvic logs --plot ID [--runtime ID] [--limit BYTES] [--json]\n\nPlot selectors accept a stable Plot id or an absolute Plot path. Before adoption\nor provisioning, inspect adoption-plan and confirm with its selected stable Plot\nID. Start never confirms provider changes implicitly. Start and stop without\n--runtime apply to every declared runtime and are idempotent.\n`,
+    `Silvic ${version}\n\nUsage:\n  silvic projects [--json]\n  silvic plots [--project ID] [--json]\n  silvic status --plot ID [--json]\n  silvic adoption-plan --plot ID [--scope single|family] [--json]\n  silvic adopt --plot ID [--scope single|family] --confirm STABLE_ID [--json]\n  silvic provision --plot ID --confirm STABLE_ID [--remedy convex-cli] [--json]\n  silvic state-plan [--json]\n  silvic state-prune --confirm PLAN_ID [--json]\n  silvic start --plot ID [--runtime ID] [--json]\n  silvic preview --plot ID [--timeout MS] [--open] [--json]\n  silvic stop --plot ID [--runtime ID] [--json]\n  silvic wait --plot ID [--timeout MS] [--json]\n  silvic logs --plot ID [--runtime ID] [--limit BYTES] [--json]\n\nPlot selectors accept a stable Plot id or an absolute Plot path. Before adoption\nor provisioning, inspect adoption-plan and confirm with its selected stable Plot\nID. Start never confirms provider changes implicitly. State pruning requires the\nexact state-plan ID and removes only listed Silvic metadata, never worktrees.\nStart and stop without --runtime apply to every declared runtime and are idempotent.\n`,
   );
 }
 
@@ -444,6 +516,12 @@ function buildMcpServer(): McpServer {
     destructiveHint: false,
     idempotentHint: true,
     openWorldHint: true,
+  } as const;
+  const metadataPruneMutation = {
+    readOnlyHint: false,
+    destructiveHint: true,
+    idempotentHint: true,
+    openWorldHint: false,
   } as const;
 
   server.registerTool(
@@ -554,6 +632,35 @@ function buildMcpServer(): McpServer {
       mcpCall(
         "provision",
         { plot, confirmPlotId, ...(remedy ? { remedy } : {}) },
+        undefined,
+        context.mcpReq.signal,
+      ),
+  );
+  server.registerTool(
+    "plan_workspace_state",
+    {
+      description:
+        "Inspect stale Silvic Workspace records, retention, protection reasons, and Silvic/Codex disk usage without changing state.",
+      inputSchema: z.object({}),
+      outputSchema,
+      annotations: readOnly,
+    },
+    async (_input, context) =>
+      mcpCall("workspaceStatePlan", {}, undefined, context.mcpReq.signal),
+  );
+  server.registerTool(
+    "prune_workspace_state",
+    {
+      description:
+        "Remove only the stale Silvic metadata listed by a current plan_workspace_state result. Never removes directories, worktrees, branches, sessions, or processes.",
+      inputSchema: z.object({ confirmPlanId: z.string().min(1) }),
+      outputSchema,
+      annotations: metadataPruneMutation,
+    },
+    async ({ confirmPlanId }, context) =>
+      mcpCall(
+        "pruneWorkspaceState",
+        { confirmPlanId },
         undefined,
         context.mcpReq.signal,
       ),
@@ -790,7 +897,8 @@ void main(process.argv.slice(2)).catch((error: unknown) => {
                   error.code === "NO_PREVIEW" ||
                   error.code === "CONFIRMATION_REQUIRED" ||
                   error.code === "ADOPTION_REQUIRED" ||
-                  error.code === "PROVISIONING_REQUIRED")
+                  error.code === "PROVISIONING_REQUIRED" ||
+                  error.code === "STATE_PLAN_CONFIRMATION_REQUIRED")
               ? 5
               : 1;
 });

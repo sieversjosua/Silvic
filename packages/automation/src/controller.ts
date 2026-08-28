@@ -5,13 +5,15 @@ import type {
   PlotAdoptionRunRequest,
   PlotAdoptionRunResult,
   PlotCommand,
+  PlotResourceDefinition,
   PlotProvisionRequest,
   PlotProvisionRunResult,
   ProjectSnapshot,
   SilvicSnapshot,
   WorkspaceSnapshot,
 } from "@silvic/contracts";
-import type { SupervisedCommand } from "@silvic/core";
+import { assessResourceIsolation } from "@silvic/contracts";
+import type { SupervisedCommand, WorkspaceStatePlan } from "@silvic/core";
 
 import { AutomationError, type AutomationRequest } from "./protocol";
 
@@ -32,6 +34,8 @@ export interface AutomationRuntime {
   routeName?: string;
   targetPort?: number;
   expectedPort?: number;
+  inspectorPort?: number;
+  identity?: string;
   processId?: number;
   exitCode?: number;
   advice?: string;
@@ -50,7 +54,18 @@ export interface AutomationPlot {
   state: PlotLifecycleState;
   previewUrl?: string;
   runtimes: readonly AutomationRuntime[];
+  resources: readonly AutomationResource[];
   diagnostics: readonly string[];
+}
+
+export interface AutomationResource {
+  id: string;
+  provider: PlotResourceDefinition["provider"];
+  kind: PlotResourceDefinition["kind"];
+  isolation: PlotResourceDefinition["isolation"];
+  commandId?: string;
+  /** Local runtime identity is namespaced; the provider itself remains shared. */
+  runtimeIdentity?: "namespaced";
 }
 
 export interface AutomationProject {
@@ -62,6 +77,7 @@ export interface AutomationProject {
 
 interface PlotDefinition {
   commands: Readonly<Record<string, PlotCommand>>;
+  resources: Readonly<Record<string, PlotResourceDefinition>>;
   requiresProvisioning: boolean;
   previewUrl?: string;
 }
@@ -79,6 +95,11 @@ export interface AutomationControllerOptions {
   }): Promise<PlotAdoptionPlan>;
   adopt(request: PlotAdoptionRunRequest): Promise<PlotAdoptionRunResult>;
   provision(request: PlotProvisionRequest): Promise<PlotProvisionRunResult>;
+  inspectWorkspaceState(): Promise<WorkspaceStatePlan>;
+  pruneWorkspaceState(confirmPlanId: string): Promise<{
+    plan: WorkspaceStatePlan;
+    removedRecordIds: readonly string[];
+  }>;
   processes(): readonly SupervisedCommand[];
   start(plotPath: string, runtimeId: string): Promise<void>;
   stop(plotPath: string, runtimeId: string): void;
@@ -109,6 +130,10 @@ export class AutomationController {
         return this.adopt(request.params);
       case "provision":
         return this.provision(request.params);
+      case "workspaceStatePlan":
+        return this.workspaceStatePlan(request.params);
+      case "pruneWorkspaceState":
+        return this.pruneWorkspaceState(request.params);
       case "start":
         return this.start(request.params, signal);
       case "stop":
@@ -232,6 +257,18 @@ export class AutomationController {
         partialFailure: failed && succeeded,
       };
     });
+  }
+
+  private async workspaceStatePlan(params: Record<string, unknown>) {
+    assertOnly(params, []);
+    return this.options.inspectWorkspaceState();
+  }
+
+  private async pruneWorkspaceState(params: Record<string, unknown>) {
+    assertOnly(params, ["confirmPlanId"]);
+    return this.options.pruneWorkspaceState(
+      requiredString(params, "confirmPlanId"),
+    );
   }
 
   private async start(params: Record<string, unknown>, signal: AbortSignal) {
@@ -462,6 +499,10 @@ export class AutomationController {
           ...(process?.expectedPort === undefined
             ? {}
             : { expectedPort: process.expectedPort }),
+          ...(process?.inspectorPort === undefined
+            ? {}
+            : { inspectorPort: process.inspectorPort }),
+          ...(process?.identity ? { identity: process.identity } : {}),
           ...(process?.processId === undefined
             ? {}
             : { processId: process.processId }),
@@ -472,6 +513,29 @@ export class AutomationController {
           ...(process?.notice ? { notice: process.notice } : {}),
         };
       },
+    );
+    const resourceAssessments = Object.entries(definition.resources).map(
+      ([id, resource]) => ({
+        id,
+        resource,
+        assessment: assessResourceIsolation(resource),
+      }),
+    );
+    const resources = resourceAssessments.map(
+      ({ id, resource, assessment }): AutomationResource => ({
+        id,
+        provider: resource.provider,
+        kind: resource.kind,
+        isolation: resource.isolation,
+        ...(resource.command ? { commandId: resource.command } : {}),
+        ...(assessment.runtimeIdentity
+          ? { runtimeIdentity: assessment.runtimeIdentity }
+          : {}),
+      }),
+    );
+    const isolationDiagnostics = resourceAssessments.flatMap(
+      ({ id, assessment }) =>
+        assessment.warning ? [`${id}: ${assessment.warning}`] : [],
     );
     return {
       id: plot.workspaceId,
@@ -485,13 +549,17 @@ export class AutomationController {
       state: lifecycleState(runtimes),
       ...(definition.previewUrl ? { previewUrl: definition.previewUrl } : {}),
       runtimes,
-      diagnostics: runtimes.flatMap((runtime) =>
-        runtime.advice
-          ? [`${runtime.id}: ${runtime.advice}`]
-          : runtime.status === "failed"
-            ? [`${runtime.id}: exited with code ${runtime.exitCode ?? 1}`]
-            : [],
-      ),
+      resources,
+      diagnostics: [
+        ...runtimes.flatMap((runtime) =>
+          runtime.advice
+            ? [`${runtime.id}: ${runtime.advice}`]
+            : runtime.status === "failed"
+              ? [`${runtime.id}: exited with code ${runtime.exitCode ?? 1}`]
+              : [],
+        ),
+        ...isolationDiagnostics,
+      ],
     };
   }
 

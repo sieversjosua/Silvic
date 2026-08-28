@@ -6,6 +6,8 @@ import { promisify } from "node:util";
 
 import { afterAll, beforeAll, expect, it } from "vitest";
 
+import { requiredMcpTools } from "./release-contract.mjs";
+
 const executeFile = promisify(execFile);
 const repositoryRoot = resolve(import.meta.dirname, "..");
 let outputRoot: string;
@@ -105,6 +107,6 @@ it("runs the packaged layout, documented symlink, and extracted plugin MCP witho
   );
 
   expect(result.stdout).toContain(
-    `Silvic ${version} packaged CLI, symlink, extracted plugin, MCP initialize, and 10 tools passed without Node on PATH.`,
+    `Silvic ${version} packaged CLI, symlink, extracted plugin, MCP initialize, and ${requiredMcpTools.length} tools passed without Node on PATH.`,
   );
 });

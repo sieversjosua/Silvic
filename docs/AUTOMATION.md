@@ -58,6 +58,13 @@ silvic stop --plot plot_123 --json
 watched Plot. A runtime ID is the command key in `silvic.json`. Omitting
 `--runtime` applies start, stop, or logs to every declared runtime.
 
+Status also returns every declared resource's `provider`, `kind` and
+`isolation`. `shared` and `manual` resources always add a diagnostic: shared
+provider infrastructure is not presented as isolated, and manual resources
+are explicitly described as unverifiable by Silvic. A command-linked LiveKit
+resource reports `runtimeIdentity: "namespaced"`; that qualifies only the
+injected agent identity, not the shared provider account, data or credentials.
+
 Start and stop are idempotent and return an outcome for every requested
 runtime. Successful siblings stay successful when another runtime fails; the
 top-level result sets `partialFailure: true`. Stopping a runtime with
@@ -93,6 +100,25 @@ selected stable Plot ID. Results retain every member and provisioning step and
 report `failed` and `partialFailure` separately. Starting through CLI or MCP
 never confirms provider changes implicitly. This guard applies equally to one
 named runtime and to starting every declared runtime.
+
+## Workspace-state diagnostics
+
+State reconciliation is inspect-first and metadata-only:
+
+```sh
+silvic state-plan --json
+silvic state-prune --confirm state_0123456789abcdef --json
+```
+
+`state-plan` reads the already reconciled registry and current observations,
+reports stale records and protection reasons, and measures Silvic/Codex storage
+without refreshing or persisting state. `state-prune` is the explicitly
+mutating operation: it performs a fresh authoritative discovery pass, accepts
+only the exact resulting plan ID, and removes only the listed stale Silvic
+registry records. It never removes a Git or Codex worktree, directory, branch,
+Session, process, or provider resource. See the
+[workspace-state and ownership guide](WORKSPACE_STATE.md) for retention and
+safety boundaries.
 
 `preview` combines start and wait, prints the canonical URL, and optionally
 opens it with `--open`. `wait` has no start side effect. It waits until every
@@ -133,7 +159,7 @@ Human-mode diagnostics go to stderr. No command reads from stdin or prompts.
 |    2 | Invalid command or arguments                          |
 |    3 | Silvic unavailable or protocol-incompatible           |
 |    4 | Project, Plot, or runtime not found                   |
-|    5 | Runtime, preview, adoption, or provisioning failed    |
+|    5 | Lifecycle failed or state-plan confirmation is stale  |
 |    6 | Some requested operations failed and others succeeded |
 |    7 | Readiness deadline exceeded                           |
 |  130 | Cancelled                                             |

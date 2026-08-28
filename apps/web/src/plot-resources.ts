@@ -1,4 +1,5 @@
 import {
+  assessResourceIsolation,
   plotResourceProviderCatalog,
   type ConnectorObservation,
   type PlotCommand,
@@ -78,6 +79,7 @@ function declaredResource(
       : process
         ? undefined
         : definition.url;
+  const detail = resourceDetail(definition);
   return {
     id: `declared:${id}`,
     provider: definition.provider,
@@ -85,13 +87,20 @@ function declaredResource(
     kind: definition.kind,
     isolation: definition.isolation,
     state: definition.command ? processState(process) : "unknown",
-    ...(definition.detail ? { detail: definition.detail } : {}),
+    ...(detail ? { detail } : {}),
     ...(url ? { url } : {}),
     ...(definition.dashboardUrl
       ? { dashboardUrl: definition.dashboardUrl }
       : {}),
     ...(definition.command ? { commandId: definition.command } : {}),
   };
+}
+
+function resourceDetail(
+  definition: PlotResourceDefinition,
+): string | undefined {
+  const warning = assessResourceIsolation(definition).warning;
+  return [definition.detail, warning].filter(Boolean).join(" — ") || undefined;
 }
 
 function commandResource(

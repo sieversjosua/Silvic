@@ -125,6 +125,41 @@ it("starts the installed CLI and plugin without Node on PATH", async () => {
   expect(plugin.stderr).toBe("");
 });
 
+it("prints resource kind in human-readable Plot status", async () => {
+  const directory = await serve(async () => ({
+    id: "plot_123",
+    projectId: "project_123",
+    name: "Runtime isolation",
+    path: "/projects/Silvic.plots/runtime-isolation",
+    branch: "fix/runtime-isolation",
+    isPrimary: false,
+    state: "stopped",
+    runtimes: [],
+    resources: [
+      {
+        id: "agent",
+        provider: "livekit",
+        kind: "agent",
+        isolation: "shared",
+        runtimeIdentity: "namespaced",
+      },
+    ],
+    diagnostics: [],
+  }));
+
+  const result = await executeFile(
+    executable,
+    ["status", "--plot", "plot_123"],
+    {
+      env: { ...process.env, SILVIC_AUTOMATION_DIR: directory },
+    },
+  );
+
+  expect(result.stdout).toContain(
+    "resource\tagent\tlivekit\tagent\tshared\tnamespaced",
+  );
+});
+
 it("maps not-found failures to exit 4 with structured stdout", async () => {
   const directory = await serve(async () => {
     throw new AutomationError(
@@ -273,6 +308,90 @@ it("returns exit 5 when a provisioning retry fails completely", async () => {
   expect(JSON.parse(failure.stdout)).toMatchObject({
     ok: true,
     result: { failed: true, partialFailure: false },
+  });
+});
+
+it("inspects state before passing the exact plan confirmation to pruning", async () => {
+  const requests: AutomationRequest[] = [];
+  const statePlan = {
+    planId: "state_exact123",
+    retentionDays: 30,
+    totalRecords: 153,
+    activeRecords: 44,
+    staleRecords: [
+      {
+        workspaceId: "stale_1",
+        path: "/missing/stale",
+        missingSince: "2026-06-01T00:00:00.000Z",
+        ageDays: 88,
+        action: "prune-metadata",
+        reasons: [],
+      },
+    ],
+    prunableRecordIds: ["stale_1"],
+    storage: [
+      {
+        path: "/Users/me/.codex/worktrees",
+        bytes: 63_000_000_000,
+        ownership: "codex",
+        note: "Observed Codex worktrees; Silvic never removes them",
+      },
+    ],
+    boundaries: ["Apply removes only the listed Silvic workspace records."],
+  };
+  const directory = await serve(async (request) => {
+    requests.push(request);
+    return request.method === "workspaceStatePlan"
+      ? statePlan
+      : { plan: statePlan, removedRecordIds: ["stale_1"] };
+  });
+
+  const inspected = await executeFile(executable, ["state-plan", "--json"], {
+    env: { ...process.env, SILVIC_AUTOMATION_DIR: directory },
+  });
+  const applied = await executeFile(
+    executable,
+    ["state-prune", "--confirm", "state_exact123", "--json"],
+    { env: { ...process.env, SILVIC_AUTOMATION_DIR: directory } },
+  );
+
+  expect(JSON.parse(inspected.stdout)).toMatchObject({
+    ok: true,
+    result: { planId: "state_exact123", prunableRecordIds: ["stale_1"] },
+  });
+  expect(JSON.parse(applied.stdout)).toMatchObject({
+    ok: true,
+    result: { removedRecordIds: ["stale_1"] },
+  });
+  expect(requests).toMatchObject([
+    { method: "workspaceStatePlan", params: {} },
+    {
+      method: "pruneWorkspaceState",
+      params: { confirmPlanId: "state_exact123" },
+    },
+  ]);
+});
+
+it("maps a changed state plan to fail-closed exit 5", async () => {
+  const directory = await serve(async () => {
+    throw new AutomationError(
+      "STATE_PLAN_CONFIRMATION_REQUIRED",
+      "Workspace state changed; inspect a fresh plan before applying.",
+      { planId: "state_new" },
+    );
+  });
+  const failure = await executeFailure(
+    ["state-prune", "--confirm", "state_old", "--json"],
+    directory,
+  );
+
+  expect(failure.code).toBe(5);
+  expect(JSON.parse(failure.stdout)).toMatchObject({
+    ok: false,
+    error: {
+      code: "STATE_PLAN_CONFIRMATION_REQUIRED",
+      details: { planId: "state_new" },
+    },
   });
 });
 

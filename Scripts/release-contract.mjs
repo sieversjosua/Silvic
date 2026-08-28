@@ -15,6 +15,8 @@ export const requiredMcpTools = [
   "plan_plot_adoption",
   "adopt_plot",
   "provision_plot",
+  "plan_workspace_state",
+  "prune_workspace_state",
   "start_runtimes",
   "stop_runtimes",
   "wait_for_preview",

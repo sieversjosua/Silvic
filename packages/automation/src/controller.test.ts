@@ -11,11 +11,12 @@ import type {
   PlotCommand,
   PlotProvisionRequest,
   PlotProvisionRunResult,
+  PlotResourceDefinition,
   ProjectSnapshot,
   SilvicSnapshot,
   WorkspaceSnapshot,
 } from "@silvic/contracts";
-import type { SupervisedCommand } from "@silvic/core";
+import type { SupervisedCommand, WorkspaceStatePlan } from "@silvic/core";
 
 import {
   AutomationController,
@@ -93,6 +94,7 @@ function controller(
   options: {
     workspace?: WorkspaceSnapshot;
     requiresProvisioning?: boolean;
+    resources?: Readonly<Record<string, PlotResourceDefinition>>;
     planAdoption?: (request: {
       workspaceId: string;
       scope: "single" | "family";
@@ -101,6 +103,11 @@ function controller(
     provision?: (
       request: PlotProvisionRequest,
     ) => Promise<PlotProvisionRunResult>;
+    inspectWorkspaceState?: () => Promise<WorkspaceStatePlan>;
+    pruneWorkspaceState?: (confirmPlanId: string) => Promise<{
+      plan: WorkspaceStatePlan;
+      removedRecordIds: readonly string[];
+    }>;
     processes?: readonly SupervisedCommand[];
     start?: (plotPath: string, runtimeId: string) => Promise<void>;
     stop?: (plotPath: string, runtimeId: string) => void;
@@ -117,6 +124,7 @@ function controller(
     roots: () => [project.rootPath],
     definition: async () => ({
       commands,
+      resources: options.resources ?? {},
       previewUrl: "https://web-issue-9-silvic.localhost",
       requiresProvisioning: options.requiresProvisioning ?? false,
     }),
@@ -157,6 +165,14 @@ function controller(
         runtime: { status: "not-required", durationMs: 0 },
         readiness: { status: "not-required", durationMs: 0 },
       })),
+    inspectWorkspaceState:
+      options.inspectWorkspaceState ?? (async () => statePlan("state_empty")),
+    pruneWorkspaceState:
+      options.pruneWorkspaceState ??
+      (async (confirmPlanId) => ({
+        plan: statePlan(confirmPlanId),
+        removedRecordIds: [],
+      })),
     processes: () => options.processes ?? [],
     start: options.start ?? (async () => undefined),
     stop: options.stop ?? (() => undefined),
@@ -166,6 +182,58 @@ function controller(
     ...(options.now ? { now: options.now } : {}),
   });
 }
+
+function statePlan(planId: string): WorkspaceStatePlan {
+  return {
+    planId,
+    generatedAt: "2026-08-28T00:00:00.000Z",
+    retentionDays: 30,
+    totalRecords: 0,
+    activeRecords: 0,
+    staleRecords: [],
+    prunableRecordIds: [],
+    storage: [],
+    boundaries: [],
+  };
+}
+
+describe("workspace state automation", () => {
+  it("returns a read-only plan before forwarding an exact confirmation", async () => {
+    const inspectWorkspaceState = vi.fn(async () => statePlan("state_exact"));
+    const pruneWorkspaceState = vi.fn(async (confirmPlanId: string) => ({
+      plan: statePlan(confirmPlanId),
+      removedRecordIds: ["stale-1"],
+    }));
+    const automation = controller({
+      inspectWorkspaceState,
+      pruneWorkspaceState,
+    });
+
+    await expect(
+      automation.handle(request("workspaceStatePlan", {})),
+    ).resolves.toMatchObject({ planId: "state_exact" });
+    await expect(
+      automation.handle(
+        request("pruneWorkspaceState", { confirmPlanId: "state_exact" }),
+      ),
+    ).resolves.toMatchObject({ removedRecordIds: ["stale-1"] });
+    expect(inspectWorkspaceState).toHaveBeenCalledOnce();
+    expect(pruneWorkspaceState).toHaveBeenCalledWith("state_exact");
+  });
+
+  it("rejects unknown pruning parameters before state can change", async () => {
+    const pruneWorkspaceState = vi.fn();
+    await expect(
+      controller({ pruneWorkspaceState }).handle(
+        request("pruneWorkspaceState", {
+          confirmPlanId: "state_exact",
+          path: "/arbitrary/worktree",
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+    expect(pruneWorkspaceState).not.toHaveBeenCalled();
+  });
+});
 
 describe("automation lifecycle states", () => {
   const runtime = (
@@ -202,7 +270,15 @@ describe("automation lifecycle states", () => {
           ownership: "external",
           url: "https://web-issue-9-silvic.localhost",
         },
-        { plotPath: plot.path, id: "worker", status: "running", processId: 91 },
+        {
+          plotPath: plot.path,
+          id: "worker",
+          status: "running",
+          processId: 91,
+          expectedPort: 31_100,
+          inspectorPort: 31_101,
+          identity: "silvic-issue-9-agent-a1b2c3",
+        },
       ],
     }).handle(request("status", { plot: plot.workspaceId }));
 
@@ -211,13 +287,58 @@ describe("automation lifecycle states", () => {
       state: "ready",
       runtimes: [
         { id: "web", ownership: "external" },
-        { id: "worker", ownership: "silvic" },
+        {
+          id: "worker",
+          ownership: "silvic",
+          expectedPort: 31_100,
+          inspectorPort: 31_101,
+          identity: "silvic-issue-9-agent-a1b2c3",
+        },
       ],
     });
   });
 });
 
 describe("automation operations", () => {
+  it("makes shared and manual resource limits explicit in status and diagnostics", async () => {
+    const result = await controller({
+      resources: {
+        agent: {
+          provider: "livekit",
+          kind: "agent",
+          isolation: "shared",
+          command: "worker",
+        },
+        ingress: {
+          provider: "cloudflare",
+          kind: "ingress",
+          isolation: "manual",
+        },
+        auth: {
+          provider: "workos",
+          kind: "auth",
+          isolation: "manual",
+        },
+      },
+    }).handle(request("status", { plot: plot.workspaceId }));
+
+    expect(result).toMatchObject({
+      resources: [
+        {
+          id: "agent",
+          isolation: "shared",
+          runtimeIdentity: "namespaced",
+        },
+        { id: "ingress", isolation: "manual" },
+        { id: "auth", isolation: "manual" },
+      ],
+      diagnostics: [
+        expect.stringMatching(/agent: livekit infrastructure is shared/),
+        expect.stringMatching(/ingress: cloudflare isolation is manual/),
+        expect.stringMatching(/auth: workos isolation is manual/),
+      ],
+    });
+  });
   it("shows adoption and provisioning state in Plot status", async () => {
     const status = await controller({
       workspace: {
