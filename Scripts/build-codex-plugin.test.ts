@@ -37,6 +37,19 @@ beforeAll(async () => {
     join(repositoryRoot, "apps/cli/dist/silvic.mjs"),
     join(appPath, "Contents/Resources/lib/silvic.mjs"),
   );
+  await mkdir(join(appPath, "Contents/Resources/codex-marketplace"), {
+    recursive: true,
+  });
+  await cp(
+    join(repositoryRoot, ".agents"),
+    join(appPath, "Contents/Resources/codex-marketplace/.agents"),
+    { recursive: true },
+  );
+  await cp(
+    join(repositoryRoot, "plugins"),
+    join(appPath, "Contents/Resources/codex-marketplace/plugins"),
+    { recursive: true },
+  );
 });
 
 afterAll(async () => {
@@ -56,6 +69,24 @@ it("builds a versions-equal installable marketplace artifact", async () => {
   expect(await readFile(`${archive}.sha256`, "utf8")).toMatch(
     new RegExp(`^[0-9a-f]{64}  Silvic-Codex-Plugin-${version}\\.tar\\.gz\\n$`),
   );
+
+  const extracted = join(
+    outputRoot,
+    "codex-plugin",
+    `Silvic-Codex-Plugin-${version}`,
+  );
+  const marketplace = JSON.parse(
+    await readFile(join(extracted, ".agents/plugins/marketplace.json"), "utf8"),
+  );
+  const instructions = await readFile(join(extracted, "INSTALL.md"), "utf8");
+  expect(marketplace.name).toBe("silvic");
+  expect(instructions).toContain("codex plugin add silvic@silvic");
+  expect(
+    instructions.indexOf("codex plugin marketplace list --json"),
+  ).toBeLessThan(instructions.indexOf("codex plugin marketplace add"));
+  expect(instructions).toContain("codex plugin marketplace remove silvic");
+  expect(instructions).not.toContain(`silvic-${version.replaceAll(".", "-")}`);
+  expect(instructions).not.toContain("remove only that entry");
 });
 
 it("uses the shared release contract for exact tag parity", async () => {
@@ -78,7 +109,7 @@ it("uses the shared release contract for exact tag parity", async () => {
   ).rejects.toThrow(`does not match v${version}`);
 });
 
-it("runs the packaged layout, documented symlink, and extracted plugin MCP without Node", async () => {
+it("runs the deterministic app fixture and extracted plugin MCP without Node", async () => {
   const version = JSON.parse(
     await readFile(join(repositoryRoot, "package.json"), "utf8"),
   ).version;
@@ -95,6 +126,6 @@ it("runs the packaged layout, documented symlink, and extracted plugin MCP witho
   );
 
   expect(result.stdout).toContain(
-    `Silvic ${version} packaged CLI, symlink, extracted plugin, MCP initialize, and ${requiredMcpTools.length} tools passed without Node on PATH.`,
+    `Silvic ${version} packaged CLI, symlink, signed marketplace source, extracted plugin, MCP initialize, and ${requiredMcpTools.length} tools passed without Node on PATH.`,
   );
 });

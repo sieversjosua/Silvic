@@ -2,8 +2,10 @@
 
 Silvic ships directly from GitHub Releases. Each macOS release contains a
 universal Developer ID-signed and Apple-notarized app in a DMG, plus the ZIP and
-`latest-mac.yml` that the in-app updater needs. The same release also contains a
-version-equal installable Codex marketplace bundle and its SHA-256 checksum.
+`latest-mac.yml` that the in-app updater needs. The app contains the stable,
+signed `silvic` Codex marketplace. The same release also contains a
+version-equal manual marketplace bundle and its SHA-256 checksum for rollback
+and independent distribution.
 
 ## One-time GitHub setup
 
@@ -46,12 +48,15 @@ gh workflow run release-macos.yml --ref v0.1.1
 The tag must exactly match `apps/desktop/package.json`. GitHub Actions then:
 
 1. repeats the full source checks;
-2. builds the CLI/MCP bundle and the versioned Codex marketplace artifact;
+2. builds the CLI/MCP bundle, the app-bound marketplace, and the versioned
+   manual marketplace artifact;
 3. validates the plugin, skill, complete tool catalog, checksum, and version parity from one shared release contract;
 4. builds one Universal macOS app;
 5. signs every executable with Developer ID and enables Hardened Runtime;
 6. submits the app to Apple's notary service and staples the ticket;
-7. verifies the signature, Gatekeeper assessment, ticket, update metadata, packaged CLI symlink, extracted plugin MCP handshake, and tool catalog without Node on `PATH`;
+7. verifies the signature, Gatekeeper assessment, ticket, update metadata,
+   packaged CLI symlink, stable app marketplace, extracted plugin, both MCP
+   handshakes, and both tool catalogs without Node on `PATH`;
 8. creates the public GitHub Release only after every verification passes.
 
 An installed Silvic checks at every launch and every four hours, and downloads
@@ -97,7 +102,10 @@ node Scripts/verify-packaged-distribution.mjs \
 
 The archive must contain `.agents/plugins/marketplace.json`,
 `plugins/silvic/.codex-plugin/plugin.json`, `plugins/silvic/bin/silvic`, and
-`plugins/silvic/bin/silvic.mjs`. Follow its `INSTALL.md`, then confirm
-`codex plugin list` reports the same version as the app. Start a new Codex task
-and verify that its Silvic MCP catalog includes `plan_plot_adoption`,
-`adopt_plot`, and `provision_plot`.
+`plugins/silvic/bin/silvic.mjs`, and its marketplace name must remain `silvic`.
+The app must contain the same files below
+`Contents/Resources/codex-marketplace`. Follow the artifact's `INSTALL.md` only
+for manual distribution. For the normal app-bound path, confirm
+`codex plugin list --json` reports enabled `silvic@silvic` at the same version,
+fully restart Codex, and verify that its MCP catalog includes
+`plan_plot_adoption`, `adopt_plot`, and `provision_plot`.

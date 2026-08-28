@@ -33,32 +33,14 @@ await cp(pluginRoot, join(bundleRoot, "plugins/silvic"), { recursive: true });
 await chmod(join(bundleRoot, "plugins/silvic/bin/silvic"), 0o755);
 await chmod(join(bundleRoot, "plugins/silvic/bin/silvic.mjs"), 0o755);
 
-const marketplaceName = `silvic-${version.replace(/[^0-9A-Za-z_-]/g, "-")}`;
-await writeFile(
+const marketplaceName = "silvic";
+await cp(
+  join(repositoryRoot, ".agents/plugins/marketplace.json"),
   join(bundleRoot, ".agents/plugins/marketplace.json"),
-  `${JSON.stringify(
-    {
-      name: marketplaceName,
-      interface: { displayName: `Silvic ${version}` },
-      plugins: [
-        {
-          name: "silvic",
-          source: { source: "local", path: "./plugins/silvic" },
-          policy: {
-            installation: "AVAILABLE",
-            authentication: "ON_INSTALL",
-          },
-          category: "Developer Tools",
-        },
-      ],
-    },
-    undefined,
-    2,
-  )}\n`,
 );
 await writeFile(
   join(bundleRoot, "INSTALL.md"),
-  `# Install Silvic Codex Plugin ${version}\n\nThis bundle must be used with Silvic Desktop ${version}. Verify the adjacent SHA-256 file before extracting it.\n\nQuit all Codex tasks using Silvic. Run \`codex plugin list\`; if an older Silvic plugin is installed, copy its complete \`silvic@marketplace\` selector and remove only that entry with \`codex plugin remove silvic@marketplace\`. Then, from the directory containing this extracted folder:\n\n\`\`\`sh\ncodex plugin marketplace add \"$PWD/${directoryName}\"\ncodex plugin add silvic@${marketplaceName}\n\`\`\`\n\nFully restart Codex and open a new task. The plugin uses the runtime packaged in /Applications/Silvic.app and does not require Node on PATH.\n`,
+  `# Install Silvic Codex Plugin ${version}\n\nThis rollback and manual-distribution bundle must be used with Silvic Desktop ${version}. Verify the adjacent SHA-256 file before extracting it. Normal Desktop updates use the signed marketplace inside Silvic.app instead.\n\nQuit all Codex tasks using Silvic. First run \`codex plugin marketplace list --json\`. If it already reports a source named \`silvic\`, confirm that its root is this extracted ${directoryName} directory; otherwise stop instead of replacing it. Then, from the directory containing this extracted folder, add the stable marketplace and selector:\n\n\`\`\`sh\ncodex plugin marketplace add \"$PWD/${directoryName}\"\ncodex plugin add silvic@${marketplaceName}\n\`\`\`\n\nFor a deliberate manual rollback from the app-bound source, first verify that the existing \`silvic\` root is exactly \`/Applications/Silvic.app/Contents/Resources/codex-marketplace\` (or the same path under \`~/Applications\`) and that its plugin manifest names the Silvic repository. Only then run \`codex plugin marketplace remove silvic\` before the two commands above. Return to normal Desktop updates by performing the same checks on this extracted source, removing only marketplace \`silvic\`, and adding the app-bound path again.\n\nTo migrate an old Silvic selector, first confirm \`codex plugin list --json\` reports \`silvic@silvic\` at version ${version}; then remove only the confirmed old \`silvic@personal\` or \`silvic@silvic-0-1-*\` selector whose source manifest names the Silvic repository. Fully restart Codex and open a new task. The plugin uses the runtime packaged in /Applications/Silvic.app and does not require Node on PATH.\n`,
 );
 
 await mkdir(outputRoot, { recursive: true });
