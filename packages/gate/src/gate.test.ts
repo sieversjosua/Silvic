@@ -348,6 +348,12 @@ describe("gate daemon", () => {
         );
         return;
       }
+      if (request.url === "/vite-outdated") {
+        // Vite 8 reports an outdated browser hash only in the status line.
+        response.writeHead(504, "Outdated Optimize Dep");
+        response.end();
+        return;
+      }
       if (request.url === "/application-error") {
         response.writeHead(500, { "content-type": "text/html" });
         response.end("<h1>The application failed</h1>");
@@ -512,6 +518,45 @@ describe("gate daemon", () => {
     await new Promise((resolve) => setTimeout(resolve, 25));
     expect(failed).not.toHaveBeenCalled();
     listener.close();
+  });
+
+  it("recovers Vite 8 outdated optimizer responses with an empty body", async () => {
+    const failed = vi.fn();
+    const listener = new GateClient({
+      socketPath: controlSocketPath(directory),
+      onFailure: failed,
+    });
+    await listener.status();
+    await listener.routeSet({
+      name: "web-live-shop",
+      host: "127.0.0.1",
+      port: upstreamPort,
+      plotPath: "/tmp/plot",
+      commandId: "web",
+    });
+
+    try {
+      const stale = await get("web-live-shop.localhost", "/vite-outdated");
+      expect(stale.status).toBe(503);
+      expect(stale.body).toContain("The page reloads by itself");
+      await vi.waitFor(() =>
+        expect(failed).toHaveBeenCalledWith({
+          route: "web-live-shop",
+          plotPath: "/tmp/plot",
+          commandId: "web",
+          failure: "vite-stale-optimized-dependency",
+        }),
+      );
+      await listener.routeSet({
+        name: "web-live-shop",
+        host: "127.0.0.1",
+        port: upstreamPort,
+        plotPath: "/tmp/plot",
+        commandId: "web",
+      });
+    } finally {
+      listener.close();
+    }
   });
 
   it("answers its own host with gate health", async () => {
