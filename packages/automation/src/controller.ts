@@ -228,7 +228,11 @@ export class AutomationController {
     }
     return this.withRecoveryLock(async () => {
       const current = this.findPlot(found.plot.workspaceId).plot;
-      if (current.provisioning?.status === "complete") {
+      const remedy = optionalRemedy(params);
+      if (
+        current.provisioning?.status === "complete" &&
+        remedy !== "convex-recreate"
+      ) {
         return {
           provision: current.provisioning.steps,
           runtime: { status: "not-required" as const, durationMs: 0 },
@@ -238,7 +242,6 @@ export class AutomationController {
           partialFailure: false,
         };
       }
-      const remedy = optionalRemedy(params);
       const result = await this.options.provision({
         path: current.path,
         ...(remedy ? { remedy } : {}),

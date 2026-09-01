@@ -223,6 +223,37 @@ describe("Provisioner", () => {
     });
   });
 
+  it("recognises an expired Convex deployment from its invalid deploy key", () => {
+    const diagnosis = provisionDiagnosis(
+      {
+        convex: {
+          name: "dev/{plot}",
+          expiration: "in 1 day",
+        },
+      },
+      "POST https://api.convex.dev/api/deployment/url_for_key 401 Unauthorized\nAuthenticationFailed: Invalid Convex deploy key",
+    );
+
+    expect(diagnosis).toMatchObject({
+      advice: expect.stringContaining("no longer exists"),
+      remedy: {
+        id: "convex-recreate",
+        dataLoss: true,
+        detail: expect.stringContaining("not copied"),
+      },
+    });
+  });
+
+  it("does not replace a non-expiring Convex deployment after an invalid key", () => {
+    const diagnosis = provisionDiagnosis(
+      { convex: { name: "dev/{plot}" } },
+      "AuthenticationFailed: Invalid Convex deploy key",
+    );
+
+    expect(diagnosis?.advice).toContain("will not replace");
+    expect(diagnosis?.remedy).toBeUndefined();
+  });
+
   it("keeps schema rollback recovery manual without expiration", () => {
     const diagnosis = provisionDiagnosis(
       { convex: { name: "dev/{plot}" } },

@@ -94,13 +94,15 @@ retried. Provisioning reruns the same idempotent recipe path as the desktop app.
 If a failed step offers the `convex-cli` remedy, pass
 `--remedy convex-cli` on the retry.
 
-A Convex push can also fail permanently when an older schema rejects data
-already stored in the Plot's deployment. The adoption plan then reports
-`convex-recreate` only when the typed Convex step has an expiration and the
-selected dev deployment matches the Plot's declared name, team, and project.
-This recovery creates a new empty, expiring deployment; documents and file
-storage are not copied, and the previous deployment remains until its existing
-expiration. Inspect that data-loss boundary before confirming:
+A Convex attachment can also fail permanently when an older schema rejects
+stored data or an expiring deployment no longer exists. If a runtime exits with
+Convex's known invalid-key response, Silvic marks the previously complete
+attachment as failed. The adoption plan then reports `convex-recreate` only
+when the typed Convex step has an expiration. On confirmation, the provisioner
+also verifies that the selected dev deployment matches the Plot's declared
+name, team, and project. This recovery creates a new empty, expiring deployment;
+documents and file storage are not copied. Inspect that data-loss boundary
+before confirming:
 
 ```sh
 silvic adoption-plan --plot plot_123 --json

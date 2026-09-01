@@ -56,6 +56,7 @@ import {
   harnessIdSchema,
   deliveryExecuteRequestSchema,
   ipcChannels,
+  isConvexStep,
   issueListRequestSchema,
   pullRequestLookupRequestSchema,
   openLinkRequestSchema,
@@ -123,7 +124,9 @@ import {
   runtimeIsolationEnvironment,
   primeResolvedCommandPath,
   provisionCompleted,
+  provisionDiagnosis,
   provisionStepLabel,
+  sanitizeProvisionOutput,
   waitForReadiness,
   readRecipe,
   mergeSnapshots,
@@ -215,6 +218,7 @@ let runtimeObservationRefreshTimer: NodeJS.Timeout | undefined;
 let stopSessionRefreshLoop: (() => void) | undefined;
 let lastSupervisedPaths = new Set<string>();
 const pendingRuntimeObservationPaths = new Set<string>();
+const pendingConvexAttachmentChecks = new Set<string>();
 const gate = new GateManager(
   (wake) => void wakePlotFromGate(wake),
   (failure) => recoverPlotFromGate(failure),
@@ -236,6 +240,11 @@ const supervisor = new CommandSupervisor({
     }
     lastSupervisedPaths = nextPaths;
     scheduleRuntimeObservationRefresh();
+    for (const process of processes) {
+      if (process.status === "failed") {
+        void recordExpiredConvexDeploymentFailure(process);
+      }
+    }
   },
 });
 const settings = new Store<Settings>({
@@ -1969,6 +1978,55 @@ function recordProvisioning(
       })),
     },
   });
+}
+
+async function recordExpiredConvexDeploymentFailure(
+  process: SupervisedCommand,
+): Promise<void> {
+  const path = normalize(process.plotPath);
+  const key = `${path}::${process.id}`;
+  if (pendingConvexAttachmentChecks.has(key)) return;
+  const stored = settings.get("plotProvisioning")[process.plotPath];
+  if (stored?.status !== "complete") return;
+
+  pendingConvexAttachmentChecks.add(key);
+  try {
+    const output = await supervisor.output(process.plotPath, process.id);
+    const project = latestSnapshot.projects.find((candidate) =>
+      candidate.workspaces.some(
+        (workspace) => normalize(workspace.path) === path,
+      ),
+    );
+    if (!project) return;
+    const recipe = await readRecipe(project.rootPath);
+    const convexSteps = recipe.provision.filter(isConvexStep);
+    if (convexSteps.length !== 1) return;
+    const diagnosis = provisionDiagnosis(convexSteps[0]!, output);
+    if (diagnosis?.remedy?.id !== "convex-recreate") return;
+
+    const records = settings.get("plotProvisioning");
+    const current = records[process.plotPath];
+    if (current?.status !== "complete") return;
+    const failure: ProvisionResult = {
+      label: "Convex deployment attachment",
+      command: recipe.commands[process.id]?.run ?? process.id,
+      exitCode: process.exitCode ?? 1,
+      output: sanitizeProvisionOutput(output).slice(-recordedOutputLimit),
+      durationMs: 0,
+      ...diagnosis,
+    };
+    settings.set("plotProvisioning", {
+      ...records,
+      [process.plotPath]: {
+        status: "failed",
+        at: new Date().toISOString(),
+        steps: [...current.steps, failure],
+      },
+    });
+    void refreshSnapshot(true);
+  } finally {
+    pendingConvexAttachmentChecks.delete(key);
+  }
 }
 
 /** A plot carries the outcome of its last provisioning run into the snapshot. */

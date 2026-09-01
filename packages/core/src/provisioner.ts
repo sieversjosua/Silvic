@@ -151,6 +151,29 @@ export function provisionDiagnosis(
     };
   }
   if (!isConvexStep(step)) return undefined;
+  if (
+    /(?:url_for_key[^\n]*401 Unauthorized|AuthenticationFailed:\s*Invalid Convex deploy key)/i.test(
+      output,
+    )
+  ) {
+    if (step.convex.expiration) {
+      return {
+        advice:
+          "The Plot's expiring Convex deployment no longer exists, so its stored deploy key cannot authenticate. Recreate the Plot's dev deployment to continue with an empty database.",
+        remedy: {
+          id: "convex-recreate",
+          label: "Replace the expired Convex deployment and discard its data",
+          dataLoss: true,
+          detail:
+            "Creates a new expiring dev deployment for this Plot. Documents and file storage from the expired deployment are not copied.",
+        },
+      };
+    }
+    return {
+      advice:
+        "The selected Convex deployment rejected its stored deploy key. Silvic will not replace a deployment without a configured expiration; repair the deployment or key manually, or add an expiration to this Plot's isolated Convex recipe before retrying.",
+    };
+  }
   if (/Schema validation failed/i.test(output)) {
     if (step.convex.expiration) {
       return {

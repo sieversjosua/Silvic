@@ -508,6 +508,57 @@ describe("automation operations", () => {
     });
   });
 
+  it("recreates an expired Convex deployment after stored provisioning completed", async () => {
+    const provision = vi.fn(async () => ({
+      provision: [
+        {
+          label: "Convex deployment",
+          command: "Silvic isolated Convex environment",
+          exitCode: 0,
+          output: "Created replacement deployment",
+          durationMs: 1,
+        },
+      ],
+      runtime: { status: "not-required" as const, durationMs: 0 },
+      readiness: { status: "not-required" as const, durationMs: 0 },
+    }));
+    const result = await controller({
+      workspace: {
+        ...plot,
+        provisioning: {
+          status: "complete",
+          at: "2026-08-27T12:00:00.000Z",
+          steps: [
+            {
+              label: "Convex deployment",
+              command: "Silvic isolated Convex environment",
+              exitCode: 0,
+              output: "Created original deployment",
+              durationMs: 1,
+            },
+          ],
+        },
+      },
+      provision,
+    }).handle(
+      request("provision", {
+        plot: plot.workspaceId,
+        confirmPlotId: plot.workspaceId,
+        remedy: "convex-recreate",
+      }),
+    );
+
+    expect(provision).toHaveBeenCalledWith({
+      path: plot.path,
+      remedy: "convex-recreate",
+    });
+    expect(result).toMatchObject({
+      alreadyProvisioned: false,
+      failed: false,
+      partialFailure: false,
+    });
+  });
+
   it("does not provision an external Plot before adoption", async () => {
     const provision = vi.fn(async () => ({
       provision: [],
