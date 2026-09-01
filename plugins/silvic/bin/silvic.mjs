@@ -29535,6 +29535,7 @@ var recipeSchema = external_exports.object({
 }).strict();
 var provisionRemedyIdSchema = external_exports.enum([
   "convex-cli",
+  "convex-adopt",
   "convex-recreate"
 ]);
 var recipeSaveRequestSchema = external_exports.object({
@@ -29968,8 +29969,10 @@ function adoptionScope(value) {
   return value;
 }
 function provisionRemedy(value) {
-  if (value !== "convex-cli" && value !== "convex-recreate") {
-    throw new CliUsageError("--remedy must be convex-cli or convex-recreate.");
+  if (value !== "convex-cli" && value !== "convex-adopt" && value !== "convex-recreate") {
+    throw new CliUsageError(
+      "--remedy must be convex-cli, convex-adopt or convex-recreate."
+    );
   }
   return value;
 }
@@ -29983,7 +29986,7 @@ Usage:
   silvic status --plot ID [--json]
   silvic adoption-plan --plot ID [--scope single|family] [--json]
   silvic adopt --plot ID [--scope single|family] --confirm STABLE_ID [--json]
-  silvic provision --plot ID --confirm STABLE_ID [--remedy convex-cli|convex-recreate] [--json]
+  silvic provision --plot ID --confirm STABLE_ID [--remedy convex-cli|convex-adopt|convex-recreate] [--json]
   silvic state-plan [--json]
   silvic state-prune --confirm PLAN_ID [--json]
   silvic start --plot ID [--runtime ID] [--json]
@@ -30130,7 +30133,7 @@ function buildMcpServer() {
       inputSchema: external_exports.object({
         plot: external_exports.string().min(1),
         confirmPlotId: external_exports.string().min(1),
-        remedy: external_exports.enum(["convex-cli", "convex-recreate"]).optional()
+        remedy: external_exports.enum(["convex-cli", "convex-adopt", "convex-recreate"]).optional()
       }),
       outputSchema,
       annotations: providerMutation

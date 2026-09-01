@@ -473,6 +473,38 @@ describe("automation operations", () => {
     });
   });
 
+  it("requires stable-ID confirmation before adopting legacy Convex identity", async () => {
+    const provision = vi.fn(async () => ({
+      provision: [],
+      runtime: { status: "not-required" as const, durationMs: 0 },
+      readiness: { status: "not-required" as const, durationMs: 0 },
+    }));
+    const automation = controller({ provision });
+
+    await expect(
+      automation.handle(
+        request("provision", {
+          plot: plot.workspaceId,
+          confirmPlotId: "wrong-plot",
+          remedy: "convex-adopt",
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "CONFIRMATION_REQUIRED" });
+    expect(provision).not.toHaveBeenCalled();
+
+    await automation.handle(
+      request("provision", {
+        plot: plot.workspaceId,
+        confirmPlotId: plot.workspaceId,
+        remedy: "convex-adopt",
+      }),
+    );
+    expect(provision).toHaveBeenCalledWith({
+      path: plot.path,
+      remedy: "convex-adopt",
+    });
+  });
+
   it("treats a repeated successful provisioning request as a no-op", async () => {
     const provision = vi.fn();
     const result = await controller({

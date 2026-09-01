@@ -30,9 +30,10 @@ owns the Workspace and multiple Sessions may use the same Workspace over time.
 _Avoid_: Workspace, worktree
 
 **Service Attachment**:
-A local or remote service environment associated with a Workspace, such as a Convex
-deployment, development server, or CI run.
-_Avoid_: Workspace, plugin
+A structured association between a Workspace and a local or remote service environment,
+such as a Convex deployment, development server, or CI run. Its logical reference and
+provider-assigned identity remain distinct when the provider names them differently.
+_Avoid_: Workspace, plugin, deployment record
 
 **Runtime**:
 A running local process associated with a Workspace, optionally exposing a local URL

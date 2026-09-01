@@ -330,45 +330,48 @@ it("returns exit 5 when a provisioning retry fails completely", async () => {
   });
 });
 
-it("forwards the offered Convex recreation remedy by its closed identifier", async () => {
-  const requests: AutomationRequest[] = [];
-  const directory = await serve(async (request) => {
-    requests.push(request);
-    return {
-      provision: [],
-      runtime: { status: "not-required" },
-      readiness: { status: "not-required" },
-      failed: false,
-      partialFailure: false,
-    };
-  });
+it.each(["convex-adopt", "convex-recreate"] as const)(
+  "forwards the offered %s remedy by its closed identifier",
+  async (remedy) => {
+    const requests: AutomationRequest[] = [];
+    const directory = await serve(async (request) => {
+      requests.push(request);
+      return {
+        provision: [],
+        runtime: { status: "not-required" },
+        readiness: { status: "not-required" },
+        failed: false,
+        partialFailure: false,
+      };
+    });
 
-  await executeFile(
-    executable,
-    [
-      "provision",
-      "--plot",
-      "plot_123",
-      "--confirm",
-      "plot_123",
-      "--remedy",
-      "convex-recreate",
-      "--json",
-    ],
-    { env: { ...process.env, SILVIC_AUTOMATION_DIR: directory } },
-  );
+    await executeFile(
+      executable,
+      [
+        "provision",
+        "--plot",
+        "plot_123",
+        "--confirm",
+        "plot_123",
+        "--remedy",
+        remedy,
+        "--json",
+      ],
+      { env: { ...process.env, SILVIC_AUTOMATION_DIR: directory } },
+    );
 
-  expect(requests).toMatchObject([
-    {
-      method: "provision",
-      params: {
-        plot: "plot_123",
-        confirmPlotId: "plot_123",
-        remedy: "convex-recreate",
+    expect(requests).toMatchObject([
+      {
+        method: "provision",
+        params: {
+          plot: "plot_123",
+          confirmPlotId: "plot_123",
+          remedy,
+        },
       },
-    },
-  ]);
-});
+    ]);
+  },
+);
 
 it("inspects state before passing the exact plan confirmation to pruning", async () => {
   const requests: AutomationRequest[] = [];

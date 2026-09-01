@@ -651,6 +651,7 @@ export type Recipe = z.infer<typeof recipeSchema>;
  */
 export const provisionRemedyIdSchema = z.enum([
   "convex-cli",
+  "convex-adopt",
   "convex-recreate",
 ]);
 export type ProvisionRemedyId = z.infer<typeof provisionRemedyIdSchema>;
@@ -674,6 +675,8 @@ export interface ProvisionResult {
   /** Silvic's reading of a failure it recognises, in its own words. */
   advice?: string;
   remedy?: ProvisionRemedy;
+  /** A provider identity established by this typed step before any later failure. */
+  attachment?: ServiceAttachment;
 }
 
 export const recipeSaveRequestSchema = z
@@ -1020,7 +1023,25 @@ export interface PlotProvisioning {
   /** When the run finished, ISO 8601. */
   at: string;
   steps: readonly ProvisionResult[];
+  /** Provider identities Silvic established instead of inferring from env text. */
+  attachments?: readonly ServiceAttachment[];
 }
+
+export interface ConvexServiceAttachment {
+  provider: "convex";
+  team: string;
+  project: string;
+  deploymentKind: "dev";
+  /** The typed recipe name after resolving `{plot}`. */
+  recipeDeploymentName: string;
+  /** The logical reference used at creation or explicitly asserted during legacy adoption. */
+  logicalDeploymentRef: string;
+  /** Convex's unrelated provider-assigned slug selected in `.env.local`. */
+  physicalDeploymentSlug: string;
+  expiration?: string;
+}
+
+export type ServiceAttachment = ConvexServiceAttachment;
 
 /**
  * Creation can take minutes, so the whole plan is sent on every change: the

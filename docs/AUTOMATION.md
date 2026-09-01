@@ -109,6 +109,21 @@ silvic adoption-plan --plot plot_123 --json
 silvic provision --plot plot_123 --confirm plot_123 --remedy convex-recreate --json
 ```
 
+Silvic records the logical Convex reference and Convex's unrelated physical
+deployment slug as one structured Service Attachment when it creates a
+deployment. A Plot provisioned before 0.1.61 has no such ownership record and
+fails closed instead of inferring ownership from `.env.local`. Its adoption
+plan first offers a non-destructive, explicitly confirmed migration:
+
+```sh
+silvic provision --plot plot_123 --confirm plot_123 --remedy convex-adopt --json
+silvic adoption-plan --plot plot_123 --json
+```
+
+The first command records the currently selected expiring dev deployment; it
+does not replace it. Inspect the new plan and confirm `convex-recreate`
+separately because that second action retains the data-loss boundary.
+
 Shared, manually managed, non-expiring, or mismatched deployments are never
 replaced. The failed step instead gives a manual recovery direction.
 

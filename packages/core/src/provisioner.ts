@@ -1,6 +1,7 @@
 import {
   isConvexStep,
   isWorkosStep,
+  type ConvexServiceAttachment,
   type PackageManager,
   type ProvisionRemedy,
   type ProvisionRemedyId,
@@ -31,6 +32,31 @@ export class Provisioner {
     this.workosProvisioner = new WorkosProvisioner(runner);
   }
 
+  async adoptConvexAttachment(
+    steps: readonly ProvisionStep[],
+    context: ProvisionContext,
+  ): Promise<ProvisionResult> {
+    const convexSteps = steps.filter(isConvexStep);
+    if (convexSteps.length !== 1) {
+      throw new Error(
+        "Convex attachment adoption requires exactly one typed Convex provisioning step",
+      );
+    }
+    const startedAt = Date.now();
+    const attachment = await this.convexProvisioner.adopt(
+      convexSteps[0]!,
+      context,
+    );
+    return {
+      label: "Adopt Convex Service Attachment",
+      command: "Silvic structured Convex attachment adoption",
+      exitCode: 0,
+      output: `Recorded ${attachment.logicalDeploymentRef} as ${attachment.deploymentKind}:${attachment.physicalDeploymentSlug}`,
+      durationMs: Date.now() - startedAt,
+      attachment,
+    };
+  }
+
   /**
    * Steps run in order and stop at the first failure. A plot that fails to
    * provision is still a plot: the results say which step failed and with what
@@ -48,6 +74,8 @@ export class Provisioner {
       onStep?: (result: ProvisionResult, index: number) => void;
       /** Replace only an expiring, Plot-owned Convex dev deployment. */
       recreateConvex?: boolean;
+      /** Structured ownership proof required before destructive recovery. */
+      convexAttachment?: ConvexServiceAttachment;
     } = {},
   ): Promise<ProvisionResult[]> {
     if (
@@ -76,10 +104,17 @@ export class Provisioner {
             }
           : {}),
       };
-      const result: { exitCode: number; output: string } = isConvexStep(step)
+      const result: {
+        exitCode: number;
+        output: string;
+        attachment?: ConvexServiceAttachment;
+      } = isConvexStep(step)
         ? await this.convexProvisioner.run(step, context, {
             ...stepOptions,
             recreate: options.recreateConvex === true,
+            ...(options.convexAttachment
+              ? { attachment: options.convexAttachment }
+              : {}),
           })
         : isWorkosStep(step)
           ? await this.workosProvisioner.run(step, context, stepOptions)
@@ -106,6 +141,7 @@ export class Provisioner {
         output,
         durationMs: Date.now() - startedAt,
         ...(diagnosis ? diagnosis : {}),
+        ...(result.attachment ? { attachment: result.attachment } : {}),
       };
       results.push(record);
       options.onStep?.(record, index);
@@ -234,8 +270,11 @@ export function remedyCommand(
   switch (remedy) {
     case "convex-cli":
       return `${addPackage(packageManager)} convex@${convexDeploymentMinimum}`;
+    case "convex-adopt":
     case "convex-recreate":
-      throw new Error("Convex recreation is handled by the typed provisioner");
+      throw new Error(
+        "Convex attachment adoption and recreation are handled by the typed provisioner",
+      );
   }
 }
 
@@ -244,6 +283,8 @@ export function remedyLabel(remedy: ProvisionRemedyId): string {
   switch (remedy) {
     case "convex-cli":
       return `Install convex ${convexDeploymentMinimum}`;
+    case "convex-adopt":
+      return "Adopt selected Convex deployment attachment";
     case "convex-recreate":
       return "Replace isolated Convex deployment";
   }

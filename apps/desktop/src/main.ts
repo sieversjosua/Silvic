@@ -148,6 +148,7 @@ import {
 
 import { GateManager, type GateFailure, type GateWake } from "./gate-manager";
 import { PlotProgressReporter } from "./plot-progress";
+import { provisioningRecord, withServiceAttachment } from "./plot-provisioning";
 import {
   updateMenuPresentations,
   type UpdateMenuAction,
@@ -1462,11 +1463,26 @@ async function provisionPlot(
       (candidate) =>
         candidate.workspaceId === workspace.lineage?.parentWorkspaceId,
     )?.path ?? project.rootPath;
+  const provisionContext = {
+    root: workspace.path,
+    sourceRoot,
+    sourceFallbackRoots: providerSourceRoots(project, sourceRoot),
+    project: recipe.project,
+    plot,
+    branch: workspace.git.branch,
+    url: address.url,
+    port,
+    ...(packageManager ? { packageManager } : {}),
+  };
+  const storedProvisioning = settings.get("plotProvisioning")[workspace.path];
+  const convexAttachment = storedProvisioning?.attachments?.find(
+    (attachment) => attachment.provider === "convex",
+  );
 
   const progress = new PlotProgressReporter(
     workspace.git.branch,
     [
-      ...(remedy === "convex-cli"
+      ...(remedy === "convex-cli" || remedy === "convex-adopt"
         ? [{ id: remedyStepId, label: remedyLabel(remedy) }]
         : []),
       ...recipe.provision.map((step, index) => ({
@@ -1487,6 +1503,25 @@ async function provisionPlot(
 
   try {
     let repair: ProvisionResult | undefined;
+    if (remedy === "convex-adopt") {
+      progress.began(remedyStepId);
+      const adopted = await provisioner.adoptConvexAttachment(
+        recipe.provision,
+        provisionContext,
+      );
+      progress.finished(remedyStepId, adopted.durationMs);
+      if (!adopted.attachment) {
+        throw new Error("Convex attachment adoption returned no identity");
+      }
+      recordServiceAttachment(workspace.path, adopted.attachment);
+      await refreshSnapshot(true);
+      return {
+        provision: [adopted],
+        ...blockedPlotStartup(
+          "The Convex attachment identity is recorded. Inspect the recovery plan again before confirming its data-losing replacement.",
+        ),
+      };
+    }
     if (remedy === "convex-cli") {
       progress.began(remedyStepId);
       const startedAt = Date.now();
@@ -1522,19 +1557,10 @@ async function provisionPlot(
 
     const provision = await provisioner.run(
       recipe.provision,
-      {
-        root: workspace.path,
-        sourceRoot,
-        sourceFallbackRoots: providerSourceRoots(project, sourceRoot),
-        project: recipe.project,
-        plot,
-        branch: workspace.git.branch,
-        url: address.url,
-        port,
-        ...(packageManager ? { packageManager } : {}),
-      },
+      provisionContext,
       {
         recreateConvex: remedy === "convex-recreate",
+        ...(convexAttachment ? { convexAttachment } : {}),
         onStepStart: ({ index }) => progress.began(provisionStepId(index)),
         onStepOutput: ({ index, chunk }) =>
           progress.wrote(provisionStepId(index), chunk),
@@ -1967,16 +1993,30 @@ function recordProvisioning(
   path: string,
   steps: readonly ProvisionResult[],
 ): void {
+  const current = settings.get("plotProvisioning")[path];
   settings.set("plotProvisioning", {
     ...settings.get("plotProvisioning"),
-    [path]: {
-      status: steps.some((step) => step.exitCode !== 0) ? "failed" : "complete",
-      at: new Date().toISOString(),
-      steps: steps.map((step) => ({
-        ...step,
-        output: step.output.slice(0, recordedOutputLimit),
-      })),
-    },
+    [path]: provisioningRecord(
+      current,
+      steps,
+      new Date().toISOString(),
+      recordedOutputLimit,
+    ),
+  });
+}
+
+function recordServiceAttachment(
+  path: string,
+  attachment: NonNullable<ProvisionResult["attachment"]>,
+): void {
+  const records = settings.get("plotProvisioning");
+  const current = records[path];
+  if (!current) {
+    throw new Error("Provision this Plot before adopting a Service Attachment");
+  }
+  settings.set("plotProvisioning", {
+    ...records,
+    [path]: withServiceAttachment(current, attachment),
   });
 }
 
@@ -2018,6 +2058,7 @@ async function recordExpiredConvexDeploymentFailure(
     settings.set("plotProvisioning", {
       ...records,
       [process.plotPath]: {
+        ...current,
         status: "failed",
         at: new Date().toISOString(),
         steps: [...current.steps, failure],

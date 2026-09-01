@@ -197,6 +197,18 @@ describe("worktree adoption", () => {
                     },
                   },
                 ],
+                attachments: [
+                  {
+                    provider: "convex",
+                    team: "syntwin",
+                    project: "mono",
+                    deploymentKind: "dev",
+                    recipeDeploymentName: "dev/leaf",
+                    logicalDeploymentRef: "syntwin:mono:dev/leaf",
+                    physicalDeploymentSlug: "fleet-alligator-19",
+                    expiration: "in 7 days",
+                  },
+                ],
               },
             }
           : candidate,
@@ -219,6 +231,54 @@ describe("worktree adoption", () => {
       providerChanging: true,
     });
     expect(plan.requiresProviderConfirmation).toBe(true);
+  });
+
+  it("requires explicit attachment adoption before a legacy Convex recovery", () => {
+    const legacyProject: ProjectSnapshot = {
+      ...project,
+      workspaces: project.workspaces.map((candidate) =>
+        candidate.workspaceId === "leaf"
+          ? {
+              ...candidate,
+              provisioning: {
+                status: "failed",
+                at: "2026-09-01T08:00:00.000Z",
+                steps: [
+                  {
+                    label: "Convex deployment attachment",
+                    command: "npx convex dev",
+                    exitCode: 1,
+                    output: "AuthenticationFailed: Invalid Convex deploy key",
+                    durationMs: 0,
+                    remedy: {
+                      id: "convex-recreate",
+                      label: "Replace the expired Convex deployment",
+                      dataLoss: true,
+                    },
+                  },
+                ],
+              },
+            }
+          : candidate,
+      ),
+    };
+
+    const plan = buildAdoptionPlan({
+      project: legacyProject,
+      selectedWorkspaceId: "leaf",
+      scope: "single",
+      steps: [{ convex: { name: "dev/{plot}", expiration: "in 7 days" } }],
+      member: () => ({ port: 43123, url: "https://leaf.localhost" }),
+    });
+
+    expect(plan.recovery).toMatchObject({
+      id: "convex-adopt",
+      providerChanging: true,
+    });
+    expect(plan.recovery).not.toHaveProperty("dataLoss");
+    expect(plan.recovery?.detail).toContain(
+      "predates structured provider identity",
+    );
   });
 
   it("adopts the selected stack ancestors without unrelated worktrees", () => {

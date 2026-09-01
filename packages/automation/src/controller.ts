@@ -231,6 +231,7 @@ export class AutomationController {
       const remedy = optionalRemedy(params);
       if (
         current.provisioning?.status === "complete" &&
+        remedy !== "convex-adopt" &&
         remedy !== "convex-recreate"
       ) {
         return {
@@ -958,13 +959,17 @@ function optionalScope(params: Record<string, unknown>): "single" | "family" {
 
 function optionalRemedy(
   params: Record<string, unknown>,
-): "convex-cli" | "convex-recreate" | undefined {
+): "convex-cli" | "convex-adopt" | "convex-recreate" | undefined {
   const value = params["remedy"];
   if (value === undefined) return undefined;
-  if (value !== "convex-cli" && value !== "convex-recreate") {
+  if (
+    value !== "convex-cli" &&
+    value !== "convex-adopt" &&
+    value !== "convex-recreate"
+  ) {
     throw new AutomationError(
       "INVALID_ARGUMENT",
-      "remedy must be convex-cli or convex-recreate.",
+      "remedy must be convex-cli, convex-adopt or convex-recreate.",
     );
   }
   return value;

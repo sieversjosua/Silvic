@@ -284,7 +284,7 @@ interface AdoptionPlanResult {
     reasons: readonly string[];
   };
   recovery?: {
-    id: "convex-cli" | "convex-recreate";
+    id: "convex-cli" | "convex-adopt" | "convex-recreate";
     label: string;
     dataLoss?: boolean;
     detail?: string;
@@ -497,16 +497,24 @@ function adoptionScope(value: string): "single" | "family" {
   return value;
 }
 
-function provisionRemedy(value: string): "convex-cli" | "convex-recreate" {
-  if (value !== "convex-cli" && value !== "convex-recreate") {
-    throw new CliUsageError("--remedy must be convex-cli or convex-recreate.");
+function provisionRemedy(
+  value: string,
+): "convex-cli" | "convex-adopt" | "convex-recreate" {
+  if (
+    value !== "convex-cli" &&
+    value !== "convex-adopt" &&
+    value !== "convex-recreate"
+  ) {
+    throw new CliUsageError(
+      "--remedy must be convex-cli, convex-adopt or convex-recreate.",
+    );
   }
   return value;
 }
 
 function writeHelp(): void {
   process.stdout.write(
-    `Silvic ${version}\n\nUsage:\n  silvic projects [--json]\n  silvic plots [--project ID] [--json]\n  silvic status --plot ID [--json]\n  silvic adoption-plan --plot ID [--scope single|family] [--json]\n  silvic adopt --plot ID [--scope single|family] --confirm STABLE_ID [--json]\n  silvic provision --plot ID --confirm STABLE_ID [--remedy convex-cli|convex-recreate] [--json]\n  silvic state-plan [--json]\n  silvic state-prune --confirm PLAN_ID [--json]\n  silvic start --plot ID [--runtime ID] [--json]\n  silvic preview --plot ID [--timeout MS] [--open] [--json]\n  silvic stop --plot ID [--runtime ID] [--json]\n  silvic wait --plot ID [--timeout MS] [--json]\n  silvic logs --plot ID [--runtime ID] [--limit BYTES] [--json]\n\nPlot selectors accept a stable Plot id or an absolute Plot path. Before adoption\nor provisioning, inspect adoption-plan and confirm with its selected stable Plot\nID. Start never confirms provider changes implicitly. State pruning requires the\nexact state-plan ID and removes only listed Silvic metadata, never worktrees.\nStart and stop without --runtime apply to every declared runtime and are idempotent.\n`,
+    `Silvic ${version}\n\nUsage:\n  silvic projects [--json]\n  silvic plots [--project ID] [--json]\n  silvic status --plot ID [--json]\n  silvic adoption-plan --plot ID [--scope single|family] [--json]\n  silvic adopt --plot ID [--scope single|family] --confirm STABLE_ID [--json]\n  silvic provision --plot ID --confirm STABLE_ID [--remedy convex-cli|convex-adopt|convex-recreate] [--json]\n  silvic state-plan [--json]\n  silvic state-prune --confirm PLAN_ID [--json]\n  silvic start --plot ID [--runtime ID] [--json]\n  silvic preview --plot ID [--timeout MS] [--open] [--json]\n  silvic stop --plot ID [--runtime ID] [--json]\n  silvic wait --plot ID [--timeout MS] [--json]\n  silvic logs --plot ID [--runtime ID] [--limit BYTES] [--json]\n\nPlot selectors accept a stable Plot id or an absolute Plot path. Before adoption\nor provisioning, inspect adoption-plan and confirm with its selected stable Plot\nID. Start never confirms provider changes implicitly. State pruning requires the\nexact state-plan ID and removes only listed Silvic metadata, never worktrees.\nStart and stop without --runtime apply to every declared runtime and are idempotent.\n`,
   );
 }
 
@@ -651,7 +659,9 @@ function buildMcpServer(): McpServer {
       inputSchema: z.object({
         plot: z.string().min(1),
         confirmPlotId: z.string().min(1),
-        remedy: z.enum(["convex-cli", "convex-recreate"]).optional(),
+        remedy: z
+          .enum(["convex-cli", "convex-adopt", "convex-recreate"])
+          .optional(),
       }),
       outputSchema,
       annotations: providerMutation,

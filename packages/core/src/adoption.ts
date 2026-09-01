@@ -74,9 +74,21 @@ export function buildAdoptionPlan({
   const selected = project.workspaces.find(
     (workspace) => workspace.workspaceId === selectedWorkspaceId,
   );
-  const recovery = selected?.provisioning?.steps.find(
+  const recordedRecovery = selected?.provisioning?.steps.find(
     (step) => step.exitCode !== 0 && step.remedy,
   )?.remedy;
+  const hasConvexAttachment = selected?.provisioning?.attachments?.some(
+    (attachment) => attachment.provider === "convex",
+  );
+  const recovery =
+    recordedRecovery?.id === "convex-recreate" && !hasConvexAttachment
+      ? {
+          id: "convex-adopt" as const,
+          label: "Adopt the selected Convex deployment attachment",
+          detail:
+            "This Plot predates structured provider identity. Confirm the current selected dev deployment as this Plot's attachment before reviewing and confirming its data-losing replacement.",
+        }
+      : recordedRecovery;
   const plannedSteps = steps.map((step, index) => ({
     label: provisionStepLabel(step, index),
     providerChanging: provisionStepChangesProvider(step),

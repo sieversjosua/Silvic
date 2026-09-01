@@ -4,6 +4,8 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import type { ConvexServiceAttachment } from "@silvic/contracts";
+
 import {
   LocalCommandRunner,
   type CommandRequest,
@@ -43,6 +45,22 @@ const context = (root: string) => ({
   branch: "feature/owner-onboarding",
   url: "http://localhost:3456",
 });
+
+function storedConvexAttachment(
+  overrides: Partial<ConvexServiceAttachment> = {},
+): ConvexServiceAttachment {
+  return {
+    provider: "convex",
+    team: "syntwin",
+    project: "mono",
+    deploymentKind: "dev",
+    recipeDeploymentName: "dev/owner-onboarding",
+    logicalDeploymentRef: "syntwin:mono:dev/owner-onboarding",
+    physicalDeploymentSlug: "fleet-alligator-19",
+    expiration: "in 7 days",
+    ...overrides,
+  };
+}
 
 describe("provisionEnvironment", () => {
   it("also emits the work-cli names so existing hooks keep working", () => {
@@ -474,7 +492,7 @@ describe("Convex provisioning step", () => {
     expect(local).toContain("SELECTED_LOCAL=kept-from-selected-checkout");
     expect(local).not.toContain("INCOMPLETE_SETUP");
     expect(local).toContain(
-      "CONVEX_DEPLOYMENT=dev:isolated # team: syntwin, project: mono",
+      "CONVEX_DEPLOYMENT=dev:helpful-mouse-694 # team: syntwin, project: mono",
     );
     expect(local).toContain("CONVEX_DEPLOY_KEY=present-but-secret");
     expect(local).toContain(
@@ -505,6 +523,16 @@ describe("Convex provisioning step", () => {
       "Using Silvic Convex CLI 1.42.3; the repository dependency stays unchanged",
     );
     expect(step?.output).toContain("A newer version of Convex is available");
+    expect(step?.attachment).toEqual({
+      provider: "convex",
+      team: "syntwin",
+      project: "mono",
+      deploymentKind: "dev",
+      recipeDeploymentName: "dev/owner-onboarding",
+      logicalDeploymentRef: "syntwin:mono:dev/owner-onboarding",
+      physicalDeploymentSlug: "helpful-mouse-694",
+      expiration: "in 7 days",
+    });
   });
 
   it("resumes an interrupted native setup without creating another deployment or key", async () => {
@@ -543,6 +571,41 @@ describe("Convex provisioning step", () => {
     ]);
   });
 
+  it("keeps structured identity when a newly created deployment later fails to push", async () => {
+    const root = await plotRoot();
+    const source = await plotRoot();
+    await writeFile(
+      join(source, ".env.local"),
+      "CONVEX_DEPLOYMENT=dev:source # team: syntwin, project: mono\n",
+    );
+    const runner = new ConvexLifecycleRunner(root, false, true);
+
+    const [step] = await new Provisioner(runner).run(
+      [
+        {
+          convex: {
+            name: "dev/{plot}",
+            expiration: "in 7 days",
+          },
+        },
+      ],
+      {
+        root,
+        sourceRoot: source,
+        project: "syntwin-mono",
+        plot: "owner-onboarding",
+      },
+    );
+
+    expect(step).toMatchObject({
+      exitCode: 1,
+      attachment: {
+        logicalDeploymentRef: "syntwin:mono:dev/owner-onboarding",
+        physicalDeploymentSlug: "helpful-mouse-694",
+      },
+    });
+  });
+
   it("replaces a matching expiring Plot deployment with an empty deployment", async () => {
     const root = await plotRoot();
     const source = await plotRoot();
@@ -553,7 +616,7 @@ describe("Convex provisioning step", () => {
     await writeFile(
       join(root, ".env.local"),
       [
-        "CONVEX_DEPLOYMENT=dev:owner-onboarding # team: syntwin, project: mono",
+        "CONVEX_DEPLOYMENT=dev:fleet-alligator-19 # team: syntwin, project: mono",
         "CONVEX_DEPLOY_KEY=old-secret",
         "NEXT_PUBLIC_CONVEX_URL=https://old.convex.cloud",
         "LOCAL_ONLY=kept",
@@ -577,7 +640,10 @@ describe("Convex provisioning step", () => {
         project: "syntwin-mono",
         plot: "owner-onboarding",
       },
-      { recreateConvex: true },
+      {
+        recreateConvex: true,
+        convexAttachment: storedConvexAttachment(),
+      },
     );
 
     expect(step?.exitCode).toBe(0);
@@ -594,6 +660,13 @@ describe("Convex provisioning step", () => {
     expect(local).toContain("LOCAL_ONLY=kept");
     expect(local).not.toContain("old-secret");
     expect(step?.output).toContain("data will not be copied");
+    expect(step?.attachment).toMatchObject({
+      provider: "convex",
+      logicalDeploymentRef: expect.stringMatching(
+        /^syntwin:mono:dev\/owner-onboarding-recovery-[a-z0-9]+$/,
+      ),
+      physicalDeploymentSlug: "helpful-mouse-694",
+    });
   });
 
   it("refuses to replace a Convex deployment not owned by the typed Plot recipe", async () => {
@@ -624,9 +697,153 @@ describe("Convex provisioning step", () => {
           project: "syntwin-mono",
           plot: "owner-onboarding",
         },
+        {
+          recreateConvex: true,
+          convexAttachment: storedConvexAttachment(),
+        },
+      ),
+    ).rejects.toThrow(/structured Service Attachment.*physical deployment/i);
+  });
+
+  it("rejects a structured attachment whose logical ref belongs elsewhere", async () => {
+    const root = await plotRoot();
+    const source = await plotRoot();
+    await writeFile(
+      join(source, ".env.local"),
+      "CONVEX_DEPLOYMENT=dev:source # team: syntwin, project: mono\n",
+    );
+    await writeFile(
+      join(root, ".env.local"),
+      "CONVEX_DEPLOYMENT=dev:fleet-alligator-19 # team: syntwin, project: mono\n",
+    );
+
+    await expect(
+      new Provisioner(new ConvexLifecycleRunner(root)).run(
+        [
+          {
+            convex: {
+              name: "dev/{plot}",
+              expiration: "in 7 days",
+            },
+          },
+        ],
+        {
+          root,
+          sourceRoot: source,
+          project: "syntwin-mono",
+          plot: "owner-onboarding",
+        },
+        {
+          recreateConvex: true,
+          convexAttachment: storedConvexAttachment({
+            logicalDeploymentRef: "foreign:mono:dev/owner-onboarding",
+          }),
+        },
+      ),
+    ).rejects.toThrow(/structured Service Attachment/i);
+  });
+
+  it("fails closed when a legacy Plot has no structured Convex attachment", async () => {
+    const root = await plotRoot();
+    const source = await plotRoot();
+    await writeFile(
+      join(source, ".env.local"),
+      "CONVEX_DEPLOYMENT=dev:source # team: syntwin, project: mono\n",
+    );
+    await writeFile(
+      join(root, ".env.local"),
+      "CONVEX_DEPLOYMENT=dev:fleet-alligator-19 # team: syntwin, project: mono\n",
+    );
+
+    await expect(
+      new Provisioner(new ConvexLifecycleRunner(root)).run(
+        [
+          {
+            convex: {
+              name: "dev/{plot}",
+              expiration: "in 7 days",
+            },
+          },
+        ],
+        {
+          root,
+          sourceRoot: source,
+          project: "syntwin-mono",
+          plot: "owner-onboarding",
+        },
         { recreateConvex: true },
       ),
-    ).rejects.toThrow(/only replace.*match this Plot/i);
+    ).rejects.toThrow(/Adopt the attachment explicitly first/i);
+  });
+
+  it("explicitly adopts a generated physical slug for a legacy Plot", async () => {
+    const root = await plotRoot();
+    const source = await plotRoot();
+    await writeFile(
+      join(source, ".env.local"),
+      "CONVEX_DEPLOYMENT=dev:source # team: syntwin, project: mono\n",
+    );
+    await writeFile(
+      join(root, ".env.local"),
+      "CONVEX_DEPLOYMENT=dev:fleet-alligator-19 # team: syntwin, project: mono\n",
+    );
+    const runner = new ConvexLifecycleRunner(root);
+    const nativeProvisioner = new Provisioner(runner);
+
+    const result = await nativeProvisioner.adoptConvexAttachment(
+      [
+        {
+          convex: {
+            name: "dev/{plot}",
+            expiration: "in 7 days",
+          },
+        },
+      ],
+      {
+        root,
+        sourceRoot: source,
+        project: "syntwin-mono",
+        plot: "owner-onboarding",
+      },
+    );
+
+    expect(result.attachment).toEqual({
+      provider: "convex",
+      team: "syntwin",
+      project: "mono",
+      deploymentKind: "dev",
+      recipeDeploymentName: "dev/owner-onboarding",
+      logicalDeploymentRef: "syntwin:mono:dev/owner-onboarding",
+      physicalDeploymentSlug: "fleet-alligator-19",
+      expiration: "in 7 days",
+    });
+    expect(runner.commands()).toEqual([]);
+
+    if (!result.attachment) throw new Error("missing adopted attachment");
+    const [recreated] = await nativeProvisioner.run(
+      [
+        {
+          convex: {
+            name: "dev/{plot}",
+            expiration: "in 7 days",
+          },
+        },
+      ],
+      {
+        root,
+        sourceRoot: source,
+        project: "syntwin-mono",
+        plot: "owner-onboarding",
+      },
+      {
+        recreateConvex: true,
+        convexAttachment: result.attachment,
+      },
+    );
+    expect(recreated?.exitCode).toBe(0);
+    expect(recreated?.attachment?.physicalDeploymentSlug).toBe(
+      "helpful-mouse-694",
+    );
   });
 
   it("restores the selected deployment when replacement creation fails", async () => {
@@ -660,7 +877,12 @@ describe("Convex provisioning step", () => {
         project: "syntwin-mono",
         plot: "owner-onboarding",
       },
-      { recreateConvex: true },
+      {
+        recreateConvex: true,
+        convexAttachment: storedConvexAttachment({
+          physicalDeploymentSlug: "owner-onboarding",
+        }),
+      },
     );
 
     expect(step?.exitCode).toBe(1);
@@ -713,6 +935,7 @@ class ConvexLifecycleRunner implements CommandRunner {
   constructor(
     private readonly root: string,
     private readonly failDeploymentCreation = false,
+    private readonly failPush = false,
   ) {}
 
   commands(): string[] {
@@ -741,7 +964,7 @@ class ConvexLifecycleRunner implements CommandRunner {
       const existing = await readFile(join(this.root, ".env.local"), "utf8");
       await writeFile(
         join(this.root, ".env.local"),
-        `${existing}CONVEX_DEPLOYMENT=dev:isolated # team: syntwin, project: mono\nNEXT_PUBLIC_CONVEX_URL=https://isolated.convex.cloud\n`,
+        `${existing}CONVEX_DEPLOYMENT=dev:helpful-mouse-694 # team: syntwin, project: mono\nNEXT_PUBLIC_CONVEX_URL=https://isolated.convex.cloud\n`,
       );
       return success("Deployment isolated created\n");
     }
@@ -764,6 +987,7 @@ class ConvexLifecycleRunner implements CommandRunner {
       return success("Environment variables updated\n");
     }
     if (command[0] === "dev" && command[1] === "--once") {
+      if (this.failPush) return failure("Schema validation failed");
       return {
         exitCode: 0,
         stdout: "Convex functions ready\n",
