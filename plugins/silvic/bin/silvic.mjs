@@ -29569,6 +29569,8 @@ var createEnvironmentRequestSchema = external_exports.object({
   sourcePath: external_exports.string().min(1),
   branch: external_exports.string().min(1).max(240),
   mode: external_exports.enum(["worktree", "clone"]),
+  /** Fast-forward the primary checkout from its upstream before branching. */
+  updateSource: external_exports.boolean().optional(),
   /**
    * A branch that already exists, taken up rather than cut: either a local
    * one nothing has checked out, or `origin/feature-x`, which becomes a
