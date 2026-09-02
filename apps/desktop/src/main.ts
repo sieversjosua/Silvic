@@ -632,6 +632,21 @@ function registerIpc(): void {
       return createEnvironment(createEnvironmentRequestSchema.parse(request));
     },
   );
+  ipcMain.handle(
+    ipcChannels.sourceUpdateInspect,
+    async (event, request: unknown) => {
+      assertTrustedSender(event);
+      const { path } = workspacePathRequestSchema.parse(request);
+      const sourcePath = knownWorkspacePath(path);
+      const source = latestSnapshot.projects
+        .flatMap((project) => project.workspaces)
+        .find((workspace) => normalize(workspace.path) === sourcePath);
+      if (!source?.isPrimary) return undefined;
+      const update = await environmentService.inspectFastForward(sourcePath);
+      await paintFromGit([sourcePath]);
+      return update;
+    },
+  );
   ipcMain.handle(ipcChannels.plotProvision, async (event, request: unknown) => {
     assertTrustedSender(event);
     return provisionPlot(plotProvisionRequestSchema.parse(request));
@@ -1235,6 +1250,7 @@ function assertTrustedSender(event: IpcMainInvokeEvent): void {
 }
 
 const checkoutStepId = "checkout";
+const sourceUpdateStepId = "source-update";
 const surveyStepId = "survey";
 const runtimeStepId = "runtime";
 const readinessStepId = "readiness";
@@ -1281,6 +1297,14 @@ async function createEnvironment(
   const progress = new PlotProgressReporter(
     request.branch,
     [
+      ...(request.updateSource
+        ? [
+            {
+              id: sourceUpdateStepId,
+              label: `Update ${source.git.branch} from ${source.git.upstream ?? "its upstream"}`,
+            },
+          ]
+        : []),
       {
         id: checkoutStepId,
         label:
@@ -1306,6 +1330,17 @@ async function createEnvironment(
   progress.announce();
 
   try {
+    let sourceRevision = source.git.revision;
+    if (request.updateSource) {
+      if (!source.isPrimary || request.adopt) {
+        throw new Error(
+          "Silvic only updates the primary source before cutting a new branch",
+        );
+      }
+      progress.began(sourceUpdateStepId);
+      sourceRevision = await environmentService.fastForward(sourcePath);
+      progress.finished(sourceUpdateStepId);
+    }
     progress.began(checkoutStepId);
     await environmentService.create({
       sourcePath,
@@ -1316,8 +1351,8 @@ async function createEnvironment(
       // is not a start point for it.
       ...(request.adopt
         ? { adopt: request.adopt }
-        : source.git.revision
-          ? { startPoint: source.git.revision }
+        : sourceRevision
+          ? { startPoint: sourceRevision }
           : {}),
       ...(project.origin ? { origin: project.origin } : {}),
     });

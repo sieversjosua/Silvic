@@ -761,6 +761,8 @@ export const createEnvironmentRequestSchema = z
     sourcePath: z.string().min(1),
     branch: z.string().min(1).max(240),
     mode: z.enum(["worktree", "clone"]),
+    /** Fast-forward the primary checkout from its upstream before branching. */
+    updateSource: z.boolean().optional(),
     /**
      * A branch that already exists, taken up rather than cut: either a local
      * one nothing has checked out, or `origin/feature-x`, which becomes a
@@ -773,6 +775,12 @@ export const createEnvironmentRequestSchema = z
 export type CreateEnvironmentRequest = z.infer<
   typeof createEnvironmentRequestSchema
 >;
+
+export interface SourceUpdatePreview {
+  branch: string;
+  upstream: string;
+  behind: number;
+}
 
 export const issueListRequestSchema = z
   .object({
@@ -1127,6 +1135,10 @@ export interface SilvicDesktopApi {
   createEnvironment(
     request: CreateEnvironmentRequest,
   ): Promise<PlotCreationResult>;
+  /** Refresh the source's upstream and offer only a safe fast-forward. */
+  inspectSourceUpdate(
+    request: WorkspacePathRequest,
+  ): Promise<SourceUpdatePreview | undefined>;
   getPlotProcesses(): Promise<readonly PlotProcess[]>;
   /** Whether a plot's commands outlive the window that started them. */
   getKeepCommandsRunning(): Promise<boolean>;
@@ -1199,6 +1211,7 @@ export const ipcChannels = {
   rootsAdd: "silvic:roots:add",
   rootsRemove: "silvic:roots:remove",
   environmentCreate: "silvic:environment:create",
+  sourceUpdateInspect: "silvic:source-update:inspect",
   changesGet: "silvic:changes:get",
   deliveryDraft: "silvic:delivery:draft",
   deliveryExecute: "silvic:delivery:execute",

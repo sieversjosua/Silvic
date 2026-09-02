@@ -8,6 +8,146 @@ import { LocalCommandRunner, requireSuccess } from "./command-runner";
 import { EnvironmentService } from "./environment-service";
 
 describe("EnvironmentService", () => {
+  it("fast-forwards a source branch from its upstream without touching local files", async () => {
+    const runner = new LocalCommandRunner();
+    const directory = await mkdtemp(join(tmpdir(), "silvic-source-update-"));
+    const remote = join(directory, "remote.git");
+    const repository = join(directory, "project");
+    const colleague = join(directory, "colleague");
+
+    await requireSuccess(runner, {
+      executable: "git",
+      arguments: ["init", "--bare", "--initial-branch=main", remote],
+    });
+    await requireSuccess(runner, {
+      executable: "git",
+      arguments: ["clone", remote, repository],
+    });
+    await requireSuccess(runner, {
+      executable: "git",
+      arguments: ["config", "user.email", "silvic@example.test"],
+      cwd: repository,
+    });
+    await requireSuccess(runner, {
+      executable: "git",
+      arguments: ["config", "user.name", "Silvic Test"],
+      cwd: repository,
+    });
+    await writeFile(join(repository, "README.md"), "root\n");
+    await requireSuccess(runner, {
+      executable: "git",
+      arguments: ["add", "README.md"],
+      cwd: repository,
+    });
+    await requireSuccess(runner, {
+      executable: "git",
+      arguments: ["commit", "-m", "Initial"],
+      cwd: repository,
+    });
+    await requireSuccess(runner, {
+      executable: "git",
+      arguments: ["push", "--set-upstream", "origin", "main"],
+      cwd: repository,
+    });
+    await requireSuccess(runner, {
+      executable: "git",
+      arguments: ["clone", remote, colleague],
+    });
+    await requireSuccess(runner, {
+      executable: "git",
+      arguments: ["config", "user.email", "silvic@example.test"],
+      cwd: colleague,
+    });
+    await requireSuccess(runner, {
+      executable: "git",
+      arguments: ["config", "user.name", "Silvic Test"],
+      cwd: colleague,
+    });
+    await writeFile(join(colleague, "CHANGELOG.md"), "new\n");
+    await requireSuccess(runner, {
+      executable: "git",
+      arguments: ["add", "CHANGELOG.md"],
+      cwd: colleague,
+    });
+    await requireSuccess(runner, {
+      executable: "git",
+      arguments: ["commit", "-m", "Remote change"],
+      cwd: colleague,
+    });
+    await requireSuccess(runner, {
+      executable: "git",
+      arguments: ["push"],
+      cwd: colleague,
+    });
+    await writeFile(join(repository, "local-note.txt"), "keep\n");
+
+    const service = new EnvironmentService(runner);
+    await expect(service.inspectFastForward(repository)).resolves.toEqual({
+      branch: "main",
+      upstream: "origin/main",
+      behind: 1,
+    });
+    await service.fastForward(repository);
+
+    expect(await readFile(join(repository, "CHANGELOG.md"), "utf8")).toBe(
+      "new\n",
+    );
+    expect(await readFile(join(repository, "local-note.txt"), "utf8")).toBe(
+      "keep\n",
+    );
+
+    await writeFile(join(repository, "LOCAL.md"), "local\n");
+    await requireSuccess(runner, {
+      executable: "git",
+      arguments: ["add", "LOCAL.md"],
+      cwd: repository,
+    });
+    await requireSuccess(runner, {
+      executable: "git",
+      arguments: ["commit", "-m", "Local change"],
+      cwd: repository,
+    });
+    await writeFile(join(colleague, "REMOTE.md"), "remote\n");
+    await requireSuccess(runner, {
+      executable: "git",
+      arguments: ["add", "REMOTE.md"],
+      cwd: colleague,
+    });
+    await requireSuccess(runner, {
+      executable: "git",
+      arguments: ["commit", "-m", "Another remote change"],
+      cwd: colleague,
+    });
+    await requireSuccess(runner, {
+      executable: "git",
+      arguments: ["push"],
+      cwd: colleague,
+    });
+    const localRevision = (
+      await requireSuccess(runner, {
+        executable: "git",
+        arguments: ["rev-parse", "HEAD"],
+        cwd: repository,
+      })
+    ).trim();
+
+    await expect(
+      service.inspectFastForward(repository),
+    ).resolves.toBeUndefined();
+    await expect(service.fastForward(repository)).rejects.toThrow(
+      /local commits/i,
+    );
+    expect(
+      (
+        await requireSuccess(runner, {
+          executable: "git",
+          arguments: ["rev-parse", "HEAD"],
+          cwd: repository,
+        })
+      ).trim(),
+    ).toBe(localRevision);
+  });
+
   it("creates a linked worktree from an existing workspace", async () => {
     const runner = new LocalCommandRunner();
     const directory = await mkdtemp(join(tmpdir(), "silvic-environment-"));

@@ -56,6 +56,7 @@ import type {
   PullRequestSummary,
   Recipe,
   SilvicSnapshot,
+  SourceUpdatePreview,
   WorkspaceChanges,
   WorkspaceSnapshot,
 } from "@silvic/contracts";
@@ -1687,6 +1688,8 @@ function NewPlotDialog({
   const [branchQuery, setBranchQuery] = useState("");
   const [issue, setIssue] = useState<IssueSummary>();
   const [mode, setMode] = useState<"worktree" | "clone">("worktree");
+  const [updateSource, setUpdateSource] = useState(false);
+  const [sourceUpdate, setSourceUpdate] = useState<SourceUpdatePreview>();
   const [creating, setCreating] = useState(false);
   const [repairing, setRepairing] = useState(false);
   const [openMenu, setOpenMenu] = useState(false);
@@ -1765,6 +1768,7 @@ function NewPlotDialog({
     (taken ? `Branch ${wanted} already exists` : conflict) ??
     (failure && concernsBranch(failure) ? failure : undefined);
   const plotName = wanted.replaceAll("/", "-");
+  const offeredSourceUpdate = adopt ? undefined : sourceUpdate;
 
   const applyPreview = useCallback(
     (next: PlotPreview) => {
@@ -1783,6 +1787,24 @@ function NewPlotDialog({
       }),
     [],
   );
+
+  useEffect(() => {
+    setSourceUpdate(undefined);
+    setUpdateSource(false);
+    if (!source?.isPrimary) return;
+    let current = true;
+    void window.silvic
+      .inspectSourceUpdate({ path: source.path })
+      .then((update) => {
+        if (current) setSourceUpdate(update);
+      })
+      .catch(() => {
+        // Being offline must not block creating a Plot from the local source.
+      });
+    return () => {
+      current = false;
+    };
+  }, [source?.workspaceId]);
 
   useEffect(() => {
     if (!wanted || !projectId) {
@@ -1915,6 +1937,7 @@ function NewPlotDialog({
     candidate: { ref: string; name: string },
     number?: number,
   ) => {
+    setUpdateSource(false);
     setAdopt({ ...candidate, ...(number ? { pullRequest: number } : {}) });
     setBranch(candidate.name);
     setFailure(undefined);
@@ -1991,6 +2014,7 @@ function NewPlotDialog({
       setFailure(undefined);
       setBranch("");
       setBranchQuery("");
+      setUpdateSource(false);
     };
     // The repair runs in the plot that already exists, so the dialog reports it
     // exactly as it reported creation: the same steps, live.
@@ -2225,6 +2249,7 @@ function NewPlotDialog({
             sourcePath: source.path,
             branch: requested,
             mode,
+            ...(updateSource ? { updateSource: true } : {}),
             ...(adopt ? { adopt: adopt.ref } : {}),
             ...(issue
               ? {
@@ -2397,7 +2422,10 @@ function NewPlotDialog({
                 <select
                   className="dialog-select"
                   value={source.workspaceId}
-                  onChange={(event) => setSourceId(event.target.value)}
+                  onChange={(event) => {
+                    setSourceId(event.target.value);
+                    setUpdateSource(false);
+                  }}
                   // A branch that exists already knows where it starts.
                   disabled={creating || adopt !== undefined}
                 >
@@ -2420,6 +2448,24 @@ function NewPlotDialog({
                     ))}
                 </select>
               </label>
+            )}
+            {offeredSourceUpdate && (
+              <fieldset className="choices source-update" disabled={creating}>
+                <legend className="micro">Source</legend>
+                <label data-selected={updateSource || undefined}>
+                  <input
+                    type="checkbox"
+                    checked={updateSource}
+                    onChange={(event) => setUpdateSource(event.target.checked)}
+                  />
+                  <strong>Update {offeredSourceUpdate.branch} first</strong>
+                  <span>
+                    Fast-forward {offeredSourceUpdate.behind} commit
+                    {offeredSourceUpdate.behind === 1 ? "" : "s"} from{" "}
+                    {offeredSourceUpdate.upstream}
+                  </span>
+                </label>
+              </fieldset>
             )}
             <div className="branch-candidates">
               <p className="micro">

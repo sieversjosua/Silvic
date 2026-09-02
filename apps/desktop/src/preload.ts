@@ -26,6 +26,7 @@ import {
   type TeardownRequestPayload,
   type SilvicDesktopApi,
   type SilvicSnapshot,
+  type WorkspacePathRequest,
 } from "@silvic/contracts";
 
 const api: SilvicDesktopApi = {
@@ -40,6 +41,8 @@ const api: SilvicDesktopApi = {
     ipcRenderer.invoke(ipcChannels.rendererVisibilitySet, visible),
   createEnvironment: (request: CreateEnvironmentRequest) =>
     ipcRenderer.invoke(ipcChannels.environmentCreate, request),
+  inspectSourceUpdate: (request: WorkspacePathRequest) =>
+    ipcRenderer.invoke(ipcChannels.sourceUpdateInspect, request),
   provisionPlot: (request: PlotProvisionRequest) =>
     ipcRenderer.invoke(ipcChannels.plotProvision, request),
   planPlotAdoption: (request: PlotAdoptionPlanRequest) =>

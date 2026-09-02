@@ -2,10 +2,14 @@ import { access, rm } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { rename } from "node:fs/promises";
 
-import type { CreateEnvironmentRequest } from "@silvic/contracts";
+import type {
+  CreateEnvironmentRequest,
+  SourceUpdatePreview,
+} from "@silvic/contracts";
 
 import type { CommandRunner } from "./command-runner";
 import { requireSuccess } from "./command-runner";
+import { parseGitStatus } from "./git";
 
 export interface EnvironmentCreationOptions extends CreateEnvironmentRequest {
   /** Decided by the recipe, not by the caller of the IPC request. */
@@ -40,6 +44,95 @@ function worktreeStart(request: EnvironmentCreationOptions): string[] {
 
 export class EnvironmentService {
   constructor(private readonly runner: CommandRunner) {}
+
+  /** Refresh remote-tracking refs and describe a pull that can only fast-forward. */
+  async inspectFastForward(
+    sourcePath: string,
+  ): Promise<SourceUpdatePreview | undefined> {
+    const before = await this.status(sourcePath);
+    if (
+      !before.upstream ||
+      before.branch === "(detached)" ||
+      before.branch === "unknown"
+    ) {
+      return undefined;
+    }
+    await requireSuccess(this.runner, {
+      executable: "git",
+      arguments: ["fetch", "--quiet"],
+      cwd: sourcePath,
+    });
+    const after = await this.status(sourcePath);
+    return after.upstream &&
+      after.ahead === 0 &&
+      after.behind > 0 &&
+      after.staged === 0 &&
+      after.unstaged === 0 &&
+      after.conflicted === 0
+      ? {
+          branch: after.branch,
+          upstream: after.upstream,
+          behind: after.behind,
+        }
+      : undefined;
+  }
+
+  /**
+   * Bring a checked-out source branch forward without creating merge commits,
+   * rebasing local commits, or discarding working-tree changes. Git refuses
+   * the operation when those guarantees cannot be kept.
+   */
+  async fastForward(sourcePath: string): Promise<string> {
+    const before = await this.status(sourcePath);
+    if (
+      !before.upstream ||
+      before.branch === "(detached)" ||
+      before.branch === "unknown"
+    ) {
+      throw new Error("The source branch has no upstream to update from");
+    }
+    if (before.ahead > 0) {
+      throw new Error(
+        `${before.branch} has local commits, so Silvic will not pull it automatically`,
+      );
+    }
+    if (before.conflicted > 0) {
+      throw new Error(
+        `${before.branch} has unresolved conflicts, so it cannot be updated`,
+      );
+    }
+    if (before.staged > 0 || before.unstaged > 0) {
+      throw new Error(
+        `${before.branch} has tracked changes, so Silvic will not pull it automatically`,
+      );
+    }
+
+    await requireSuccess(this.runner, {
+      executable: "git",
+      arguments: ["pull", "--ff-only"],
+      cwd: sourcePath,
+    });
+    const revision = (
+      await requireSuccess(this.runner, {
+        executable: "git",
+        arguments: ["rev-parse", "HEAD"],
+        cwd: sourcePath,
+        environment: { GIT_OPTIONAL_LOCKS: "0" },
+      })
+    ).trim();
+    return revision;
+  }
+
+  private async status(sourcePath: string) {
+    return parseGitStatus(
+      await requireSuccess(this.runner, {
+        executable: "git",
+        arguments: ["status", "--porcelain=v2", "--branch"],
+        cwd: sourcePath,
+        environment: { GIT_OPTIONAL_LOCKS: "0" },
+      }),
+    );
+  }
 
   async create(request: EnvironmentCreationOptions): Promise<void> {
     const conflict = await this.conflict(request);
