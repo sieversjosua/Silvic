@@ -107,5 +107,7 @@ The app must contain the same files below
 `Contents/Resources/codex-marketplace`. Follow the artifact's `INSTALL.md` only
 for manual distribution. For the normal app-bound path, confirm
 `codex plugin list --json` reports enabled `silvic@silvic` at the same version,
-fully restart Codex, and verify that its MCP catalog includes
-`plan_plot_adoption`, `adopt_plot`, and `provision_plot`.
+fully restart Codex, and verify that the plugin's bundled CLI reports that
+version with `--version`. The default plugin uses its preview skill and CLI;
+MCP is optional. Clients that explicitly enable `mcp.optional.json` can also
+verify `plan_plot_adoption`, `adopt_plot`, and `provision_plot` in the tool catalog.

@@ -1,6 +1,7 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { parseEnv } from "node:util";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -445,6 +446,8 @@ describe("Convex provisioning step", () => {
       [
         "CONVEX_DEPLOYMENT=dev:x # team: syntwin, project: mono",
         "NEXT_PUBLIC_CONVEX_URL=https://source.convex.cloud",
+        "PUBLIC_CONVEX_URL=https://source.convex.cloud",
+        "R2_KEY_PREFIX=development/source",
         "LOCAL_ONLY=kept",
         "",
       ].join("\n"),
@@ -462,6 +465,7 @@ describe("Convex provisioning step", () => {
           convex: {
             name: "dev/{plot}",
             expiration: "in 7 days",
+            environment: { R2_KEY_PREFIX: "development/{deployment}" },
           },
         },
       ],
@@ -505,8 +509,14 @@ describe("Convex provisioning step", () => {
     expect(local).toContain("NEXT_PUBLIC_APP_URL=http://localhost:3456");
     expect(local).toContain("NEXT_PUBLIC_SITE_URL=http://localhost:3456");
     expect(local).not.toContain("https://source.convex.cloud");
+    expect(local).toContain("PUBLIC_CONVEX_URL=https://isolated.convex.cloud");
+    expect(local).toContain("R2_KEY_PREFIX=development/helpful-mouse-694");
 
     expect(runner.serverEnvironment).toContain("SERVER_SECRET=source-secret");
+    expect(runner.serverEnvironment).toContain("LOCAL_ONLY=kept");
+    expect(runner.serverEnvironment).toContain(
+      "SELECTED_LOCAL=kept-from-selected-checkout",
+    );
     expect(runner.serverEnvironment).toContain(
       "NEXT_PUBLIC_CONVEX_URL=https://isolated.convex.cloud",
     );
@@ -517,6 +527,10 @@ describe("Convex provisioning step", () => {
       "NEXT_PUBLIC_APP_URL=http://localhost:3456",
     );
     expect(runner.serverEnvironment).not.toContain("SOURCE_DEPLOYMENT_VALUE");
+    expect(runner.serverEnvironment).not.toContain("CONVEX_DEPLOY_KEY");
+    expect(runner.serverEnvironment).toContain(
+      "R2_KEY_PREFIX=development/helpful-mouse-694",
+    );
     expect(step?.output).not.toContain("source-secret");
     expect(step?.output).not.toContain("present-but-secret");
     expect(step?.output).toContain(
@@ -540,13 +554,15 @@ describe("Convex provisioning step", () => {
     const source = await plotRoot();
     await writeFile(
       join(source, ".env.local"),
-      "CONVEX_DEPLOYMENT=dev:x # team: syntwin, project: mono\n",
+      "CONVEX_DEPLOYMENT=dev:x # team: syntwin, project: mono\nANAM_API_KEY=new-source-secret\nCUSTOM_CONFIG='first line\nCONVEX_DEPLOY_KEY=inside-quoted-value\nsecond # line'\nPLOT_OVERRIDE=source\n",
     );
     await writeFile(
       join(root, ".env.local"),
       [
         "CONVEX_DEPLOYMENT=dev:isolated # team: syntwin, project: mono",
         "CONVEX_DEPLOY_KEY=already-scoped",
+        "PLOT_OVERRIDE=target",
+        "LEGACY_CONFIG='first\nUNEXPECTED_INJECTED=must-not-leak\nlast'",
         "NEXT_PUBLIC_CONVEX_URL=https://isolated.convex.cloud",
         "",
       ].join("\n"),
@@ -554,7 +570,14 @@ describe("Convex provisioning step", () => {
     const runner = new ConvexLifecycleRunner(root);
 
     const [step] = await new Provisioner(runner).run(
-      [{ convex: { name: "dev/{plot}" } }],
+      [
+        {
+          convex: {
+            name: "dev/{plot}",
+            environment: { LEGACY_CONFIG: "updated" },
+          },
+        },
+      ],
       {
         root,
         sourceRoot: source,
@@ -564,6 +587,23 @@ describe("Convex provisioning step", () => {
     );
 
     expect(step?.exitCode).toBe(0);
+    expect(await readFile(join(root, ".env.local"), "utf8")).toContain(
+      "ANAM_API_KEY=new-source-secret",
+    );
+    expect(runner.serverEnvironment).toContain(
+      "ANAM_API_KEY=new-source-secret",
+    );
+    expect(parseEnv(runner.serverEnvironment)).toMatchObject({
+      CUSTOM_CONFIG:
+        "first line\nCONVEX_DEPLOY_KEY=inside-quoted-value\nsecond # line",
+      ANAM_API_KEY: "new-source-secret",
+      LEGACY_CONFIG: "updated",
+      PLOT_OVERRIDE: "target",
+    });
+    expect(parseEnv(runner.serverEnvironment)).not.toHaveProperty(
+      "UNEXPECTED_INJECTED",
+    );
+    expect(step?.output).not.toContain("new-source-secret");
     expect(runner.commands()).toEqual([
       "env list",
       expect.stringMatching(/^env set --force --from-file /),

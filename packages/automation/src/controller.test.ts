@@ -116,6 +116,7 @@ function controller(
     wait?: (milliseconds: number) => Promise<void>;
     now?: () => number;
     snapshot?: () => SilvicSnapshot;
+    refresh?: () => Promise<void>;
     automaticAdoption?: boolean;
     automaticRecovery?: boolean;
     restoreExternalRoute?: (path: string, id: string) => Promise<boolean>;
@@ -129,6 +130,7 @@ function controller(
       ? { restoreExternalRoute: options.restoreExternalRoute }
       : {}),
     snapshot: options.snapshot ?? (() => currentSnapshot),
+    ...(options.refresh ? { refresh: options.refresh } : {}),
     roots: () => [project.rootPath],
     definition: async () => ({
       commands: options.commands ?? commands,
@@ -310,6 +312,165 @@ describe("automation lifecycle states", () => {
 });
 
 describe("automation operations", () => {
+  it("discovers a new worktree once on a miss, without rescanning known Plots", async () => {
+    let current: SilvicSnapshot = { ...snapshot, projects: [] };
+    const refresh = vi.fn(async () => {
+      current = snapshot;
+    });
+    const automation = controller({ snapshot: () => current, refresh });
+    await expect(
+      automation.handle(request("status", { plot: plot.path })),
+    ).resolves.toMatchObject({ id: plot.workspaceId });
+    await automation.handle(request("status", { plot: plot.path }));
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshes a completed Plot only after confirmation and stopping its runtimes", async () => {
+    const processes: SupervisedCommand[] = [
+      { plotPath: plot.path, id: "web", status: "running" },
+    ];
+    const stop = vi.fn(() => {
+      processes.splice(0);
+    });
+    const provision = vi.fn(async () => {
+      expect(processes).toEqual([]);
+      await expect(
+        automation.handle(request("start", { plot: plot.path })),
+      ).rejects.toMatchObject({ code: "PROVISIONING_REQUIRED" });
+      return {
+        provision: [],
+        runtime: { status: "not-required" as const, durationMs: 0 },
+        readiness: { status: "not-required" as const, durationMs: 0 },
+      };
+    });
+    const start = vi.fn(async () => undefined);
+    const automation = controller({
+      workspace: {
+        ...plot,
+        provisioning: { status: "complete", at: "today", steps: [] },
+      },
+      processes,
+      stop,
+      provision,
+      start,
+      automaticRecovery: true,
+    });
+    await expect(
+      automation.handle(
+        request("provision", { plot: plot.path, refresh: true }),
+      ),
+    ).rejects.toMatchObject({ code: "CONFIRMATION_REQUIRED" });
+    expect(stop).not.toHaveBeenCalled();
+    expect(provision).not.toHaveBeenCalled();
+    await expect(
+      automation.handle(
+        request("provision", {
+          plot: plot.path,
+          refresh: true,
+          confirmPlotId: plot.workspaceId,
+        }),
+      ),
+    ).resolves.toMatchObject({ alreadyProvisioned: false, failed: false });
+    expect(provision).toHaveBeenCalledWith({ path: plot.path });
+    await automation.handle(
+      request("start", { plot: plot.path, runtime: "web" }),
+    );
+    expect(start).toHaveBeenCalledWith(plot.path, "web");
+  });
+
+  it("leaves external runtimes and provider state untouched when refresh cannot own the build", async () => {
+    const stop = vi.fn();
+    const provision = vi.fn();
+    await expect(
+      controller({
+        processes: [
+          {
+            plotPath: plot.path,
+            id: "web",
+            status: "running",
+            ownership: "external",
+          },
+        ],
+        stop,
+        provision,
+      }).handle(
+        request("provision", {
+          plot: plot.path,
+          refresh: true,
+          confirmPlotId: plot.workspaceId,
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "EXTERNAL_RUNTIME" });
+    expect(stop).not.toHaveBeenCalled();
+    expect(provision).not.toHaveBeenCalled();
+  });
+
+  it("stops runtimes removed from the recipe before refreshing", async () => {
+    const processes: SupervisedCommand[] = [
+      { plotPath: plot.path, id: "old-web", status: "running" },
+      { plotPath: "/another-plot", id: "old-web", status: "running" },
+    ];
+    const stop = vi.fn((path: string, id: string) => {
+      const runtime = processes.find(
+        (entry) => entry.plotPath === path && entry.id === id,
+      );
+      if (runtime) runtime.status = "stopped";
+    });
+    const automation = controller({
+      processes,
+      stop,
+      provision: async () => {
+        expect(processes[0]?.status).toBe("stopped");
+        expect(processes[1]?.status).toBe("running");
+        return {
+          provision: [],
+          runtime: { status: "not-required", durationMs: 0 },
+          readiness: { status: "not-required", durationMs: 0 },
+        };
+      },
+    });
+    await automation.handle(
+      request("provision", {
+        plot: plot.path,
+        refresh: true,
+        confirmPlotId: plot.workspaceId,
+      }),
+    );
+    expect(stop).toHaveBeenCalledExactlyOnceWith(plot.path, "old-web");
+  });
+
+  it("does not run a queued refresh after its caller cancels", async () => {
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const provision = vi.fn(async () => {
+      entered.resolve();
+      await release.promise;
+      return {
+        provision: [],
+        runtime: { status: "not-required" as const, durationMs: 0 },
+        readiness: { status: "not-required" as const, durationMs: 0 },
+      };
+    });
+    const automation = controller({ provision });
+    const refresh = request("provision", {
+      plot: plot.path,
+      refresh: true,
+      confirmPlotId: plot.workspaceId,
+    });
+    const first = automation.handle(refresh);
+    await entered.promise;
+    const cancellation = new AbortController();
+    const second = automation.handle(refresh, cancellation.signal);
+    const rejected = expect(second).rejects.toMatchObject({
+      code: "CANCELLED",
+    });
+    cancellation.abort();
+    release.resolve();
+    await first;
+    await rejected;
+    expect(provision).toHaveBeenCalledOnce();
+  });
+
   it("makes shared and manual resource limits explicit in status and diagnostics", async () => {
     const result = await controller({
       resources: {
@@ -660,6 +821,25 @@ describe("automation operations", () => {
     }
   });
 
+  it("rejects an unknown runtime before automatic adoption can touch providers", async () => {
+    const planAdoption = vi.fn(async () => {
+      throw new Error("Provider planning must not run for an invalid command");
+    });
+    const automation = controller({
+      workspace: {
+        ...plot,
+        branch: "(detached)",
+        adoption: { status: "not-adopted", at: "today", attempt: 0 },
+      },
+      automaticAdoption: true,
+      planAdoption,
+    });
+    await expect(
+      automation.handle(request("start", { plot: plot.path, runtime: "typo" })),
+    ).rejects.toMatchObject({ code: "RUNTIME_NOT_FOUND" });
+    expect(planAdoption).not.toHaveBeenCalled();
+  });
+
   it("automatically adopts an eligible detached Plot and returns the audit", async () => {
     let current: WorkspaceSnapshot = {
       ...plot,
@@ -915,6 +1095,28 @@ describe("automation operations", () => {
         },
       ],
     });
+  });
+
+  it("starts preview dependencies without launching a manual production build", async () => {
+    const start = vi.fn(async () => undefined);
+    const automation = controller({
+      commands: {
+        ...commands,
+        preview: { run: "pnpm preview", url: true, autoStart: false },
+      },
+      start,
+    });
+    await automation.handle(
+      request("start", { plot: plot.path, autoStartOnly: true }),
+    );
+    expect(start.mock.calls).toEqual([
+      [plot.path, "web"],
+      [plot.path, "worker"],
+    ]);
+    await automation.handle(
+      request("start", { plot: plot.path, runtime: "preview" }),
+    );
+    expect(start).toHaveBeenLastCalledWith(plot.path, "preview");
   });
 
   it("detaches an external runtime without claiming to stop its process", async () => {

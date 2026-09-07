@@ -97,7 +97,7 @@ async function verifyPlugin(pluginRoot, label, appVersion) {
     );
   }
   const mcpConfiguration = JSON.parse(
-    await readFile(join(pluginRoot, ".mcp.json"), "utf8"),
+    await readFile(join(pluginRoot, "mcp.optional.json"), "utf8"),
   ).mcpServers?.silvic;
   if (
     mcpConfiguration?.command !== "./bin/silvic" ||

@@ -66,6 +66,8 @@ it("builds a versions-equal installable marketplace artifact", async () => {
   expect(listing.stdout).toContain("/.agents/plugins/marketplace.json");
   expect(listing.stdout).toContain("/plugins/silvic/.codex-plugin/plugin.json");
   expect(listing.stdout).toContain("/plugins/silvic/bin/silvic");
+  expect(listing.stdout).toContain("/plugins/silvic/mcp.optional.json");
+  expect(listing.stdout).not.toContain("/plugins/silvic/.mcp.json");
   expect(await readFile(`${archive}.sha256`, "utf8")).toMatch(
     new RegExp(`^[0-9a-f]{64}  Silvic-Codex-Plugin-${version}\\.tar\\.gz\\n$`),
   );

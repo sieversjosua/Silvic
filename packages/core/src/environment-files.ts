@@ -35,13 +35,13 @@ export function withoutEnvironmentKeys(
   contents: string,
   keys: ReadonlySet<string>,
 ): string {
+  // Consume complete quoted values so their continuation lines cannot be
+  // mistaken for assignments, and replacing a key removes its whole value.
   return contents
-    .split(/\r?\n/)
-    .filter((line) => {
-      const key = environmentKey(line);
-      return !key || !keys.has(key);
-    })
-    .join("\n")
+    .replace(
+      /^[ \t]*(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)[ \t]*=[ \t]*(?:'[^']*'|"[^"]*"|`[^`]*`|[^\r\n]*)[^\r\n]*/gm,
+      (entry: string, key: string) => (keys.has(key) ? "" : entry),
+    )
     .replace(/\n*$/, "\n");
 }
 

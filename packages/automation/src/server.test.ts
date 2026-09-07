@@ -98,6 +98,34 @@ it("preserves machine-readable server errors", async () => {
   );
 });
 
+it("reports a lost in-flight connection instead of waiting for timeout or inviting a replay", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "silvic-automation-"));
+  directories.push(directory);
+  const socketPath = join(directory, "automation.sock");
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  server = await startAutomationServer({
+    handle: async () => {
+      entered.resolve();
+      await release.promise;
+      return {};
+    },
+    socketPath,
+  });
+  const client = new AutomationClient({ socketPath, timeoutMs: 1_000 });
+  const rejected = expect(
+    client.call("provision", { plot: "plot_123" }),
+  ).rejects.toMatchObject({
+    code: "INVALID_REPLY",
+    message: expect.stringContaining("before retrying"),
+  });
+  await entered.promise;
+  await server.close();
+  server = undefined;
+  release.resolve();
+  await rejected;
+});
+
 it("rejects a version-skewed plugin with an actionable structured error", async () => {
   const directory = await mkdtemp(join(tmpdir(), "silvic-automation-"));
   directories.push(directory);

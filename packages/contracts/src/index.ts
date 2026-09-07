@@ -328,6 +328,10 @@ export const convexStepSchema = z
         name: z.string().min(1).max(200).default("dev/{plot}"),
         /** Optional Convex expiration expression, for example `in 7 days`. */
         expiration: z.string().min(1).max(120).optional(),
+        /** Shared local/backend overrides; supports {deployment}, {plot}, {url}. */
+        environment: z
+          .record(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/), z.string())
+          .optional(),
       })
       .strict(),
     label: z.string().min(1).max(120).optional(),

@@ -1,18 +1,18 @@
 import { execFile } from "node:child_process";
 import { platform } from "node:os";
+import { resolve } from "node:path";
+import { emitKeypressEvents } from "node:readline";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs, promisify } from "node:util";
 
-import { McpServer } from "@modelcontextprotocol/server";
-import { serveStdio } from "@modelcontextprotocol/server/stdio";
-import {
-  AutomationClient,
-  AutomationError,
-  type AutomationMethod,
-  type AutomationPlot,
-  type AutomationProject,
+import type { McpServer } from "@modelcontextprotocol/server";
+import type {
+  AutomationMethod,
+  AutomationPlot,
+  AutomationProject,
 } from "@silvic/automation";
-import { z } from "zod";
+import { AutomationClient } from "@silvic/automation/client";
+import { AutomationError } from "@silvic/automation/protocol";
 
 import packageMetadata from "../package.json" with { type: "json" };
 
@@ -63,6 +63,7 @@ async function main(argv: readonly string[]): Promise<void> {
       scope: { type: "string" },
       confirm: { type: "string" },
       remedy: { type: "string" },
+      refresh: { type: "boolean", default: false },
       timeout: { type: "string" },
       limit: { type: "string" },
       open: { type: "boolean", default: false },
@@ -106,10 +107,40 @@ async function main(argv: readonly string[]): Promise<void> {
       );
       return;
     }
+    case "cd": {
+      rejectOptions(values, ["help", "plot", "project"]);
+      if (values.plot) {
+        if (values.project) {
+          throw new CliUsageError(
+            "--project cannot be combined with --plot for silvic cd.",
+          );
+        }
+        const plot = await automationCall<AutomationPlot>("status", {
+          plot: await resolvePlotSelector(values.plot),
+        });
+        process.stdout.write(`${plot.path}\n`);
+        return;
+      }
+      const snapshot = await automationCall<SnapshotResult>("snapshot", {
+        ...(values.project ? { projectId: values.project } : {}),
+      });
+      const selected = await selectPlot(snapshot.projects);
+      if (!selected) {
+        process.exitCode = 130;
+        return;
+      }
+      process.stdout.write(`${selected.path}\n`);
+      return;
+    }
+    case "shell-init": {
+      rejectOptions(values, ["help"]);
+      process.stdout.write(shellInit());
+      return;
+    }
     case "status": {
       rejectOptions(values, ["json", "help", "plot"]);
       const plot = await automationCall<AutomationPlot>("status", {
-        plot: requireOption(values.plot, "--plot"),
+        plot: await resolvePlotSelector(values.plot),
       });
       output(plot, values.json, formatStatus(plot));
       return;
@@ -117,7 +148,7 @@ async function main(argv: readonly string[]): Promise<void> {
     case "adoption-plan": {
       rejectOptions(values, ["json", "help", "plot", "scope"]);
       const result = await automationCall<AdoptionPlanResult>("adoptionPlan", {
-        plot: requireOption(values.plot, "--plot"),
+        plot: await resolvePlotSelector(values.plot),
         ...(values.scope ? { scope: adoptionScope(values.scope) } : {}),
       });
       output(result, values.json, formatAdoptionPlan(result));
@@ -126,7 +157,7 @@ async function main(argv: readonly string[]): Promise<void> {
     case "adopt": {
       rejectOptions(values, ["json", "help", "plot", "scope", "confirm"]);
       const result = await automationCall<AdoptionResult>("adopt", {
-        plot: requireOption(values.plot, "--plot"),
+        plot: await resolvePlotSelector(values.plot),
         ...(values.scope ? { scope: adoptionScope(values.scope) } : {}),
         confirmPlotId: requireOption(values.confirm, "--confirm"),
       });
@@ -135,11 +166,19 @@ async function main(argv: readonly string[]): Promise<void> {
       return;
     }
     case "provision": {
-      rejectOptions(values, ["json", "help", "plot", "confirm", "remedy"]);
+      rejectOptions(values, [
+        "json",
+        "help",
+        "plot",
+        "confirm",
+        "remedy",
+        "refresh",
+      ]);
       const result = await automationCall<ProvisionResult>("provision", {
-        plot: requireOption(values.plot, "--plot"),
+        plot: await resolvePlotSelector(values.plot),
         ...(values.confirm ? { confirmPlotId: values.confirm } : {}),
         ...(values.remedy ? { remedy: provisionRemedy(values.remedy) } : {}),
+        ...(values.refresh ? { refresh: true } : {}),
       });
       output(result, values.json, formatProvisionResult(result));
       setRecoveryExitCode(result);
@@ -168,7 +207,7 @@ async function main(argv: readonly string[]): Promise<void> {
     case "stop": {
       rejectOptions(values, ["json", "help", "plot", "runtime"]);
       const result = await automationCall<OperationResult>(command, {
-        plot: requireOption(values.plot, "--plot"),
+        plot: await resolvePlotSelector(values.plot),
         ...(values.runtime ? { runtime: values.runtime } : {}),
       });
       output(
@@ -191,10 +230,15 @@ async function main(argv: readonly string[]): Promise<void> {
         "timeout",
         "open",
       ]);
-      const plot = requireOption(values.plot, "--plot");
+      const timeoutMs = values.timeout
+        ? positiveInteger(values.timeout, "--timeout", 600_000)
+        : undefined;
+      const plot = await resolvePlotSelector(values.plot);
       const started = await automationCall<OperationResult>("start", {
         plot,
-        ...(values.runtime ? { runtime: values.runtime } : {}),
+        ...(values.runtime
+          ? { runtime: values.runtime }
+          : { autoStartOnly: true }),
       });
       if (started.partialFailure) {
         output(
@@ -208,12 +252,24 @@ async function main(argv: readonly string[]): Promise<void> {
         process.exitCode = 6;
         return;
       }
+      const runtime =
+        values.runtime ??
+        started.plot.runtimes.find(
+          (candidate) =>
+            candidate.servesPreview &&
+            started.results.some((result) => result.runtimeId === candidate.id),
+        )?.id;
+      if (!runtime) {
+        throw new AutomationError(
+          "NO_PREVIEW",
+          "No started runtime declares a preview. Select one with --runtime.",
+          { start: started },
+        );
+      }
       const preview = await automationCall<WaitResult>("wait", {
-        ...(values.runtime ? { runtime: values.runtime } : {}),
+        runtime,
         plot,
-        ...(values.timeout
-          ? { timeoutMs: positiveInteger(values.timeout, "--timeout") }
-          : {}),
+        ...(timeoutMs === undefined ? {} : { timeoutMs }),
       });
       if (values.open) await openPreview(preview.url);
       output({ start: started, preview }, values.json, [preview.url]);
@@ -223,9 +279,9 @@ async function main(argv: readonly string[]): Promise<void> {
       rejectOptions(values, ["json", "help", "plot", "runtime", "timeout"]);
       const result = await automationCall<WaitResult>("wait", {
         ...(values.runtime ? { runtime: values.runtime } : {}),
-        plot: requireOption(values.plot, "--plot"),
+        plot: await resolvePlotSelector(values.plot),
         ...(values.timeout
-          ? { timeoutMs: positiveInteger(values.timeout, "--timeout") }
+          ? { timeoutMs: positiveInteger(values.timeout, "--timeout", 600_000) }
           : {}),
       });
       output(result, values.json, [result.url]);
@@ -234,7 +290,7 @@ async function main(argv: readonly string[]): Promise<void> {
     case "logs": {
       rejectOptions(values, ["json", "help", "plot", "runtime", "limit"]);
       const result = await automationCall<LogsResult>("logs", {
-        plot: requireOption(values.plot, "--plot"),
+        plot: await resolvePlotSelector(values.plot),
         ...(values.runtime ? { runtime: values.runtime } : {}),
         ...(values.limit
           ? { limit: positiveInteger(values.limit, "--limit") }
@@ -494,10 +550,17 @@ function requireOption(value: string | undefined, name: string): string {
   return value;
 }
 
-function positiveInteger(value: string, name: string): number {
+function positiveInteger(
+  value: string,
+  name: string,
+  maximum?: number,
+): number {
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed <= 0) {
     throw new CliUsageError(`${name} must be a positive integer.`);
+  }
+  if (maximum !== undefined && parsed > maximum) {
+    throw new CliUsageError(`${name} must be at most ${maximum}.`);
   }
   return parsed;
 }
@@ -526,19 +589,188 @@ function provisionRemedy(
 
 function writeHelp(): void {
   process.stdout.write(
-    `Silvic ${version}\n\nUsage:\n  silvic projects [--json]\n  silvic plots [--project ID] [--json]\n  silvic status --plot ID [--json]\n  silvic adoption-plan --plot ID [--scope single|family] [--json]\n  silvic adopt --plot ID [--scope single|family] --confirm STABLE_ID [--json]\n  silvic provision --plot ID [--confirm STABLE_ID] [--remedy convex-cli|convex-adopt|convex-recreate] [--json]\n  silvic state-plan [--json]\n  silvic state-prune --confirm PLAN_ID [--json]\n  silvic start --plot ID [--runtime ID] [--json]\n  silvic preview --plot ID [--runtime ID] [--timeout MS] [--open] [--json]\n  silvic stop --plot ID [--runtime ID] [--json]\n  silvic wait --plot ID [--runtime ID] [--timeout MS] [--json]\n  silvic logs --plot ID [--runtime ID] [--limit BYTES] [--json]\n\nPlot selectors accept a stable Plot id or an absolute Plot path. Before provider changes, inspect adoption-plan\nand confirm its stable Plot ID, or use an explicitly enabled repository recovery\npolicy. State pruning requires the\nexact state-plan ID and removes only listed Silvic metadata, never worktrees.\nStart and stop without --runtime apply to every declared runtime and are idempotent.\n`,
+    `Silvic ${version}\n\nUsage:\n  silvic projects [--json]\n  silvic plots [--project ID] [--json]\n  silvic cd [--project ID] [--plot ID]\n  silvic shell-init\n  silvic status [--plot ID] [--json]\n  silvic adoption-plan --plot ID [--scope single|family] [--json]\n  silvic adopt --plot ID [--scope single|family] --confirm STABLE_ID [--json]\n  silvic provision [--plot ID] [--refresh] --confirm STABLE_ID [--remedy convex-cli|convex-adopt|convex-recreate] [--json]\n  silvic state-plan [--json]\n  silvic state-prune --confirm PLAN_ID [--json]\n  silvic start [--plot ID] [--runtime ID] [--json]\n  silvic preview [--plot ID] [--runtime ID] [--timeout MS] [--open] [--json]\n  silvic stop [--plot ID] [--runtime ID] [--json]\n  silvic wait [--plot ID] [--runtime ID] [--timeout MS] [--json]\n  silvic logs [--plot ID] [--runtime ID] [--limit BYTES] [--json]\n\nRun eval \"$(silvic shell-init)\" once in zsh or bash to let silvic cd change the\ncurrent shell directory. Omit --plot to use the current Git checkout.\nProvision --refresh stops owned runtimes and reruns the recipe in the existing\nPlot; it requires --confirm and never implicitly recreates a deployment.\nPlot selectors accept a stable Plot id or an absolute\nPlot path. Before adoption or provisioning, inspect adoption-plan and confirm\nwith its selected stable Plot ID. Start never confirms provider changes implicitly.\nState pruning requires the exact state-plan ID and removes only listed Silvic\nmetadata, never worktrees. Start and stop without --runtime apply to every declared\nruntime and are idempotent.\n`,
   );
+}
+
+interface SelectablePlot {
+  path: string;
+  projectName: string;
+  name: string;
+  state: AutomationPlot["state"];
+}
+
+const stateOrder: Readonly<Record<AutomationPlot["state"], number>> = {
+  ready: 0,
+  starting: 1,
+  "partially-running": 2,
+  stopping: 3,
+  failed: 4,
+  stopped: 5,
+};
+
+async function selectPlot(
+  projects: readonly AutomationProject[],
+): Promise<SelectablePlot | undefined> {
+  if (!process.stdin.isTTY || !process.stderr.isTTY) {
+    throw new CliUsageError(
+      "silvic cd needs an interactive terminal; pass --plot ID to print a path without the picker.",
+    );
+  }
+  const plots = projects
+    .flatMap((project) =>
+      project.plots.map((plot) => ({
+        path: plot.path,
+        projectName: project.name,
+        name: plot.name,
+        state: plot.state,
+      })),
+    )
+    .sort(
+      (left, right) =>
+        stateOrder[left.state] - stateOrder[right.state] ||
+        left.projectName.localeCompare(right.projectName) ||
+        left.name.localeCompare(right.name),
+    );
+  if (plots.length === 0) {
+    throw new CliUsageError("No watched Plots found.");
+  }
+
+  const input = process.stdin;
+  const output = process.stderr;
+  let selectedIndex = 0;
+  let renderedLines = 0;
+  const wasRaw = input.isRaw;
+
+  const clear = () => {
+    if (renderedLines === 0) return;
+    output.write(`\u001B[${renderedLines}A`);
+    for (let index = 0; index < renderedLines; index += 1) {
+      output.write("\u001B[2K\r");
+      if (index < renderedLines - 1) output.write("\u001B[1B");
+    }
+    if (renderedLines > 1) output.write(`\u001B[${renderedLines - 1}A`);
+    renderedLines = 0;
+  };
+  const render = () => {
+    clear();
+    const width = Math.max(40, output.columns ?? 80);
+    const lines = [
+      "Select a Plot  ↑/↓ move  Enter open  Esc cancel",
+      ...plots.map((plot, index) => {
+        const marker = index === selectedIndex ? "❯" : " ";
+        const state = formatPickerState(plot.state);
+        const label = `${marker} ${state.symbol} ${plot.projectName} / ${plot.name}  ${state.label}`;
+        return truncate(label, width);
+      }),
+    ];
+    renderedLines = lines.length;
+    output.write(`\u001B[?25l${lines.join("\n")}\n`);
+  };
+
+  emitKeypressEvents(input);
+  input.setRawMode(true);
+  input.resume();
+  render();
+
+  return await new Promise((resolve) => {
+    const finish = (plot: SelectablePlot | undefined) => {
+      input.off("keypress", onKeypress);
+      input.setRawMode(wasRaw);
+      input.pause();
+      clear();
+      output.write("\u001B[?25h");
+      resolve(plot);
+    };
+    const onKeypress = (
+      _sequence: string,
+      key: { name?: string; ctrl?: boolean },
+    ) => {
+      if (key.name === "up") {
+        selectedIndex = (selectedIndex - 1 + plots.length) % plots.length;
+        render();
+      } else if (key.name === "down") {
+        selectedIndex = (selectedIndex + 1) % plots.length;
+        render();
+      } else if (key.name === "return") {
+        finish(plots[selectedIndex]);
+      } else if (key.name === "escape" || (key.ctrl && key.name === "c")) {
+        finish(undefined);
+      }
+    };
+    input.on("keypress", onKeypress);
+  });
+}
+
+function formatPickerState(state: AutomationPlot["state"]): {
+  symbol: string;
+  label: string;
+} {
+  switch (state) {
+    case "ready":
+      return { symbol: "●", label: "running" };
+    case "starting":
+      return { symbol: "◐", label: "starting" };
+    case "partially-running":
+      return { symbol: "◐", label: "partially running" };
+    case "stopping":
+      return { symbol: "◐", label: "stopping" };
+    case "failed":
+      return { symbol: "×", label: "failed" };
+    case "stopped":
+      return { symbol: "○", label: "stopped" };
+  }
+}
+
+function truncate(value: string, width: number): string {
+  const safe = value.replace(/[\u0000-\u001F\u007F-\u009F]/g, " ");
+  return safe.length <= width ? safe : `${safe.slice(0, width - 1)}…`;
+}
+
+function shellInit(): string {
+  return `silvic() {
+  if [ "\${1:-}" = "cd" ]; then
+    shift
+    local silvic_directory silvic_status
+    silvic_directory="$(command silvic cd "$@")"
+    silvic_status=$?
+    [ "$silvic_status" -eq 0 ] || return "$silvic_status"
+    [ -n "$silvic_directory" ] || return 1
+    builtin cd -- "$silvic_directory"
+  else
+    command silvic "$@"
+  fi
+}
+`;
+}
+
+async function resolvePlotSelector(value: string | undefined): Promise<string> {
+  if (value) return value.startsWith(".") ? resolve(value) : value;
+  try {
+    const { stdout } = await executeFile("git", [
+      "rev-parse",
+      "--show-toplevel",
+    ]);
+    return stdout.trim();
+  } catch {
+    return process.cwd();
+  }
 }
 
 class CliUsageError extends Error {}
 
 async function runMcpServer(): Promise<void> {
+  const { serveStdio } = await import("@modelcontextprotocol/server/stdio");
   serveStdio(buildMcpServer, {
     onerror: (error) => process.stderr.write(`silvic mcp: ${error.message}\n`),
   });
 }
 
-function buildMcpServer(): McpServer {
+async function buildMcpServer(): Promise<McpServer> {
+  const [{ McpServer }, { z }] = await Promise.all([
+    import("@modelcontextprotocol/server"),
+    import("zod"),
+  ]);
   const server = new McpServer({ name: "silvic", version });
   const outputSchema = z.object({ result: z.unknown() });
   const readOnly = {
@@ -667,10 +899,11 @@ function buildMcpServer(): McpServer {
     "provision_plot",
     {
       description:
-        "Retry provisioning for an adopted Plot after plan_plot_adoption. Omit confirmation only to evaluate the repository’s explicit expired-dev recovery policy. Otherwise confirmPlotId must equal the stable Plot ID; optionally run an offered remedy.",
+        "Provision an adopted Plot. Set refresh to rerun its recipe after stopping managed runtimes, even if setup previously succeeded. Refresh requires confirmPlotId and preserves the selected deployment. Omit confirmation only to evaluate the repository’s expired-dev recovery policy.",
       inputSchema: z.object({
         plot: z.string().min(1),
         confirmPlotId: z.string().min(1).optional(),
+        refresh: z.boolean().optional(),
         remedy: z
           .enum(["convex-cli", "convex-adopt", "convex-recreate"])
           .optional(),
@@ -678,13 +911,14 @@ function buildMcpServer(): McpServer {
       outputSchema,
       annotations: providerMutation,
     },
-    async ({ plot, confirmPlotId, remedy }, context) =>
+    async ({ plot, confirmPlotId, remedy, refresh }, context) =>
       mcpCall(
         "provision",
         {
           plot,
           ...(confirmPlotId ? { confirmPlotId } : {}),
           ...(remedy ? { remedy } : {}),
+          ...(refresh ? { refresh } : {}),
         },
         undefined,
         context.mcpReq.signal,
@@ -723,18 +957,23 @@ function buildMcpServer(): McpServer {
     "start_runtimes",
     {
       description:
-        "Idempotently start every declared runtime or one named runtime in a Plot.",
+        "Idempotently start runtimes in a Plot. autoStartOnly skips commands explicitly marked autoStart: false; runtime selects one command.",
       inputSchema: z.object({
         plot: z.string().min(1),
         runtime: z.string().min(1).optional(),
+        autoStartOnly: z.boolean().optional(),
       }),
       outputSchema,
       annotations: startMutation,
     },
-    async ({ plot, runtime }, context) =>
+    async ({ plot, runtime, autoStartOnly }, context) =>
       mcpCall(
         "start",
-        { plot, ...(runtime ? { runtime } : {}) },
+        {
+          plot,
+          ...(runtime ? { runtime } : {}),
+          ...(autoStartOnly ? { autoStartOnly } : {}),
+        },
         undefined,
         context.mcpReq.signal,
       ),

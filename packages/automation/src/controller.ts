@@ -87,6 +87,7 @@ interface PlotDefinition {
 
 export interface AutomationControllerOptions {
   snapshot(): SilvicSnapshot;
+  refresh?(): Promise<void>;
   roots(): readonly string[];
   definition(
     project: ProjectSnapshot,
@@ -116,6 +117,7 @@ export interface AutomationControllerOptions {
 export class AutomationController {
   private readonly runtimeLocks = new Map<string, Promise<void>>();
   private recoveryLock: Promise<void> = Promise.resolve();
+  private readonly refreshingPlots = new Set<string>();
 
   constructor(private readonly options: AutomationControllerOptions) {}
 
@@ -123,6 +125,20 @@ export class AutomationController {
     request: AutomationRequest,
     signal: AbortSignal = new AbortController().signal,
   ): Promise<unknown> {
+    // New Git worktrees can appear between desktop discovery passes.
+    if (typeof request.params["plot"] === "string" && this.options.refresh) {
+      try {
+        this.findPlot(request.params["plot"]);
+      } catch (error) {
+        if (
+          !(error instanceof AutomationError) ||
+          error.code !== "PLOT_NOT_FOUND"
+        ) {
+          throw error;
+        }
+        await this.options.refresh();
+      }
+    }
     switch (request.method) {
       case "snapshot":
         return this.snapshot(request.params);
@@ -133,7 +149,7 @@ export class AutomationController {
       case "adopt":
         return this.adopt(request.params);
       case "provision":
-        return this.provision(request.params);
+        return this.provision(request.params, signal);
       case "workspaceStatePlan":
         return this.workspaceStatePlan(request.params);
       case "pruneWorkspaceState":
@@ -214,12 +230,23 @@ export class AutomationController {
     });
   }
 
-  private async provision(params: Record<string, unknown>) {
-    assertOnly(params, ["plot", "confirmPlotId", "remedy"]);
+  private async provision(
+    params: Record<string, unknown>,
+    signal: AbortSignal,
+  ) {
+    assertOnly(params, ["plot", "confirmPlotId", "remedy", "refresh"]);
+    const refresh = optionalBoolean(params, "refresh");
+    if (refresh && params["remedy"] !== undefined) {
+      throw new AutomationError(
+        "INVALID_ARGUMENT",
+        "refresh cannot be combined with a remedy.",
+      );
+    }
     const found = this.findPlot(requiredString(params, "plot"));
     this.assertExternalPlot(found.plot);
     const definition = await this.options.definition(found.project, found.plot);
     const useRecoveryPolicy =
+      !refresh &&
       definition.automaticRecovery &&
       optionalString(params, "confirmPlotId") === undefined &&
       optionalRemedy(params) === undefined;
@@ -236,9 +263,13 @@ export class AutomationController {
     }
     return this.withRecoveryLock(async () => {
       const current = this.findPlot(found.plot.workspaceId).plot;
+      if (signal.aborted) {
+        throw new AutomationError("CANCELLED", "Operation was cancelled.");
+      }
       const remedy = optionalRemedy(params);
       if (
         !useRecoveryPolicy &&
+        !refresh &&
         current.provisioning?.status === "complete" &&
         remedy !== "convex-adopt" &&
         remedy !== "convex-recreate"
@@ -252,26 +283,65 @@ export class AutomationController {
           partialFailure: false,
         };
       }
-      const result = useRecoveryPolicy
-        ? await this.provisionWithPolicy(current)
-        : await this.options.provision({
-            path: current.path,
-            ...(remedy ? { remedy } : {}),
-          });
-      const failed =
-        result.provision.some((step) => step.exitCode !== 0) ||
-        result.runtime.status === "failed" ||
-        result.readiness.status === "failed";
-      const succeeded =
-        result.provision.some((step) => step.exitCode === 0) ||
-        result.runtime.status === "started" ||
-        result.readiness.status === "ready";
-      return {
-        ...result,
-        alreadyProvisioned: false,
-        failed,
-        partialFailure: failed && succeeded,
-      };
+      if (refresh) {
+        if (
+          this.options
+            .processes()
+            .some(
+              (process) =>
+                process.plotPath === current.path &&
+                process.ownership === "external" &&
+                process.status !== "stopped" &&
+                process.status !== "failed",
+            )
+        ) {
+          throw new AutomationError(
+            "EXTERNAL_RUNTIME",
+            "Stop this Plot's external runtimes in their owning tool before refreshing its environment and build.",
+          );
+        }
+        this.refreshingPlots.add(current.path);
+      }
+      try {
+        if (refresh) {
+          const stopped = await this.stop(
+            { plot: current.workspaceId },
+            signal,
+          );
+          if (stopped.partialFailure) {
+            throw new AutomationError(
+              "RUNTIME_FAILED",
+              "Could not stop this Plot's runtimes before refreshing.",
+              stopped,
+            );
+          }
+        }
+        if (signal.aborted) {
+          throw new AutomationError("CANCELLED", "Operation was cancelled.");
+        }
+        const result = useRecoveryPolicy
+          ? await this.provisionWithPolicy(current)
+          : await this.options.provision({
+              path: current.path,
+              ...(remedy ? { remedy } : {}),
+            });
+        const failed =
+          result.provision.some((step) => step.exitCode !== 0) ||
+          result.runtime.status === "failed" ||
+          result.readiness.status === "failed";
+        const succeeded =
+          result.provision.some((step) => step.exitCode === 0) ||
+          result.runtime.status === "started" ||
+          result.readiness.status === "ready";
+        return {
+          ...result,
+          alreadyProvisioned: false,
+          failed,
+          partialFailure: failed && succeeded,
+        };
+      } finally {
+        if (refresh) this.refreshingPlots.delete(current.path);
+      }
     });
   }
 
@@ -288,16 +358,22 @@ export class AutomationController {
   }
 
   private async start(params: Record<string, unknown>, signal: AbortSignal) {
-    assertOnly(params, ["plot", "runtime"]);
+    assertOnly(params, ["plot", "runtime", "autoStartOnly"]);
+    const autoStartOnly = optionalBoolean(params, "autoStartOnly");
     let found = this.findPlot(requiredString(params, "plot"));
     let definition = await this.options.definition(found.project, found.plot);
+    const requested = optionalString(params, "runtime");
+    const ids = selectRuntimeIds(definition.commands, requested).filter(
+      (id) =>
+        requested ||
+        !autoStartOnly ||
+        definition.commands[id]?.autoStart !== false,
+    );
     const automaticAdoption = await this.automaticallyAdopt(found, definition);
     if (automaticAdoption) {
       found = this.findPlot(found.plot.workspaceId);
       definition = await this.options.definition(found.project, found.plot);
     }
-    const requested = optionalString(params, "runtime");
-    const ids = selectRuntimeIds(definition.commands, requested);
     const externalOnly = ids.every((id) => {
       const entry = this.process(found.plot.path, id);
       return entry?.ownership === "external" && entry.status === "running";
@@ -490,11 +566,27 @@ export class AutomationController {
     const found = this.findPlot(requiredString(params, "plot"));
     const definition = await this.options.definition(found.project, found.plot);
     const requested = optionalString(params, "runtime");
-    const ids = selectRuntimeIds(definition.commands, requested);
+    // A recipe may have renamed or removed a command since it was started.
+    const ids = requested
+      ? this.process(found.plot.path, requested)
+        ? [requested]
+        : selectRuntimeIds(definition.commands, requested)
+      : [
+          ...new Set([
+            ...Object.keys(definition.commands),
+            ...this.options
+              .processes()
+              .filter((process) => process.plotPath === found.plot.path)
+              .map((process) => process.id),
+          ]),
+        ];
     const results = [];
     for (const id of ids) {
       results.push(
         await this.withRuntimeLock(found.plot.path, id, async () => {
+          if (signal.aborted) {
+            throw new AutomationError("CANCELLED", "Operation was cancelled.");
+          }
           const before = this.process(found.plot.path, id);
           if (
             !before ||
@@ -801,6 +893,12 @@ export class AutomationController {
     plot: WorkspaceSnapshot,
     definition: PlotDefinition,
   ): void {
+    if (this.refreshingPlots.has(plot.path)) {
+      throw new AutomationError(
+        "PROVISIONING_REQUIRED",
+        "This Plot is being refreshed; wait for provisioning to finish before starting runtimes.",
+      );
+    }
     if (plot.isPrimary) return;
 
     const adoptionStatus = plot.adoption?.status ?? "not-adopted";
@@ -1018,6 +1116,18 @@ function requiredString(params: Record<string, unknown>, key: string): string {
   const value = params[key];
   if (typeof value !== "string" || value.length === 0 || value.length > 4_000) {
     throw new AutomationError("INVALID_ARGUMENT", `${key} must be a string.`);
+  }
+  return value;
+}
+
+function optionalBoolean(
+  params: Record<string, unknown>,
+  key: string,
+): boolean {
+  const value = params[key];
+  if (value === undefined) return false;
+  if (typeof value !== "boolean") {
+    throw new AutomationError("INVALID_ARGUMENT", `${key} must be a boolean.`);
   }
   return value;
 }

@@ -280,7 +280,7 @@ export async function verifyInstalledSilvicPlugin({
       "The installed plugin manifest does not match Silvic Desktop.",
     );
   }
-  const configuration = await readJson(join(pluginRoot, ".mcp.json"));
+  const configuration = await readJson(join(pluginRoot, "mcp.optional.json"));
   const servers = configuration["mcpServers"];
   const server = isRecord(servers) ? servers["silvic"] : undefined;
   if (

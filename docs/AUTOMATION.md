@@ -34,29 +34,48 @@ apps/cli/dist/silvic.mjs --help
 ```
 
 On macOS the CLI launches Silvic in the background when its control socket is
-not available. Commands never show a picker, focus the desktop window, or
-trigger an administrator prompt. If named HTTPS setup is missing, start reports
-an actionable diagnostic and leaves gate setup to the desktop UI.
+not available. Automation commands never show a picker, focus the desktop
+window, or trigger an administrator prompt. If named HTTPS setup is missing,
+start reports an actionable diagnostic and leaves gate setup to the desktop UI.
+
+## Jump to a Plot
+
+Load the small zsh/bash integration once from your shell configuration:
+
+```sh
+eval "$(silvic shell-init)"
+```
+
+Then run `silvic cd`. The picker shows every watched Plot and its current state,
+with running Plots first. Use the up and down arrow keys to choose one, Enter to
+change the current shell directory, or Escape to cancel. A known Plot can bypass
+the picker with `silvic cd --plot plot_123`.
+
+Without the shell integration, `silvic cd` prints the selected absolute path to
+stdout. The picker itself is written to the terminal on stderr, so scripts can
+also use `cd "$(silvic cd)"`.
 
 ## Preview lifecycle
 
 ```sh
-# Discover stable machine identifiers.
-silvic projects --json
-silvic plots --json
+# From the task's checkout: start and wait in one call.
+silvic preview --json
 
-# Inspect, start, wait, then stop.
-silvic status --plot plot_123 --json
-silvic start --plot plot_123 --json
-silvic preview --plot plot_123 --timeout 60000 --open
-silvic wait --plot plot_123 --timeout 60000 --json
-silvic logs --plot plot_123 --runtime web --limit 20000 --json
-silvic stop --plot plot_123 --json
+# Inspect only when needed; select a runtime to limit the operation.
+silvic status --json
+silvic logs --runtime web --limit 20000 --json
+silvic stop --runtime web --json
 ```
 
-`--plot` accepts a stable `workspaceId` or the absolute path of an already
-watched Plot. A runtime ID is the command key in `silvic.json`. Omitting
+`--plot` defaults to the current Git checkout, including when called from a
+subdirectory. It also accepts a stable `workspaceId`, an absolute path, or a
+path beginning with `.`. A missing Plot triggers one discovery pass before
+returning `PLOT_NOT_FOUND`; known Plots avoid that scan. Use `plots --json`
+when choosing a different workspace. A runtime ID is the command key in
+`silvic.json`. Omitting
 `--runtime` applies start, stop, or logs to every declared runtime.
+Stop also includes supervised runtimes removed or renamed in the current
+recipe, so a refresh cannot leave an older process serving the previous build.
 
 Status also returns every declared resource's `provider`, `kind` and
 `isolation`. `shared` and `manual` resources always add a diagnostic: shared
@@ -89,7 +108,50 @@ silvic adopt --plot plot_123 --confirm plot_123 --json
 
 # Retry an adopted Plot whose provisioning later failed.
 silvic provision --plot plot_123 --confirm plot_123 --json
+
+# Refresh an already-provisioned Plot after its environment or code changes.
+silvic provision --refresh --confirm plot_123 --json
 ```
+
+Ordinary provisioning remains idempotent. `--refresh` deliberately reruns the
+current recipe even after a successful setup: it stops this Plot's managed
+runtimes, synchronizes missing environment variables, pushes Convex functions,
+runs the recipe's build, and then starts the declared auto-start runtimes.
+The typed Convex step reuses the selected deployment and key. Refresh cannot
+be combined with a recreation remedy and requires explicit stable-ID
+confirmation. External runtimes must first be stopped in their owning tool.
+Repository shell steps retain their own side effects; review the recipe before
+confirming. Starting a production preview alone never rebuilds its artifact.
+
+### Convex environment inheritance
+
+The typed Convex step copies source `.env.local` values into the Plot and
+synchronizes them to its Convex deployment, with source-server values as a
+fallback. On retry or refresh, existing Plot-local values win and newly added
+source keys are filled in. Deployment selectors and deploy keys are excluded
+from backend synchronization; existing public Convex URL aliases are rewritten
+to the isolated deployment. Secrets remain in protected temporary files and
+are not included in progress output.
+
+Use `convex.environment` for values that must be derived separately per Plot:
+
+```json
+{
+  "convex": {
+    "name": "dev/{plot}",
+    "expiration": "in 7 days",
+    "environment": {
+      "R2_KEY_PREFIX": "development/{deployment}"
+    }
+  }
+}
+```
+
+These overrides win in both the Plot's `.env.local` and Convex. Templates
+support `{deployment}` (the physical deployment slug), `{plot}`, and `{url}`.
+They are resolved again on refresh or recreation; Silvic does not guess which
+application-specific values require isolation. Keep shared credentials in the
+source `.env.local`, and keep only non-secret templates in the recipe.
 
 Use `--scope family` on the plan and adoption to resume the selected Plot's
 discovered lineage in ancestor-first order. Already-adopted members are reported
@@ -229,7 +291,13 @@ Session, process, or provider resource. See the
 safety boundaries.
 
 `preview` combines start and wait, prints the canonical URL, and optionally
-opens it with `--open`. Both accept `--runtime ID`; MCP `wait_for_preview`
+opens it with `--open`. Its default start skips commands explicitly marked
+`autoStart: false`, such as a separate production preview. An explicit runtime
+starts that command regardless. Plain `start` continues to start every declared
+runtime; MCP callers can opt into `autoStartOnly: true`.
+Preview waits for a runtime selected by its own start result, even when another
+manual preview is already running.
+Both `preview` and `wait` accept `--runtime ID`; MCP `wait_for_preview`
 accepts the same `runtime` selector as `start_runtimes`. For production signoff,
 select the production runtime on both calls, for example
 `silvic preview --plot plot_123 --runtime preview --json`.
@@ -260,15 +328,19 @@ without rewriting the file.
 
 ## Output and exit codes
 
-Every command accepts `--json`. JSON mode writes exactly one compact envelope
-to stdout:
+Every automation command accepts `--json`. JSON mode writes exactly one compact
+envelope to stdout:
 
 ```json
 { "schemaVersion": 1, "ok": true, "result": {} }
 ```
 
 Failures use the same envelope with `ok: false` and a stable error `code`.
-Human-mode diagnostics go to stderr. No command reads from stdin or prompts.
+Human-mode diagnostics go to stderr. Only the explicitly interactive `cd`
+picker reads from a terminal; all automation commands remain non-interactive.
+If the control connection closes before a reply, the client immediately reports
+`INVALID_REPLY`. It does not replay the request: inspect status before retrying,
+because the original operation may have completed.
 
 | Exit | Meaning                                               |
 | ---: | ----------------------------------------------------- |
@@ -303,10 +375,16 @@ instance. The app and every client must receive the same value.
 
 ## Codex plugin
 
-The plugin source is in `plugins/silvic`. It contains the manifest,
-preview-lifecycle skill, and a bundled MCP server built from the same
-`AutomationClient` as the CLI. The MCP process uses the current MCP 2026-07-28
-wire implementation while retaining legacy-client negotiation.
+The plugin source is in `plugins/silvic`. Its default interface is one skill
+and the bundled CLI. No MCP server starts automatically and no Silvic tool
+catalog is loaded into each task. The skill resolves its bundled launcher
+directly, so a global CLI installation is unnecessary.
+
+For MCP clients, `silvic mcp` remains available. The optional connection
+configuration is in `plugins/silvic/mcp.optional.json`; register it explicitly
+in the client and resolve its launcher path against the plugin directory.
+It uses the same automation API as the CLI. MCP dependencies load only for
+the `mcp` command.
 
 ### Install the Codex plugin once
 

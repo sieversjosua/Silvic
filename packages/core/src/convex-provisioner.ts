@@ -1,6 +1,7 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { parseEnv } from "node:util";
 
 import type { ConvexServiceAttachment, ConvexStep } from "@silvic/contracts";
 
@@ -32,6 +33,10 @@ const deploymentEnvironmentKeys = new Set([
   "CONVEX_SITE_URL",
   "NEXT_PUBLIC_CONVEX_SITE_URL",
   "NEXT_PUBLIC_CONVEX_URL",
+  "PUBLIC_CONVEX_URL",
+  "PUBLIC_CONVEX_SITE_URL",
+  "VITE_CONVEX_URL",
+  "VITE_CONVEX_SITE_URL",
 ]);
 
 /**
@@ -118,6 +123,13 @@ export class ConvexProvisioner {
     const workspaceEnvPath = join(context.root, ".env.local");
     let workspaceEnvironment = await optionalFile(workspaceEnvPath);
     const previousWorkspaceEnvironment = workspaceEnvironment;
+    for (const key of Object.keys(step.convex.environment ?? {})) {
+      if (deploymentEnvironmentKeys.has(key)) {
+        throw new Error(
+          `Convex owns ${key}; it cannot be overridden by the recipe`,
+        );
+      }
+    }
     const configuredName = step.convex.name.replaceAll("{plot}", context.plot);
     let deploymentName = configuredName;
     if (options.recreate) {
@@ -241,12 +253,49 @@ export class ConvexProvisioner {
       workspaceEnvironment = await optionalFile(workspaceEnvPath);
     }
 
+    // Keep Plot-local overrides and identity on retry, but inherit newly added
+    // source variables even when this deployment was provisioned previously.
+    workspaceEnvironment = mergeEnvironmentContents(
+      workspaceEnvironment,
+      withoutEnvironmentKeys(source.contents, deploymentEnvironmentKeys),
+    );
     const convexUrl = environmentValue(
       workspaceEnvironment,
       "NEXT_PUBLIC_CONVEX_URL",
     );
     const siteUrl = convexUrl ? convexSiteUrl(convexUrl) : undefined;
+    const selected = convexDeploymentIn(workspaceEnvironment);
+    if (!selected) throw new Error("Convex did not select a deployment");
+    const overrides: Record<string, string> = {};
+    for (const [key, template] of Object.entries(
+      step.convex.environment ?? {},
+    )) {
+      if (template.includes("{url}") && !context.url) {
+        throw new Error(`Recipe environment ${key} requires a Plot URL`);
+      }
+      overrides[key] = encodeEnvironmentValue(
+        template
+          .replaceAll("{deployment}", selected.name)
+          .replaceAll("{plot}", context.plot)
+          .replaceAll("{url}", context.url ?? ""),
+      );
+    }
+    // Framework aliases already in the source must follow the new deployment.
+    const inherited = parseEnv(
+      [workspaceEnvironment, source.contents, sourceServerEnvironment].join(
+        "\n",
+      ),
+    );
+    for (const prefix of ["PUBLIC", "VITE"]) {
+      if (convexUrl && `${prefix}_CONVEX_URL` in inherited) {
+        overrides[`${prefix}_CONVEX_URL`] = convexUrl;
+      }
+      if (siteUrl && `${prefix}_CONVEX_SITE_URL` in inherited) {
+        overrides[`${prefix}_CONVEX_SITE_URL`] = siteUrl;
+      }
+    }
     workspaceEnvironment = setEnvironmentValues(workspaceEnvironment, {
+      ...overrides,
       ...(convexUrl ? { NEXT_PUBLIC_CONVEX_URL: convexUrl } : {}),
       ...(siteUrl
         ? {
@@ -263,14 +312,19 @@ export class ConvexProvisioner {
     });
     await writePrivateEnvironment(workspaceEnvPath, workspaceEnvironment);
 
-    if (sourceServerEnvironment.trim()) {
+    const inheritedServerEnvironment = mergeEnvironmentContents(
+      withoutEnvironmentKeys(workspaceEnvironment, deploymentEnvironmentKeys),
+      withoutEnvironmentKeys(
+        sourceServerEnvironment,
+        deploymentEnvironmentKeys,
+      ),
+    );
+    if (inheritedServerEnvironment.trim()) {
       announce("Syncing Convex environment variables");
       const serverEnvironment = setEnvironmentValues(
-        withoutEnvironmentKeys(
-          sourceServerEnvironment,
-          deploymentEnvironmentKeys,
-        ),
+        inheritedServerEnvironment,
         {
+          ...overrides,
           ...(convexUrl ? { NEXT_PUBLIC_CONVEX_URL: convexUrl } : {}),
           ...(siteUrl ? { CONVEX_SITE_URL: siteUrl } : {}),
           ...(context.url
@@ -555,17 +609,32 @@ function recoveryDeploymentName(name: string): string {
 function mergeEnvironmentContents(primary: string, fallback: string): string {
   if (!primary.trim()) return fallback;
   if (primary === fallback) return primary;
-  const primaryKeys = new Set(
-    primary
-      .split(/\r?\n/)
-      .map(environmentKey)
-      .filter((key) => key !== undefined),
-  );
-  const additions = fallback.split(/\r?\n/).filter((line) => {
-    const key = environmentKey(line);
-    return key !== undefined && !primaryKeys.has(key);
-  });
+  const primaryKeys = new Set(Object.keys(parseEnv(primary)));
+  const additions: string[] = [];
+  for (const [key, value] of Object.entries(parseEnv(fallback))) {
+    if (primaryKeys.has(key) || value === undefined) continue;
+    // The Convex CLI records team/project selection in this line's comment.
+    const selection =
+      key === "CONVEX_DEPLOYMENT"
+        ? fallback.split(/\r?\n/).find((line) => environmentKey(line) === key)
+        : undefined;
+    additions.push(selection ?? `${key}=${encodeEnvironmentValue(value)}`);
+  }
   return [primary.trimEnd(), ...additions].join("\n").replace(/\n*$/, "\n");
+}
+
+function encodeEnvironmentValue(value: string): string {
+  const encoded = /^[A-Za-z0-9_./:@-]*$/.test(value)
+    ? value
+    : !value.includes("'")
+      ? `'${value}'`
+      : `"${value}"`;
+  if (parseEnv(`VALUE=${encoded}`)["VALUE"] !== value) {
+    throw new Error(
+      "A source environment value cannot be represented losslessly in a dotenv file",
+    );
+  }
+  return encoded;
 }
 
 function withApplicationUrls(

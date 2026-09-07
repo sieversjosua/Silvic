@@ -3,7 +3,11 @@
   "version": "0.1.0",
   "private": false,
   "type": "module",
-  "exports": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./client": "./src/client.ts",
+    "./protocol": "./src/protocol.ts"
+  },
   "dependencies": {
     "@silvic/contracts": "workspace:*",
     "@silvic/core": "workspace:*"

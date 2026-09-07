@@ -47,6 +47,7 @@ export class AutomationClient {
       socket.setEncoding("utf8");
       let buffered = "";
       let settled = false;
+      let connected = false;
       const timer = setTimeout(() => {
         finish(() =>
           reject(
@@ -69,12 +70,22 @@ export class AutomationClient {
         finish(() =>
           reject(new AutomationError("CANCELLED", "Operation was cancelled.")),
         );
+      const disconnected = () =>
+        finish(() =>
+          reject(
+            new AutomationError(
+              "INVALID_REPLY",
+              "Silvic closed the connection before returning a result. The operation may have completed; inspect the Plot's status before retrying.",
+            ),
+          ),
+        );
       if (options.signal?.aborted) {
         aborted();
         return;
       }
       options.signal?.addEventListener("abort", aborted, { once: true });
       socket.once("connect", () => {
+        connected = true;
         socket.write(
           `${JSON.stringify({ jsonrpc: "2.0", protocolVersion: automationProtocolVersion, client, id, method, params })}\n`,
         );
@@ -115,6 +126,11 @@ export class AutomationClient {
         }
       });
       socket.once("error", (error: NodeJS.ErrnoException) => {
+        // Reconnecting after a request was sent could repeat provider changes.
+        if (connected) {
+          disconnected();
+          return;
+        }
         finish(() =>
           reject(
             new AutomationError(
@@ -126,6 +142,7 @@ export class AutomationClient {
           ),
         );
       });
+      socket.once("close", disconnected);
     });
   }
 }

@@ -1,7 +1,7 @@
 {
   "name": "@silvic/cli",
-  "version": "0.1.63",
-  "description": "Non-interactive runtime and preview control for Silvic",
+  "version": "0.1.64",
+  "description": "Runtime control and interactive Plot navigation for Silvic",
   "repository": "https://github.com/sieversjosua/Silvic",
   "license": "MIT",
   "type": "module",

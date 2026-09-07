@@ -22,17 +22,17 @@ assertReleaseTag(
 );
 const [manifest, mcp, marketplace] = await Promise.all([
   readJson("plugins/silvic/.codex-plugin/plugin.json"),
-  readJson("plugins/silvic/.mcp.json"),
+  readJson("plugins/silvic/mcp.optional.json"),
   readJson(".agents/plugins/marketplace.json"),
 ]);
 
 if (
   manifest.name !== "silvic" ||
-  manifest.mcpServers !== "./.mcp.json" ||
+  manifest.mcpServers !== undefined ||
   manifest.skills !== "./skills/"
 ) {
   throw new Error(
-    "Plugin manifest does not expose the expected MCP and skill roots.",
+    "Plugin must expose its skill root without starting MCP by default.",
   );
 }
 const server = mcp.mcpServers?.silvic;

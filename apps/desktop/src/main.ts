@@ -288,6 +288,9 @@ const automation = new AutomationController({
   planAdoption: planPlotAdoption,
   adopt: adoptPlots,
   provision: provisionPlot,
+  refresh: async () => {
+    await refreshSnapshot(true);
+  },
   inspectWorkspaceState: () => workspaceStateService.inspect(),
   pruneWorkspaceState: (confirmPlanId) =>
     workspaceStateService.prune(confirmPlanId),

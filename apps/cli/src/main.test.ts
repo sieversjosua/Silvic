@@ -99,6 +99,48 @@ it("lets provision request policy evaluation without inventing a confirmation", 
   expect(requests[0]?.params).toEqual({ plot: "plot_123" });
 });
 
+it("uses the current Git checkout for preview and forwards an explicit refresh", async () => {
+  const requests: AutomationRequest[] = [];
+  const directory = await serve(async (request) => {
+    requests.push(request);
+    if (request.method === "start")
+      return { results: [], partialFailure: false };
+    if (request.method === "wait")
+      return { ready: true, url: "https://preview.localhost" };
+    return {
+      provision: [],
+      runtime: { status: "not-required" },
+      readiness: { status: "not-required" },
+    };
+  });
+  const options = {
+    cwd: resolve(repositoryRoot, "apps/cli/src"),
+    env: { ...process.env, SILVIC_AUTOMATION_DIR: directory },
+  };
+  await executeFile(
+    executable,
+    ["preview", "--runtime", "web", "--json"],
+    options,
+  );
+  await executeFile(
+    executable,
+    ["provision", "--refresh", "--confirm", "plot_123", "--json"],
+    options,
+  );
+  expect(requests.map(({ method, params }) => ({ method, params }))).toEqual([
+    { method: "start", params: { plot: repositoryRoot, runtime: "web" } },
+    { method: "wait", params: { plot: repositoryRoot, runtime: "web" } },
+    {
+      method: "provision",
+      params: {
+        plot: repositoryRoot,
+        refresh: true,
+        confirmPlotId: "plot_123",
+      },
+    },
+  ]);
+});
+
 it("writes one versioned JSON document and keeps stderr clean", async () => {
   const directory = await serve(async () => ({
     roots: ["/projects"],
@@ -190,6 +232,83 @@ it("prints resource kind in human-readable Plot status", async () => {
   expect(result.stdout).toContain(
     "resource\tagent\tlivekit\tagent\tshared\tnamespaced",
   );
+});
+
+it("prints a selected Plot path without opening the interactive picker", async () => {
+  const directory = await serve(async () => ({
+    id: "plot_123",
+    projectId: "project_123",
+    name: "Runtime isolation",
+    path: "/projects/Silvic.plots/runtime-isolation",
+    branch: "fix/runtime-isolation",
+    isPrimary: false,
+    state: "ready",
+    runtimes: [],
+    resources: [],
+    diagnostics: [],
+  }));
+
+  const result = await executeFile(executable, ["cd", "--plot", "plot_123"], {
+    env: { ...process.env, SILVIC_AUTOMATION_DIR: directory },
+  });
+
+  expect(result.stdout).toBe("/projects/Silvic.plots/runtime-isolation\n");
+  expect(result.stderr).toBe("");
+});
+
+it("changes the calling shell directory through shell-init", async () => {
+  const plotDirectory = await mkdtemp(join(tmpdir(), "silvic-selected-plot-"));
+  directories.push(plotDirectory);
+  const directory = await serve(async () => ({
+    id: "plot_123",
+    projectId: "project_123",
+    name: "Selected Plot",
+    path: plotDirectory,
+    branch: "fix/selected-plot",
+    isPrimary: false,
+    state: "ready",
+    runtimes: [],
+    resources: [],
+    diagnostics: [],
+  }));
+  const binDirectory = await mkdtemp(join(tmpdir(), "silvic-shell-bin-"));
+  directories.push(binDirectory);
+  await symlink(executable, join(binDirectory, "silvic"));
+
+  const result = await executeFile(
+    "bash",
+    ["-c", 'eval "$(silvic shell-init)"; silvic cd --plot plot_123; pwd'],
+    {
+      env: {
+        ...process.env,
+        PATH: `${binDirectory}:${process.env.PATH ?? ""}`,
+        SILVIC_AUTOMATION_DIR: directory,
+      },
+    },
+  );
+
+  expect(result.stdout).toBe(`${plotDirectory}\n`);
+  expect(result.stderr).toBe("");
+});
+
+it("requires a terminal when cd has no explicit Plot", async () => {
+  const directory = await serve(async () => ({
+    roots: ["/projects"],
+    projects: [
+      {
+        id: "project_123",
+        name: "Silvic",
+        rootPath: "/projects/Silvic",
+        plots: [],
+      },
+    ],
+    refreshedAt: "2026-08-25T12:00:00.000Z",
+  }));
+
+  const failure = await executeFailure(["cd"], directory);
+
+  expect(failure.code).toBe(2);
+  expect(failure.stderr).toContain("needs an interactive terminal");
 });
 
 it("maps not-found failures to exit 4 with structured stdout", async () => {
@@ -529,10 +648,17 @@ it("starts a Plot, waits for readiness, and prints its preview URL", async () =>
     if (request.method === "start") {
       return {
         results: [{ runtimeId: "web", action: "started" }],
-        plot: { id: "plot_123" },
+        plot: {
+          id: "plot_123",
+          runtimes: [
+            { id: "preview", servesPreview: true, status: "running" },
+            { id: "web", servesPreview: true, status: "starting" },
+          ],
+        },
         partialFailure: false,
       };
     }
+    expect(request.params.runtime).toBe("web");
     return {
       ready: true,
       url: "http://silvic.test",
@@ -551,6 +677,23 @@ it("starts a Plot, waits for readiness, and prints its preview URL", async () =>
   expect(result.stdout).toBe("http://silvic.test\n");
   expect(methods).toEqual(["start", "wait"]);
 });
+
+it.each(["invalid", "0", "600001"])(
+  "rejects invalid preview timeout %s before starting anything",
+  async (timeout) => {
+    const methods: string[] = [];
+    const directory = await serve(async (request) => {
+      methods.push(request.method);
+      return { results: [], partialFailure: false };
+    });
+    const failure = await executeFailure(
+      ["preview", "--plot", "plot_123", "--timeout", timeout, "--json"],
+      directory,
+    );
+    expect(failure.code).toBe(2);
+    expect(methods).toEqual([]);
+  },
+);
 
 async function serve(
   handle: (request: AutomationRequest) => Promise<unknown>,

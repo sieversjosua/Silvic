@@ -1,7 +1,7 @@
 {
   "name": "silvic",
-  "version": "0.1.63",
-  "description": "Control local Silvic runtimes and previews without desktop UI automation.",
+  "version": "0.1.64",
+  "description": "Start, inspect, and refresh local workspaces through the bundled Silvic CLI.",
   "author": {
     "name": "Josua Sievers",
     "url": "https://github.com/sieversjosua"
@@ -13,7 +13,7 @@
   "interface": {
     "displayName": "Silvic",
     "shortDescription": "Run and inspect local Plot previews.",
-    "longDescription": "Find and explicitly adopt Silvic Plots, provision them, control their declared runtimes, wait for canonical preview URLs, and inspect logs and diagnostics.",
+    "longDescription": "Control local previews directly from the workspace with the bundled CLI. Inspect status and logs, refresh an existing environment, and use optional MCP integration when needed.",
     "developerName": "Josua Sievers",
     "category": "Developer Tools",
     "capabilities": ["Read", "Write"],
@@ -22,6 +22,5 @@
       "Plan and complete adoption for this Plot.",
       "Show the status and logs for this Plot."
     ]
-  },
-  "mcpServers": "./.mcp.json"
+  }
 }
