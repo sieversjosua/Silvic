@@ -5,7 +5,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, normalize } from "node:path";
 
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 
 import type {
   PlotAdoptionPlan,
@@ -84,7 +84,7 @@ it("integrates automation recovery with production adoption, provisioning, super
 
   const stablePlotId = discovered.workspaceId;
   const port = await availablePort();
-  const canonicalUrl = `http://127.0.0.1:${port}`;
+  const canonicalUrl = "https://web-codex-integration.localhost";
   const foreignPid = await startForeignChild(fixture.primary);
   const branchesBefore = await git(runner, fixture.primary, [
     "branch",
@@ -129,6 +129,15 @@ it("integrates automation recovery with production adoption, provisioning, super
     },
     inspect: async (name) => persistedSettings.routes[name],
   };
+  const fetchPreview = (url: string) => {
+    if (!url.startsWith("https:")) return fetch(url);
+    const route =
+      persistedSettings.routes[
+        new URL(url).hostname.replace(/\.localhost$/, "")
+      ];
+    if (!route) throw new Error("Named route is not published");
+    return fetch(`http://${route.host}:${route.port}/`);
+  };
   const publisher = new GateRoutePublisher({
     link,
     inspect: async (processId) =>
@@ -138,7 +147,7 @@ it("integrates automation recovery with production adoption, provisioning, super
       })),
     probe: async (url) => {
       try {
-        const response = await fetch(url);
+        const response = await fetchPreview(url);
         const contentType = response.headers.get("content-type");
         return {
           status: response.status,
@@ -288,7 +297,7 @@ it("integrates automation recovery with production adoption, provisioning, super
       intervalMs: 50,
       probe: async (url) => {
         const web = supervisor.list().find((process) => process.id === "web");
-        return web?.status === "running" && (await fetch(url)).ok;
+        return web?.status === "running" && (await fetchPreview(url)).ok;
       },
     });
     return { provision, runtime, readiness };
@@ -329,7 +338,7 @@ it("integrates automation recovery with production adoption, provisioning, super
     stop: (path, runtimeId) => supervisor.stop(path, runtimeId),
     output: (path, runtimeId, limit) =>
       supervisor.output(path, runtimeId, limit),
-    probe: async (url) => (await fetch(url)).ok,
+    probe: async (url) => (await fetchPreview(url)).ok,
   });
   const socketPath = join(fixture.root, "automation.sock");
   automationServer = await startAutomationServer({
@@ -499,6 +508,153 @@ it("integrates automation recovery with production adoption, provisioning, super
     ),
   ).toBe(false);
 }, 30_000);
+
+it("restores an adopted external HTTP server through automation despite failed provisioning", async () => {
+  const fixture = await gitWorktreeFixture();
+  const port = await availablePort();
+  const child = spawn(
+    process.execPath,
+    [
+      "-e",
+      `require("http").createServer((_req,res)=>{res.writeHead(200,{"content-type":"text/html"});res.end("external-ready");}).listen(${port},"127.0.0.1");`,
+    ],
+    { cwd: fixture.worktree, stdio: "ignore" },
+  );
+  cleanupProcesses.push(child);
+  await childStarted(child);
+  if (!child.pid) throw new Error("External server did not start");
+  const direct = `http://127.0.0.1:${port}/`;
+  await vi.waitFor(async () => expect((await fetch(direct)).status).toBe(200));
+  const raw = await new ProjectService({
+    runner: new LocalCommandRunner(),
+    connectors: new ConnectorRegistry([]),
+  }).snapshot([fixture.primary], { force: true });
+  const initial = new WorkspaceRegistry().reconcile(raw, []).snapshot;
+  const plot = initial.projects
+    .flatMap((project) => project.workspaces)
+    .find((plot) => plot.path === fixture.worktree);
+  if (!plot) throw new Error("Plot was not discovered");
+  const snapshot = updateWorkspace(initial, plot.workspaceId, {
+    adoption: { status: "adopted", at: new Date().toISOString(), attempt: 1 },
+    provisioning: { status: "failed", at: new Date().toISOString(), steps: [] },
+  });
+  const canonicalUrl = "https://web-external-integration.localhost";
+  let published = false;
+  const probe = async (url: string) => {
+    if (url.startsWith("https:") && !published)
+      return { status: 503, contentType: "text/html" };
+    const response = await fetch(url.startsWith("https:") ? direct : url);
+    return {
+      status: response.status,
+      contentType: response.headers.get("content-type") ?? "",
+    };
+  };
+  const supervisor = new CommandSupervisor({
+    logDirectory: join(fixture.root, "logs"),
+    onChange: () => {},
+    routeHealthIntervalMs: 60_000,
+    routePublisher: new GateRoutePublisher({
+      probe,
+      link: {
+        set: async () => {
+          published = true;
+        },
+        suspend: async () => {
+          published = false;
+        },
+      },
+    }),
+  });
+  cleanupSupervisors.push(supervisor);
+  await supervisor.adopt([
+    {
+      plotPath: plot.path,
+      id: "web",
+      status: "running",
+      ownership: "external",
+      externalProcessId: child.pid,
+      targetPort: port,
+      expectedPort: port + 1,
+      routeName: "web-external-integration",
+      url: canonicalUrl,
+    },
+  ]);
+  expect(published).toBe(true);
+  published = false; // The daemon lost its upstream; the existing app is still healthy.
+  const start = vi.fn();
+  const controller = new AutomationController({
+    snapshot: () => snapshot,
+    roots: () => [fixture.primary],
+    definition: async () => ({
+      commands: {
+        web: { run: "unused", url: true },
+        preview: { run: "unused", url: true },
+      },
+      resources: {},
+      requiresProvisioning: true,
+      previewUrl: canonicalUrl,
+    }),
+    planAdoption: async () => {
+      throw new Error("Unexpected adoption");
+    },
+    adopt: async () => {
+      throw new Error("Unexpected adoption");
+    },
+    provision: async () => {
+      throw new Error("Unexpected provider change");
+    },
+    inspectWorkspaceState: async () => emptyStatePlan(),
+    pruneWorkspaceState: async () => ({
+      plan: emptyStatePlan(),
+      removedRecordIds: [],
+    }),
+    processes: () => supervisor.list(),
+    start,
+    restoreExternalRoute: (path, id) =>
+      supervisor.restoreExternalRoute(path, id),
+    stop: (path, id) => supervisor.stop(path, id),
+    output: async () => "",
+    probe: async (url) => (await probe(url)).status === 200,
+  });
+  const socketPath = join(fixture.root, "automation.sock");
+  automationServer = await startAutomationServer({
+    socketPath,
+    handle: (request, signal) => controller.handle(request, signal),
+  });
+  const client = new AutomationClient({ socketPath });
+  await Promise.all([
+    client.call("start", { plot: plot.workspaceId, runtime: "web" }),
+    client.call("start", { plot: plot.workspaceId, runtime: "web" }),
+  ]);
+  expect(published).toBe(true);
+  expect(start).not.toHaveBeenCalled();
+  expect(
+    await client.call("wait", {
+      plot: plot.workspaceId,
+      runtime: "web",
+      timeoutMs: 2_000,
+    }),
+  ).toMatchObject({ ready: true, url: canonicalUrl });
+  expect(await client.call("status", { plot: plot.workspaceId })).toMatchObject(
+    {
+      provisioning: { status: "failed" },
+      runtimes: [
+        expect.objectContaining({
+          ownership: "external",
+          routeProbe: {
+            url: canonicalUrl,
+            status: 200,
+            at: expect.any(String),
+          },
+        }),
+        expect.anything(),
+      ],
+    },
+  );
+  await client.call("stop", { plot: plot.workspaceId, runtime: "web" });
+  expect(published).toBe(false);
+  expect((await fetch(direct)).status).toBe(200);
+}, 15_000);
 
 it("prunes stale metadata beside an active Plot without touching foreign state", async () => {
   const fixture = await gitWorktreeFixture();

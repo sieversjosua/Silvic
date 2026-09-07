@@ -87,6 +87,21 @@ describe("readRecipe", () => {
     expect(recipe.configured).toBe(true);
   });
 
+  it("keeps expired dev recovery opt-in and preserves it when reading the recipe source", async () => {
+    const root = await repository({
+      automation: { recreateExpiredDevDeployments: true },
+    });
+    expect((await readRecipe(root)).automaticRecovery).toBe(true);
+    expect(
+      (await readRecipeSource(root)).recipe.automation
+        ?.recreateExpiredDevDeployments,
+    ).toBe(true);
+    const disabled = await repository({
+      automation: { recreateExpiredDevDeployments: false },
+    });
+    expect((await readRecipe(disabled)).automaticRecovery).toBe(false);
+  });
+
   it("treats work-cli as a detection signal without executing its config", async () => {
     const root = await repository();
     await writeFile(join(root, "bun.lock"), "");

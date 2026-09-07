@@ -1,6 +1,6 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import type { ConvexServiceAttachment, ConvexStep } from "@silvic/contracts";
 
@@ -307,6 +307,92 @@ export class ConvexProvisioner {
       output: messages.join("\n"),
       ...(establishedAttachment ? { attachment: establishedAttachment } : {}),
     };
+  }
+
+  async missingDisposableAttachment(
+    step: ConvexStep,
+    context: ProvisionContext,
+    otherRoots: readonly string[],
+    recorded?: ConvexServiceAttachment,
+  ): Promise<ConvexServiceAttachment | undefined> {
+    if (
+      !step.convex.name.startsWith("dev/") ||
+      !step.convex.name.includes("{plot}") ||
+      !step.convex.expiration ||
+      resolve(context.root) === resolve(context.sourceRoot)
+    )
+      return undefined;
+    const candidate = await this.adopt(step, context);
+    const selectedTarget = convexTargetIn(
+      await optionalFile(join(context.root, ".env.local")),
+    );
+    if (
+      (!selectedTarget && !recorded) ||
+      (selectedTarget &&
+        (selectedTarget.team !== candidate.team ||
+          selectedTarget.project !== candidate.project))
+    )
+      return undefined;
+    const logical = recorded
+      ? convexLogicalReferenceIn(recorded.logicalDeploymentRef)
+      : undefined;
+    if (
+      recorded &&
+      (!logical ||
+        logical.team !== candidate.team ||
+        logical.project !== candidate.project ||
+        !logical.deploymentName.startsWith("dev/") ||
+        recorded.team !== candidate.team ||
+        recorded.project !== candidate.project ||
+        recorded.deploymentKind !== "dev" ||
+        recorded.recipeDeploymentName !== candidate.recipeDeploymentName ||
+        recorded.physicalDeploymentSlug !== candidate.physicalDeploymentSlug ||
+        recorded.expiration !== candidate.expiration)
+    )
+      return undefined;
+    for (const root of new Set([context.sourceRoot, ...otherRoots])) {
+      if (resolve(root) === resolve(context.root)) continue;
+      let contents: string;
+      try {
+        contents = await readFile(join(root, ".env.local"), "utf8");
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          "code" in error &&
+          error.code === "ENOENT"
+        )
+          continue;
+        return undefined;
+      }
+      const selected = convexDeploymentIn(contents);
+      if (selected?.name === candidate.physicalDeploymentSlug) return undefined;
+    }
+    if (!/^[a-z]+-[a-z]+-[0-9]+$/.test(candidate.physicalDeploymentSlug))
+      return undefined;
+    // Ask the control plane using the source checkout's existing CLI login.
+    // A revoked deploy key, network failure, or schema error is not absence.
+    const result = await this.runner.run({
+      executable: "npx",
+      arguments: [
+        "--yes",
+        `convex@${convexCliVersion}`,
+        "env",
+        "list",
+        "--names-only",
+        "--deployment",
+        candidate.physicalDeploymentSlug,
+      ],
+      cwd: context.sourceRoot,
+      outputLimit: 20_000,
+      environment: {
+        ...provisionEnvironment(context),
+        CONVEX_AGENT_MODE: "anonymous",
+      },
+    });
+    const output = `${result.stdout}\n${result.stderr}`;
+    if (result.exitCode === 0 || !/\bDeploymentNotFound\b/.test(output))
+      return undefined;
+    return recorded ?? candidate;
   }
 
   async adopt(

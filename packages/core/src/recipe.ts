@@ -23,6 +23,7 @@ export interface ResolvedRecipe {
   resources: Readonly<Record<string, PlotResourceDefinition>>;
   provision: readonly ProvisionStep[];
   automaticAdoption: boolean;
+  automaticRecovery?: boolean;
   /** False when the repository has no recipe and defaults were used. */
   configured: boolean;
 }
@@ -80,6 +81,8 @@ function resolveRecipe(
     resources: recipe.resources ?? {},
     provision: recipe.provision ?? [],
     automaticAdoption: recipe.automation?.adoptDisposablePlots ?? false,
+    automaticRecovery:
+      recipe.automation?.recreateExpiredDevDeployments ?? false,
     configured: true,
   };
 }

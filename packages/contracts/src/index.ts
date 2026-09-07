@@ -618,7 +618,10 @@ export const recipeSchema = z
       .strict()
       .optional(),
     automation: z
-      .object({ adoptDisposablePlots: z.boolean().default(false) })
+      .object({
+        adoptDisposablePlots: z.boolean().default(false),
+        recreateExpiredDevDeployments: z.boolean().optional(),
+      })
       .strict()
       .optional(),
     commands: z
@@ -806,6 +809,8 @@ export const plotProvisionRequestSchema = z
     path: z.string().min(1),
     /** Runs before the recipe, when a failure named a repair Silvic can make. */
     remedy: provisionRemedyIdSchema.optional(),
+    /** Request evaluation of the trusted repository policy; never authorizes arbitrary changes. */
+    useRecoveryPolicy: z.boolean().optional(),
   })
   .strict();
 export type PlotProvisionRequest = z.infer<typeof plotProvisionRequestSchema>;
@@ -972,6 +977,13 @@ export interface PlotRuntimeStart {
 }
 
 export interface PlotProvisionRunResult {
+  automaticRecovery?: {
+    policy: "recreate-expired-dev-deployments";
+    dataLoss: true;
+    oldAttachment: ConvexServiceAttachment;
+    newAttachment?: ConvexServiceAttachment;
+    adoptedLegacyAttachment: boolean;
+  };
   provision: readonly ProvisionResult[];
   runtime: PlotRuntimeStart;
   readiness: PlotReadiness;

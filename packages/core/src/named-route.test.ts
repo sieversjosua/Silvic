@@ -1120,3 +1120,84 @@ describe("viteOptimizerFailure", () => {
     ).toBe(false);
   });
 });
+
+describe("external route restoration", () => {
+  const request = {
+    routeName: "web-adopted",
+    plotPath: "/plots/adopted",
+    commandId: "web",
+    processId: 42,
+    port: 4399,
+  };
+
+  it("validates Plot identity before republishing and probes the canonical route", async () => {
+    const set = vi.fn().mockResolvedValue(undefined);
+    const probe = vi
+      .fn()
+      .mockResolvedValue({ status: 200, contentType: "text/html" });
+    const identify = vi
+      .fn()
+      .mockResolvedValue({ verdict: "verified", families: ["127.0.0.1"] });
+    const publisher = new GateRoutePublisher({
+      link: { set, suspend: async () => {} },
+      identify,
+      probe,
+    });
+    await expect(publisher.restoreExternal(request)).resolves.toEqual({
+      status: 200,
+    });
+    expect(identify).toHaveBeenCalledWith(
+      { hostname: "127.0.0.1", port: 4399, processId: 42 },
+      "/plots/adopted",
+    );
+    expect(set).toHaveBeenCalledWith({
+      name: "web-adopted",
+      host: "127.0.0.1",
+      port: 4399,
+      plotPath: "/plots/adopted",
+      commandId: "web",
+    });
+    expect(probe.mock.calls.map(([url]) => url)).toEqual([
+      "http://127.0.0.1:4399/",
+      "https://web-adopted.localhost/",
+    ]);
+  });
+
+  it.each(["gone", "foreign"])(
+    "withholds a %s external listener without probing or publishing it",
+    async (verdict) => {
+      const set = vi.fn();
+      const remove = vi.fn().mockResolvedValue(undefined);
+      const probe = vi.fn();
+      const publisher = new GateRoutePublisher({
+        link: { set, suspend: remove },
+        probe,
+        identify: async () =>
+          verdict === "gone"
+            ? { verdict: "gone", detail: "Process exited" }
+            : { verdict: "foreign", detail: "Another Plot" },
+      });
+      await expect(publisher.restoreExternal(request)).rejects.toThrow(
+        "External route withheld",
+      );
+      expect(remove).toHaveBeenCalledWith("web-adopted");
+      expect(set).not.toHaveBeenCalled();
+      expect(probe).not.toHaveBeenCalled();
+    },
+  );
+
+  it("reports a canonical Waking 503 instead of treating the healthy listener as route readiness", async () => {
+    const publisher = new GateRoutePublisher({
+      link: { set: async () => {}, suspend: async () => {} },
+      identify: async () => ({ verdict: "verified", families: ["127.0.0.1"] }),
+      probe: async (url) => ({
+        status: url.startsWith("https:") ? 503 : 200,
+        contentType: "text/html",
+      }),
+    });
+    await expect(publisher.restoreExternal(request)).resolves.toMatchObject({
+      status: 503,
+      detail: expect.stringContaining("HTTP 503"),
+    });
+  });
+});

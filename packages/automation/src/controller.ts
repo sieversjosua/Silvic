@@ -40,6 +40,7 @@ export interface AutomationRuntime {
   exitCode?: number;
   advice?: string;
   notice?: string;
+  routeProbe?: SupervisedCommand["routeProbe"];
 }
 
 export interface AutomationPlot {
@@ -80,6 +81,7 @@ interface PlotDefinition {
   resources: Readonly<Record<string, PlotResourceDefinition>>;
   requiresProvisioning: boolean;
   automaticAdoption?: boolean;
+  automaticRecovery?: boolean;
   previewUrl?: string;
 }
 
@@ -103,6 +105,7 @@ export interface AutomationControllerOptions {
   }>;
   processes(): readonly SupervisedCommand[];
   start(plotPath: string, runtimeId: string): Promise<void>;
+  restoreExternalRoute?(plotPath: string, runtimeId: string): Promise<boolean>;
   stop(plotPath: string, runtimeId: string): void;
   output(plotPath: string, runtimeId: string, limit: number): Promise<string>;
   probe(url: string): Promise<boolean>;
@@ -215,7 +218,12 @@ export class AutomationController {
     assertOnly(params, ["plot", "confirmPlotId", "remedy"]);
     const found = this.findPlot(requiredString(params, "plot"));
     this.assertExternalPlot(found.plot);
-    this.assertStableConfirmation(found.plot, params);
+    const definition = await this.options.definition(found.project, found.plot);
+    const useRecoveryPolicy =
+      definition.automaticRecovery &&
+      optionalString(params, "confirmPlotId") === undefined &&
+      optionalRemedy(params) === undefined;
+    if (!useRecoveryPolicy) this.assertStableConfirmation(found.plot, params);
     if (found.plot.adoption?.status !== "adopted") {
       throw new AutomationError(
         "ADOPTION_REQUIRED",
@@ -230,6 +238,7 @@ export class AutomationController {
       const current = this.findPlot(found.plot.workspaceId).plot;
       const remedy = optionalRemedy(params);
       if (
+        !useRecoveryPolicy &&
         current.provisioning?.status === "complete" &&
         remedy !== "convex-adopt" &&
         remedy !== "convex-recreate"
@@ -243,10 +252,12 @@ export class AutomationController {
           partialFailure: false,
         };
       }
-      const result = await this.options.provision({
-        path: current.path,
-        ...(remedy ? { remedy } : {}),
-      });
+      const result = useRecoveryPolicy
+        ? await this.provisionWithPolicy(current)
+        : await this.options.provision({
+            path: current.path,
+            ...(remedy ? { remedy } : {}),
+          });
       const failed =
         result.provision.some((step) => step.exitCode !== 0) ||
         result.runtime.status === "failed" ||
@@ -285,9 +296,34 @@ export class AutomationController {
       found = this.findPlot(found.plot.workspaceId);
       definition = await this.options.definition(found.project, found.plot);
     }
-    this.assertStartable(found.plot, definition);
     const requested = optionalString(params, "runtime");
     const ids = selectRuntimeIds(definition.commands, requested);
+    const externalOnly = ids.every((id) => {
+      const entry = this.process(found.plot.path, id);
+      return entry?.ownership === "external" && entry.status === "running";
+    });
+    let automaticRecovery: PlotProvisionRunResult | undefined;
+    if (
+      !externalOnly &&
+      definition.automaticRecovery &&
+      found.plot.adoption?.status === "adopted" &&
+      found.plot.provisioning?.status === "failed"
+    ) {
+      automaticRecovery = await this.withRecoveryLock(async () => {
+        const current = this.findPlot(found.plot.workspaceId);
+        if (current.plot.provisioning?.status === "complete") return undefined;
+        return this.provisionWithPolicy(current.plot);
+      });
+      found = this.findPlot(found.plot.workspaceId);
+    }
+    if (automaticRecovery && found.plot.provisioning?.status !== "complete") {
+      throw new AutomationError(
+        "PROVISIONING_REQUIRED",
+        "Automatic recovery did not complete provisioning.",
+        { plotId: found.plot.workspaceId, automaticRecovery },
+      );
+    }
+    if (!externalOnly) this.assertStartable(found.plot, definition);
     const results: Array<{
       runtimeId: string;
       action: "started" | "already-running" | "failed";
@@ -298,6 +334,9 @@ export class AutomationController {
         await this.withRuntimeLock(found.plot.path, id, async () => {
           await this.waitWhileStopping(found.plot.path, id, signal);
           const before = this.process(found.plot.path, id);
+          if (before?.ownership === "external" && before.status === "running") {
+            await this.options.restoreExternalRoute?.(found.plot.path, id);
+          }
           if (before?.status === "starting" || before?.status === "running") {
             return { runtimeId: id, action: "already-running" as const };
           }
@@ -308,6 +347,12 @@ export class AutomationController {
               message: "The runtime did not finish stopping within 10 seconds.",
             };
           }
+          // A Stop queued before this lock may have detached the external
+          // runtime that originally made this request a route-only repair.
+          this.assertStartable(
+            this.findPlot(found.plot.workspaceId).plot,
+            definition,
+          );
           try {
             await this.options.start(found.plot.path, id);
             return { runtimeId: id, action: "started" as const };
@@ -326,7 +371,32 @@ export class AutomationController {
       plot: await this.describe(found.project, found.plot),
       partialFailure: results.some((result) => result.action === "failed"),
       ...(automaticAdoption ? { automaticAdoption } : {}),
+      ...(automaticRecovery ? { automaticRecovery } : {}),
     };
+  }
+
+  private async provisionWithPolicy(
+    plot: WorkspaceSnapshot,
+  ): Promise<PlotProvisionRunResult> {
+    try {
+      return await this.options.provision({
+        path: plot.path,
+        useRecoveryPolicy: true,
+      });
+    } catch (error) {
+      throw new AutomationError(
+        "PROVISIONING_REQUIRED",
+        error instanceof Error ? error.message : String(error),
+        {
+          plotId: plot.workspaceId,
+          policy: "recreate-expired-dev-deployments",
+          recovery: {
+            cli: `silvic adoption-plan --plot ${plot.workspaceId}`,
+            mcp: "plan_plot_adoption",
+          },
+        },
+      );
+    }
   }
 
   private async automaticallyAdopt(
@@ -484,25 +554,44 @@ export class AutomationController {
   }
 
   private async wait(params: Record<string, unknown>, signal: AbortSignal) {
-    assertOnly(params, ["plot", "timeoutMs"]);
+    assertOnly(params, ["plot", "runtime", "timeoutMs"]);
     const found = this.findPlot(requiredString(params, "plot"));
     const timeoutMs = optionalInteger(params, "timeoutMs", 60_000, 1, 600_000);
     const definition = await this.options.definition(found.project, found.plot);
-    if (!definition.previewUrl) {
-      throw new AutomationError(
-        "NO_PREVIEW",
-        "This Plot declares no preview runtime.",
-      );
-    }
-    const serving = Object.entries(definition.commands)
-      .filter(([, command]) => command.url === true)
-      .map(([id]) => id);
+    const requested = optionalString(params, "runtime");
+    const serving = selectRuntimeIds(definition.commands, requested).filter(
+      (id) => definition.commands[id]?.url === true,
+    );
     if (serving.length === 0) {
       throw new AutomationError(
         "NO_PREVIEW",
-        "This Plot declares no preview runtime.",
+        "The selected runtime declares no preview.",
       );
     }
+    const canonicalRuntime =
+      definition.commands["web"]?.url === true
+        ? "web"
+        : Object.keys(definition.commands).find(
+            (id) => definition.commands[id]?.url === true,
+          );
+    const initial = await this.describe(found.project, found.plot);
+    // Keep the choice stable throughout the wait, including while it starts.
+    const runtimeId =
+      requested ??
+      serving.find((id) =>
+        initial.runtimes.some(
+          (runtime) =>
+            runtime.id === id &&
+            (runtime.status === "running" || runtime.status === "starting"),
+        ),
+      ) ??
+      serving[0]!;
+    let lastProbe: {
+      runtimeId: string;
+      url?: string;
+      ready: boolean;
+      detail?: string;
+    } = { runtimeId, ready: false, detail: "Runtime is not running." };
     const now = this.options.now ?? Date.now;
     const pause =
       this.options.wait ??
@@ -514,36 +603,54 @@ export class AutomationController {
       if (signal.aborted) {
         throw new AutomationError("CANCELLED", "Operation was cancelled.");
       }
-      const byId = new Map(
-        latest.runtimes.map((runtime) => [runtime.id, runtime]),
-      );
-      const failed = serving
-        .map((id) => byId.get(id))
-        .find((runtime) => runtime?.status === "failed");
-      if (failed) {
+      const runtime = latest.runtimes.find((entry) => entry.id === runtimeId);
+      const url =
+        runtime?.url ??
+        (runtimeId === canonicalRuntime ? definition.previewUrl : undefined);
+      if (runtime?.status === "failed") {
         throw new AutomationError(
           "RUNTIME_FAILED",
-          failed.advice ??
-            `Preview runtime ${failed.id} exited with code ${failed.exitCode ?? 1}.`,
-          latest,
+          runtime.advice ??
+            `Preview runtime ${runtime.id} exited with code ${runtime.exitCode ?? 1}.`,
+          { ...latest, lastProbe },
         );
       }
-      if (
-        serving.every((id) => byId.get(id)?.status === "running") &&
-        (await this.options.probe(definition.previewUrl))
-      ) {
-        return {
-          ready: true,
-          url: definition.previewUrl,
-          durationMs: now() - startedAt,
-          plot: latest,
-        };
+      lastProbe = {
+        runtimeId,
+        ...(url ? { url } : {}),
+        ready: false,
+        detail:
+          runtime?.status !== "running"
+            ? "Runtime is not running."
+            : "No published preview URL.",
+      };
+      if (runtime?.status === "running" && url) {
+        try {
+          lastProbe = { runtimeId, url, ready: await this.options.probe(url) };
+        } catch (error) {
+          lastProbe = {
+            runtimeId,
+            url,
+            ready: false,
+            detail: error instanceof Error ? error.message : String(error),
+          };
+        }
+        if (lastProbe.ready) {
+          return {
+            ready: true,
+            runtimeId,
+            url,
+            durationMs: now() - startedAt,
+            plot: latest,
+            lastProbe,
+          };
+        }
       }
       if (now() - startedAt >= timeoutMs) {
         throw new AutomationError(
           "READINESS_TIMEOUT",
           `Preview did not become ready within ${timeoutMs} ms.`,
-          latest,
+          { ...latest, lastProbe },
         );
       }
       await abortiblePause(
@@ -608,6 +715,7 @@ export class AutomationController {
             : { exitCode: process.exitCode }),
           ...(process?.advice ? { advice: process.advice } : {}),
           ...(process?.notice ? { notice: process.notice } : {}),
+          ...(process?.routeProbe ? { routeProbe: process.routeProbe } : {}),
         };
       },
     );

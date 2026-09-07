@@ -138,7 +138,7 @@ async function main(argv: readonly string[]): Promise<void> {
       rejectOptions(values, ["json", "help", "plot", "confirm", "remedy"]);
       const result = await automationCall<ProvisionResult>("provision", {
         plot: requireOption(values.plot, "--plot"),
-        confirmPlotId: requireOption(values.confirm, "--confirm"),
+        ...(values.confirm ? { confirmPlotId: values.confirm } : {}),
         ...(values.remedy ? { remedy: provisionRemedy(values.remedy) } : {}),
       });
       output(result, values.json, formatProvisionResult(result));
@@ -183,9 +183,19 @@ async function main(argv: readonly string[]): Promise<void> {
       return;
     }
     case "preview": {
-      rejectOptions(values, ["json", "help", "plot", "timeout", "open"]);
+      rejectOptions(values, [
+        "json",
+        "help",
+        "plot",
+        "runtime",
+        "timeout",
+        "open",
+      ]);
       const plot = requireOption(values.plot, "--plot");
-      const started = await automationCall<OperationResult>("start", { plot });
+      const started = await automationCall<OperationResult>("start", {
+        plot,
+        ...(values.runtime ? { runtime: values.runtime } : {}),
+      });
       if (started.partialFailure) {
         output(
           { start: started },
@@ -199,6 +209,7 @@ async function main(argv: readonly string[]): Promise<void> {
         return;
       }
       const preview = await automationCall<WaitResult>("wait", {
+        ...(values.runtime ? { runtime: values.runtime } : {}),
         plot,
         ...(values.timeout
           ? { timeoutMs: positiveInteger(values.timeout, "--timeout") }
@@ -209,8 +220,9 @@ async function main(argv: readonly string[]): Promise<void> {
       return;
     }
     case "wait": {
-      rejectOptions(values, ["json", "help", "plot", "timeout"]);
+      rejectOptions(values, ["json", "help", "plot", "runtime", "timeout"]);
       const result = await automationCall<WaitResult>("wait", {
+        ...(values.runtime ? { runtime: values.runtime } : {}),
         plot: requireOption(values.plot, "--plot"),
         ...(values.timeout
           ? { timeoutMs: positiveInteger(values.timeout, "--timeout") }
@@ -514,7 +526,7 @@ function provisionRemedy(
 
 function writeHelp(): void {
   process.stdout.write(
-    `Silvic ${version}\n\nUsage:\n  silvic projects [--json]\n  silvic plots [--project ID] [--json]\n  silvic status --plot ID [--json]\n  silvic adoption-plan --plot ID [--scope single|family] [--json]\n  silvic adopt --plot ID [--scope single|family] --confirm STABLE_ID [--json]\n  silvic provision --plot ID --confirm STABLE_ID [--remedy convex-cli|convex-adopt|convex-recreate] [--json]\n  silvic state-plan [--json]\n  silvic state-prune --confirm PLAN_ID [--json]\n  silvic start --plot ID [--runtime ID] [--json]\n  silvic preview --plot ID [--timeout MS] [--open] [--json]\n  silvic stop --plot ID [--runtime ID] [--json]\n  silvic wait --plot ID [--timeout MS] [--json]\n  silvic logs --plot ID [--runtime ID] [--limit BYTES] [--json]\n\nPlot selectors accept a stable Plot id or an absolute Plot path. Before adoption\nor provisioning, inspect adoption-plan and confirm with its selected stable Plot\nID. Start never confirms provider changes implicitly. State pruning requires the\nexact state-plan ID and removes only listed Silvic metadata, never worktrees.\nStart and stop without --runtime apply to every declared runtime and are idempotent.\n`,
+    `Silvic ${version}\n\nUsage:\n  silvic projects [--json]\n  silvic plots [--project ID] [--json]\n  silvic status --plot ID [--json]\n  silvic adoption-plan --plot ID [--scope single|family] [--json]\n  silvic adopt --plot ID [--scope single|family] --confirm STABLE_ID [--json]\n  silvic provision --plot ID [--confirm STABLE_ID] [--remedy convex-cli|convex-adopt|convex-recreate] [--json]\n  silvic state-plan [--json]\n  silvic state-prune --confirm PLAN_ID [--json]\n  silvic start --plot ID [--runtime ID] [--json]\n  silvic preview --plot ID [--runtime ID] [--timeout MS] [--open] [--json]\n  silvic stop --plot ID [--runtime ID] [--json]\n  silvic wait --plot ID [--runtime ID] [--timeout MS] [--json]\n  silvic logs --plot ID [--runtime ID] [--limit BYTES] [--json]\n\nPlot selectors accept a stable Plot id or an absolute Plot path. Before provider changes, inspect adoption-plan\nand confirm its stable Plot ID, or use an explicitly enabled repository recovery\npolicy. State pruning requires the\nexact state-plan ID and removes only listed Silvic metadata, never worktrees.\nStart and stop without --runtime apply to every declared runtime and are idempotent.\n`,
   );
 }
 
@@ -655,10 +667,10 @@ function buildMcpServer(): McpServer {
     "provision_plot",
     {
       description:
-        "Retry provisioning for an adopted Plot after plan_plot_adoption. confirmPlotId must equal the stable Plot ID; optionally run a named offered remedy first.",
+        "Retry provisioning for an adopted Plot after plan_plot_adoption. Omit confirmation only to evaluate the repository’s explicit expired-dev recovery policy. Otherwise confirmPlotId must equal the stable Plot ID; optionally run an offered remedy.",
       inputSchema: z.object({
         plot: z.string().min(1),
-        confirmPlotId: z.string().min(1),
+        confirmPlotId: z.string().min(1).optional(),
         remedy: z
           .enum(["convex-cli", "convex-adopt", "convex-recreate"])
           .optional(),
@@ -669,7 +681,11 @@ function buildMcpServer(): McpServer {
     async ({ plot, confirmPlotId, remedy }, context) =>
       mcpCall(
         "provision",
-        { plot, confirmPlotId, ...(remedy ? { remedy } : {}) },
+        {
+          plot,
+          ...(confirmPlotId ? { confirmPlotId } : {}),
+          ...(remedy ? { remedy } : {}),
+        },
         undefined,
         context.mcpReq.signal,
       ),
@@ -747,18 +763,23 @@ function buildMcpServer(): McpServer {
     "wait_for_preview",
     {
       description:
-        "Wait until a Plot preview responds and return its canonical URL.",
+        "Wait for a preview runtime and return its published URL. Pass runtime for production signoff; otherwise choose the first active preview runtime.",
       inputSchema: z.object({
         plot: z.string().min(1),
+        runtime: z.string().min(1).optional(),
         timeoutMs: z.number().int().min(1).max(600_000).optional(),
       }),
       outputSchema,
       annotations: readOnly,
     },
-    async ({ plot, timeoutMs }, context) =>
+    async ({ plot, runtime, timeoutMs }, context) =>
       mcpCall(
         "wait",
-        { plot, ...(timeoutMs ? { timeoutMs } : {}) },
+        {
+          plot,
+          ...(runtime ? { runtime } : {}),
+          ...(timeoutMs ? { timeoutMs } : {}),
+        },
         undefined,
         context.mcpReq.signal,
       ),

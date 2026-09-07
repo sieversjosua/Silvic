@@ -57,6 +57,48 @@ afterEach(async () => {
   );
 });
 
+it("forwards the selected production runtime through CLI start and wait", async () => {
+  const requests: AutomationRequest[] = [];
+  const directory = await serve(async (request) => {
+    requests.push(request);
+    return request.method === "start"
+      ? { results: [], partialFailure: false }
+      : { ready: true, url: "https://preview.localhost" };
+  });
+  const result = await executeFile(
+    executable,
+    ["preview", "--plot", "plot_123", "--runtime", "preview", "--json"],
+    {
+      env: { ...process.env, SILVIC_AUTOMATION_DIR: directory },
+    },
+  );
+  expect(requests.map(({ method, params }) => ({ method, params }))).toEqual([
+    { method: "start", params: { plot: "plot_123", runtime: "preview" } },
+    { method: "wait", params: { plot: "plot_123", runtime: "preview" } },
+  ]);
+  expect(JSON.parse(result.stdout).result.preview.url).toBe(
+    "https://preview.localhost",
+  );
+});
+
+it("lets provision request policy evaluation without inventing a confirmation", async () => {
+  const requests: AutomationRequest[] = [];
+  const directory = await serve(async (request) => {
+    requests.push(request);
+    return {
+      provision: [],
+      runtime: { status: "not-required", durationMs: 0 },
+      readiness: { status: "not-required", durationMs: 0 },
+      failed: false,
+      partialFailure: false,
+    };
+  });
+  await executeFile(executable, ["provision", "--plot", "plot_123", "--json"], {
+    env: { ...process.env, SILVIC_AUTOMATION_DIR: directory },
+  });
+  expect(requests[0]?.params).toEqual({ plot: "plot_123" });
+});
+
 it("writes one versioned JSON document and keeps stderr clean", async () => {
   const directory = await serve(async () => ({
     roots: ["/projects"],

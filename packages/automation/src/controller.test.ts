@@ -93,6 +93,7 @@ function request(
 function controller(
   options: {
     workspace?: WorkspaceSnapshot;
+    commands?: Readonly<Record<string, PlotCommand>>;
     requiresProvisioning?: boolean;
     resources?: Readonly<Record<string, PlotResourceDefinition>>;
     planAdoption?: (request: {
@@ -116,20 +117,26 @@ function controller(
     now?: () => number;
     snapshot?: () => SilvicSnapshot;
     automaticAdoption?: boolean;
+    automaticRecovery?: boolean;
+    restoreExternalRoute?: (path: string, id: string) => Promise<boolean>;
   } = {},
 ) {
   const workspace = options.workspace ?? plot;
   const projectSnapshot = { ...project, workspaces: [workspace] };
   const currentSnapshot = { ...snapshot, projects: [projectSnapshot] };
   return new AutomationController({
+    ...(options.restoreExternalRoute
+      ? { restoreExternalRoute: options.restoreExternalRoute }
+      : {}),
     snapshot: options.snapshot ?? (() => currentSnapshot),
     roots: () => [project.rootPath],
     definition: async () => ({
-      commands,
+      commands: options.commands ?? commands,
       resources: options.resources ?? {},
       previewUrl: "https://web-issue-9-silvic.localhost",
       requiresProvisioning: options.requiresProvisioning ?? false,
       automaticAdoption: options.automaticAdoption ?? false,
+      automaticRecovery: options.automaticRecovery ?? false,
     }),
     planAdoption:
       options.planAdoption ??
@@ -1004,6 +1011,250 @@ describe("automation operations", () => {
       durationMs: 500,
     });
     expect(wait).toHaveBeenCalledOnce();
+  });
+
+  it("probes the published web URL despite an optional stopped preview and a different expected port", async () => {
+    const probe = vi.fn().mockResolvedValue(true);
+    const result = await controller({
+      commands: {
+        ...commands,
+        preview: { run: "pnpm preview", url: true, autoStart: false },
+      },
+      processes: [
+        {
+          plotPath: plot.path,
+          id: "web",
+          status: "running",
+          targetPort: 4335,
+          expectedPort: 3569,
+          url: "https://web-actual.localhost",
+        },
+      ],
+      probe,
+    }).handle(request("wait", { plot: plot.workspaceId }));
+    expect(result).toMatchObject({
+      ready: true,
+      url: "https://web-actual.localhost",
+      runtimeId: "web",
+    });
+    expect(probe).toHaveBeenCalledWith("https://web-actual.localhost");
+  });
+
+  it("waits for the explicitly selected production runtime without substituting web", async () => {
+    const probe = vi.fn().mockResolvedValue(true);
+    const processes: SupervisedCommand[] = [
+      {
+        plotPath: plot.path,
+        id: "web",
+        status: "running",
+        url: "https://web.localhost",
+      },
+      {
+        plotPath: plot.path,
+        id: "preview",
+        status: "starting",
+        url: "https://preview.localhost",
+      },
+    ];
+    let tick = 0;
+    const result = await controller({
+      commands: { ...commands, preview: { run: "pnpm preview", url: true } },
+      processes,
+      probe,
+      now: () => tick,
+      wait: async () => {
+        tick += 500;
+        processes[1]!.status = "running";
+      },
+    }).handle(request("wait", { plot: plot.workspaceId, runtime: "preview" }));
+    expect(result).toMatchObject({
+      ready: true,
+      url: "https://preview.localhost",
+    });
+    expect(probe).toHaveBeenCalledExactlyOnceWith("https://preview.localhost");
+  });
+
+  it("reports the attempted URL and last connection failure on timeout", async () => {
+    let tick = 0;
+    await expect(
+      controller({
+        processes: [
+          {
+            plotPath: plot.path,
+            id: "web",
+            status: "running",
+            url: "https://web.localhost",
+          },
+        ],
+        probe: async () => {
+          throw new Error("Connection refused");
+        },
+        now: () => tick,
+        wait: async (ms) => {
+          tick += ms;
+        },
+      }).handle(request("wait", { plot: plot.workspaceId, timeoutMs: 500 })),
+    ).rejects.toMatchObject({
+      code: "READINESS_TIMEOUT",
+      details: {
+        lastProbe: {
+          url: "https://web.localhost",
+          ready: false,
+          detail: "Connection refused",
+        },
+      },
+    });
+  });
+
+  it("restores an external web route despite failed provider provisioning without starting another process", async () => {
+    const start = vi.fn();
+    const restoreExternalRoute = vi.fn().mockResolvedValue(true);
+    const result = await controller({
+      workspace: {
+        ...plot,
+        provisioning: { status: "failed", at: "2026-09-07", steps: [] },
+      },
+      requiresProvisioning: true,
+      processes: [
+        {
+          plotPath: plot.path,
+          id: "web",
+          status: "running",
+          ownership: "external",
+          targetPort: 4399,
+        },
+      ],
+      start,
+      restoreExternalRoute,
+    }).handle(request("start", { plot: plot.workspaceId, runtime: "web" }));
+    expect(result).toMatchObject({
+      results: [{ runtimeId: "web", action: "already-running" }],
+    });
+    expect(restoreExternalRoute).toHaveBeenCalledExactlyOnceWith(
+      plot.path,
+      "web",
+    );
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it("does not turn a queued external-route repair into owned startup after detach", async () => {
+    const processes: SupervisedCommand[] = [
+      {
+        plotPath: plot.path,
+        id: "web",
+        status: "running",
+        ownership: "external",
+      },
+    ];
+    let release: (() => void) | undefined;
+    const restoreExternalRoute = vi.fn(
+      () =>
+        new Promise<boolean>((resolve) => {
+          release = () => resolve(true);
+        }),
+    );
+    const start = vi.fn();
+    const control = controller({
+      workspace: {
+        ...plot,
+        provisioning: { status: "failed", at: "2026-09-07", steps: [] },
+      },
+      requiresProvisioning: true,
+      processes,
+      start,
+      restoreExternalRoute,
+      stop: () => {
+        processes.splice(0);
+      },
+    });
+    const first = control.handle(
+      request("start", { plot: plot.workspaceId, runtime: "web" }),
+    );
+    await vi.waitFor(() => expect(restoreExternalRoute).toHaveBeenCalledOnce());
+    const stop = control.handle(
+      request("stop", { plot: plot.workspaceId, runtime: "web" }),
+    );
+    const queued = control.handle(
+      request("start", { plot: plot.workspaceId, runtime: "web" }),
+    );
+    const refused = expect(queued).rejects.toMatchObject({
+      code: "PROVISIONING_REQUIRED",
+    });
+    release?.();
+    await Promise.all([first, stop, refused]);
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it("allows provision without confirmation only through the configured recovery policy", async () => {
+    const provision = vi.fn().mockResolvedValue({
+      provision: [],
+      runtime: { status: "not-required", durationMs: 0 },
+      readiness: { status: "not-required", durationMs: 0 },
+    });
+    await controller({ automaticRecovery: true, provision }).handle(
+      request("provision", { plot: plot.workspaceId }),
+    );
+    expect(provision).toHaveBeenCalledExactlyOnceWith({
+      path: plot.path,
+      useRecoveryPolicy: true,
+    });
+    await expect(
+      controller({ provision }).handle(
+        request("provision", { plot: plot.workspaceId }),
+      ),
+    ).rejects.toMatchObject({ code: "CONFIRMATION_REQUIRED" });
+    expect(provision).toHaveBeenCalledTimes(1);
+  });
+
+  it("completes policy recovery within start and returns its audit", async () => {
+    let current: WorkspaceSnapshot = {
+      ...plot,
+      provisioning: { status: "failed", at: "2026-09-07", steps: [] },
+    };
+    const recovery: PlotProvisionRunResult = {
+      provision: [],
+      runtime: { status: "not-required", durationMs: 0 },
+      readiness: { status: "not-required", durationMs: 0 },
+      automaticRecovery: {
+        policy: "recreate-expired-dev-deployments",
+        dataLoss: true,
+        adoptedLegacyAttachment: true,
+        oldAttachment: {
+          provider: "convex",
+          team: "team",
+          project: "project",
+          deploymentKind: "dev",
+          recipeDeploymentName: "dev/plot",
+          logicalDeploymentRef: "team:project:dev/plot",
+          physicalDeploymentSlug: "old-mouse-1",
+          expiration: "in 7 days",
+        },
+      },
+    };
+    const provision = vi.fn(async () => {
+      current = {
+        ...current,
+        provisioning: { at: "2026-09-07", steps: [], status: "complete" },
+      };
+      return recovery;
+    });
+    const result = await controller({
+      automaticRecovery: true,
+      requiresProvisioning: true,
+      provision,
+      snapshot: () => ({
+        ...snapshot,
+        projects: [{ ...project, workspaces: [current] }],
+      }),
+    }).handle(request("start", { plot: plot.workspaceId, runtime: "web" }));
+    expect(provision).toHaveBeenCalledExactlyOnceWith({
+      path: plot.path,
+      useRecoveryPolicy: true,
+    });
+    expect(result).toMatchObject({
+      automaticRecovery: recovery,
+      results: [{ runtimeId: "web", action: "started" }],
+    });
   });
 
   it("returns actionable diagnostics with recent logs", async () => {

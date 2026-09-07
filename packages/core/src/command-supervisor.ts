@@ -50,6 +50,7 @@ export interface SupervisedCommand {
   advice?: string;
   /** A short local lifecycle note, such as a completed automatic recovery. */
   notice?: string;
+  routeProbe?: { url: string; at: string; status?: number; detail?: string };
   /** Restarts already spent in the current recoverable failure episode. */
   recoveryAttempts?: number;
 }
@@ -81,6 +82,8 @@ export interface StartRequest {
  * and everything it forked with it rather than orphaning a dev server.
  */
 export class CommandSupervisor {
+  private readonly starts = new Map<string, Promise<void>>();
+  private readonly externalRepairs = new Map<string, Promise<void>>();
   private readonly running = new Map<string, SupervisedCommand>();
   private readonly logs = new Map<string, WriteStream>();
   private readonly stopping = new Set<string>();
@@ -125,6 +128,88 @@ export class CommandSupervisor {
     return [...this.running.values()];
   }
 
+  async restoreExternalRoute(plotPath: string, id: string): Promise<boolean> {
+    const key = keyFor(plotPath, id);
+    const entry = this.running.get(key);
+    if (
+      entry?.ownership !== "external" ||
+      entry.status === "stopped" ||
+      entry.status === "stopping"
+    )
+      return false;
+    const pending = this.externalRepairs.get(key);
+    if (pending) {
+      await pending;
+      return true;
+    }
+    const repair = (async () => {
+      this.clearRouteHealth(key);
+      const url = entry.url ?? `https://${entry.routeName}.localhost`;
+      let routeProbe: NonNullable<SupervisedCommand["routeProbe"]>;
+      try {
+        if (
+          !entry.routeName ||
+          !entry.targetPort ||
+          !entry.externalProcessId ||
+          !this.routePublisher.restoreExternal
+        ) {
+          if (entry.routeName)
+            await this.routePublisher.remove(entry.routeName);
+          throw new Error(
+            "External route withheld: no verifiable recorded listener. Detach and start this runtime again.",
+          );
+        }
+        const result = await this.routePublisher.restoreExternal({
+          routeName: entry.routeName,
+          plotPath,
+          commandId: id,
+          port: entry.targetPort,
+          processId: entry.externalProcessId,
+        });
+        routeProbe = {
+          url,
+          at: new Date().toISOString(),
+          status: result.status,
+          ...(result.detail
+            ? { detail: result.detail }
+            : result.status >= 500
+              ? { detail: `External route responds HTTP ${result.status}.` }
+              : {}),
+        };
+      } catch (error) {
+        routeProbe = {
+          url,
+          at: new Date().toISOString(),
+          detail: error instanceof Error ? error.message : String(error),
+        };
+      }
+      // Stop/detach wins over an in-flight publication.
+      if (this.running.get(key) !== entry) {
+        if (entry.routeName) await this.routePublisher.remove(entry.routeName);
+        return;
+      }
+      const { advice: _previous, ...current } = entry;
+      this.running.set(key, {
+        ...current,
+        routeProbe,
+        ...(routeProbe.detail ? { advice: routeProbe.detail } : {}),
+      });
+      this.announce();
+      const timer = setTimeout(() => {
+        void this.restoreExternalRoute(plotPath, id);
+      }, this.options.routeHealthIntervalMs ?? 10_000);
+      timer.unref();
+      this.routeHealthTimers.set(key, timer);
+    })();
+    this.externalRepairs.set(key, repair);
+    try {
+      await repair;
+    } finally {
+      this.externalRepairs.delete(key);
+    }
+    return true;
+  }
+
   /** A failure observed on any path through the named HTTPS gate. */
   reportRouteFailure(
     routeName: string,
@@ -165,6 +250,14 @@ export class CommandSupervisor {
     );
     for (const { entry, running } of live) {
       if (
+        entry.ownership === "external" &&
+        (entry.status === "running" || entry.status === "starting")
+      ) {
+        this.running.set(keyFor(entry.plotPath, entry.id), entry);
+        await this.restoreExternalRoute(entry.plotPath, entry.id);
+        continue;
+      }
+      if (
         (entry.status !== "running" && entry.status !== "starting") ||
         entry.processId === undefined
       ) {
@@ -193,7 +286,21 @@ export class CommandSupervisor {
 
   async start(request: StartRequest): Promise<void> {
     const key = keyFor(request.plotPath, request.id);
+    const pending = this.starts.get(key);
+    if (pending) return pending;
+    const starting = this.startOnce(request);
+    this.starts.set(key, starting);
+    try {
+      await starting;
+    } finally {
+      this.starts.delete(key);
+    }
+  }
+
+  private async startOnce(request: StartRequest): Promise<void> {
+    const key = keyFor(request.plotPath, request.id);
     this.startRequests.set(key, request);
+    if (await this.restoreExternalRoute(request.plotPath, request.id)) return;
     const status = this.running.get(key)?.status;
     // A stopping command's group is still dying and still holds its port;
     // starting into that would race the corpse for the address.
@@ -470,6 +577,8 @@ export class CommandSupervisor {
       this.announce();
       if (published.ownership !== "external") {
         this.scheduleRouteHealth(key, processId);
+      } else if (published.externalProcessId !== undefined) {
+        void this.restoreExternalRoute(entry.plotPath, entry.id);
       }
     } catch (error) {
       const entry = this.running.get(key);

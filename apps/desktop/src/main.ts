@@ -297,6 +297,7 @@ const automation = new AutomationController({
   output: (plotPath, runtimeId, limit) =>
     supervisor.output(plotPath, runtimeId, limit),
   probe: probePreview,
+  restoreExternalRoute: (path, id) => supervisor.restoreExternalRoute(path, id),
 });
 
 let mainWindow: BrowserWindow | undefined;
@@ -1472,7 +1473,7 @@ async function provisionPlot(
   const packageManager =
     recipe.packageManager ??
     (await inspectRepository(workspace.path)).packageManager;
-  const remedy = request.remedy;
+  let remedy = request.remedy;
   const plot = plotNameIn(
     workspace.path,
     recipe.project,
@@ -1510,9 +1511,59 @@ async function provisionPlot(
     ...(packageManager ? { packageManager } : {}),
   };
   const storedProvisioning = settings.get("plotProvisioning")[workspace.path];
-  const convexAttachment = storedProvisioning?.attachments?.find(
+  let convexAttachment = storedProvisioning?.attachments?.find(
     (attachment) => attachment.provider === "convex",
   );
+
+  let automaticRecovery: PlotProvisionRunResult["automaticRecovery"];
+  if (request.useRecoveryPolicy) {
+    if (
+      !recipe.automaticRecovery ||
+      workspace.isPrimary ||
+      workspace.adoption?.status !== "adopted"
+    ) {
+      throw new Error(
+        "The repository policy does not authorize recovery for this Plot.",
+      );
+    }
+    const candidate = await provisioner.disposableRecoveryAttachment({
+      steps: recipe.provision,
+      resources: recipe.resources,
+      context: provisionContext,
+      otherRoots: latestSnapshot.projects.flatMap((project) =>
+        project.workspaces.map((plot) => plot.path),
+      ),
+      ...(convexAttachment ? { recorded: convexAttachment } : {}),
+    });
+    if (
+      !candidate ||
+      latestSnapshot.projects.some((project) =>
+        project.workspaces.some(
+          (other) =>
+            other.workspaceId !== workspace.workspaceId &&
+            other.provisioning?.attachments?.some(
+              (attachment) =>
+                attachment.provider === "convex" &&
+                attachment.physicalDeploymentSlug ===
+                  candidate.physicalDeploymentSlug,
+            ),
+        ),
+      )
+    ) {
+      throw new Error(
+        "Automatic recovery requires a confirmed missing, exclusively owned, expiring Convex dev deployment. Inspect the adoption plan for explicit recovery.",
+      );
+    }
+    automaticRecovery = {
+      policy: "recreate-expired-dev-deployments",
+      dataLoss: true,
+      oldAttachment: candidate,
+      adoptedLegacyAttachment: !convexAttachment,
+    };
+    convexAttachment = candidate;
+    recordServiceAttachment(workspace.path, candidate);
+    remedy = "convex-recreate";
+  }
 
   const progress = new PlotProgressReporter(
     workspace.git.branch,
@@ -1609,7 +1660,24 @@ async function provisionPlot(
       },
     );
 
-    const results = repair ? [repair, ...provision] : provision;
+    const results: ProvisionResult[] = [
+      ...(automaticRecovery?.adoptedLegacyAttachment
+        ? [
+            {
+              label:
+                "Record legacy Convex Service Attachment under repository policy",
+              command: "Silvic structured Convex attachment adoption",
+              exitCode: 0,
+              output:
+                "Recorded the selected Plot's verified missing deployment identity.",
+              durationMs: 0,
+              attachment: automaticRecovery.oldAttachment,
+            },
+          ]
+        : []),
+      ...(repair ? [repair] : []),
+      ...provision,
+    ];
     recordProvisioning(workspace.path, results);
     await paintFromGit([workspace.path]);
     const online = provisionCompleted(recipe.provision, provision)
@@ -1622,8 +1690,21 @@ async function provisionPlot(
       : blockedPlotStartup(
           "Provisioning did not complete, so runtimes were not started.",
         );
-    void refreshSnapshot(true);
-    return { provision: results, ...online };
+    if (automaticRecovery) await refreshSnapshot(true);
+    else void refreshSnapshot(true);
+    const newAttachment = provision.find((step) => step.attachment)?.attachment;
+    return {
+      provision: results,
+      ...online,
+      ...(automaticRecovery
+        ? {
+            automaticRecovery: {
+              ...automaticRecovery,
+              ...(newAttachment ? { newAttachment } : {}),
+            },
+          }
+        : {}),
+    };
   } catch (error) {
     progress.stumbled(error instanceof Error ? error.message : String(error));
     throw error;
@@ -1772,7 +1853,32 @@ async function wakePlotFromGate(wake: GateWake): Promise<void> {
       );
       if (!project) throw new Error("The plot's project is not loaded yet");
       const recipe = await readRecipe(project.rootPath);
-      await startAutoCommands(workspace.path, recipe.commands);
+      const plot = plotNameIn(
+        workspace.path,
+        recipe.project,
+        workspace.isPrimary ? undefined : workspace.git.branch,
+      );
+      const id = Object.entries(recipe.commands).find(
+        ([id, command]) =>
+          routeNameFor(
+            {
+              id,
+              ...(command.routeName ? { routeName: command.routeName } : {}),
+            },
+            plot,
+            recipe.project,
+          ) === wake.route,
+      )?.[0];
+      if (!id) return;
+      if (await supervisor.restoreExternalRoute(workspace.path, id)) return;
+      if (
+        !workspace.isPrimary &&
+        (workspace.adoption?.status !== "adopted" ||
+          (recipe.provision.length > 0 &&
+            workspace.provisioning?.status !== "complete"))
+      )
+        return;
+      await startPlotCommand(workspace.path, id, false);
       return;
     } catch {
       await new Promise((resolve) => setTimeout(resolve, 1_000));
@@ -2270,6 +2376,7 @@ async function automationPlotDefinition(
   resources: ResolvedRecipe["resources"];
   requiresProvisioning: boolean;
   automaticAdoption: boolean;
+  automaticRecovery?: boolean;
   previewUrl?: string;
 }> {
   const recipe = await readRecipe(project.rootPath);
@@ -2289,6 +2396,7 @@ async function automationPlotDefinition(
     resources: recipe.resources,
     requiresProvisioning: recipe.provision.length > 0,
     automaticAdoption: recipe.automaticAdoption,
+    automaticRecovery: recipe.automaticRecovery ?? false,
     ...(servesPreview
       ? { previewUrl: addressFor(recipe, plot, port).url }
       : {}),

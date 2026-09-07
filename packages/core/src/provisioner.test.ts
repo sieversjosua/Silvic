@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ConvexServiceAttachment } from "@silvic/contracts";
 
@@ -1005,3 +1005,119 @@ function success(stdout: string): CommandResult {
 function failure(stderr: string): CommandResult {
   return { exitCode: 1, stdout: "", stderr };
 }
+
+describe("disposable Convex recovery policy", () => {
+  async function fixture(
+    output = "DeploymentNotFound: deployment no longer exists",
+  ) {
+    const root = await plotRoot();
+    const source = await plotRoot();
+    await writeFile(
+      join(source, ".env.local"),
+      "CONVEX_DEPLOYMENT=dev:source-mouse-1 # team: syntwin, project: mono\n",
+    );
+    await writeFile(
+      join(root, ".env.local"),
+      "CONVEX_DEPLOYMENT=dev:fleet-alligator-19 # team: syntwin, project: mono\n",
+    );
+    const run = vi.fn(async () => failure(output));
+    const provisioner = new Provisioner({ run });
+    const options = {
+      steps: [{ convex: { name: "dev/{plot}", expiration: "in 7 days" } }],
+      resources: {
+        convex: {
+          provider: "convex" as const,
+          kind: "deployment" as const,
+          isolation: "isolated" as const,
+        },
+      },
+      context: { ...context(root), sourceRoot: source },
+      otherRoots: [source],
+    };
+    return { root, source, run, provisioner, options };
+  }
+
+  it("records a legacy identity only after a physical deployment absence check", async () => {
+    const { run, provisioner, options } = await fixture();
+    await expect(
+      provisioner.disposableRecoveryAttachment(options),
+    ).resolves.toEqual(storedConvexAttachment());
+    expect(run).toHaveBeenCalledWith(
+      expect.objectContaining({
+        arguments: [
+          "--yes",
+          "convex@1.42.3",
+          "env",
+          "list",
+          "--names-only",
+          "--deployment",
+          "fleet-alligator-19",
+        ],
+        cwd: options.context.sourceRoot,
+      }),
+    );
+  });
+
+  it.each([
+    "AuthenticationFailed: Invalid Convex deploy key",
+    "Schema validation failed",
+    "Network timeout",
+    "ProjectNotFound",
+  ])("does not infer absence from %s", async (output) => {
+    const { provisioner, options } = await fixture(output);
+    await expect(
+      provisioner.disposableRecoveryAttachment(options),
+    ).resolves.toBeUndefined();
+  });
+
+  it("rejects an attachment also selected by the source checkout", async () => {
+    const { source, run, provisioner, options } = await fixture();
+    await writeFile(
+      join(source, ".env.local"),
+      "CONVEX_DEPLOYMENT=dev:fleet-alligator-19 # team: syntwin, project: mono\n",
+    );
+    await expect(
+      provisioner.disposableRecoveryAttachment(options),
+    ).resolves.toBeUndefined();
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("rejects primary, shared, durable, and ambiguous recovery before accessing the provider", async () => {
+    const { run, provisioner, options } = await fixture();
+    await expect(
+      provisioner.disposableRecoveryAttachment({
+        ...options,
+        context: { ...options.context, root: options.context.sourceRoot },
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      provisioner.disposableRecoveryAttachment({
+        ...options,
+        resources: {
+          convex: { ...options.resources.convex, isolation: "shared" },
+        },
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      provisioner.disposableRecoveryAttachment({
+        ...options,
+        steps: [{ convex: { name: "dev/{plot}" } }],
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      provisioner.disposableRecoveryAttachment({
+        ...options,
+        steps: [...options.steps, ...options.steps],
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      provisioner.disposableRecoveryAttachment({
+        ...options,
+        recorded: storedConvexAttachment({
+          physicalDeploymentSlug: "another-mouse-12",
+        }),
+      }),
+    ).resolves.toBeUndefined();
+    expect(run).not.toHaveBeenCalled();
+  });
+});

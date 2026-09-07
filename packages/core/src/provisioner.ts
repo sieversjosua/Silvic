@@ -7,6 +7,7 @@ import {
   type ProvisionRemedyId,
   type ProvisionResult,
   type ProvisionStep,
+  type PlotResourceDefinition,
 } from "@silvic/contracts";
 
 import type { CommandRunner } from "./command-runner";
@@ -30,6 +31,41 @@ export class Provisioner {
   constructor(private readonly runner: CommandRunner) {
     this.convexProvisioner = new ConvexProvisioner(runner);
     this.workosProvisioner = new WorkosProvisioner(runner);
+  }
+
+  async disposableRecoveryAttachment(options: {
+    steps: readonly ProvisionStep[];
+    resources: Readonly<Record<string, PlotResourceDefinition>>;
+    context: ProvisionContext;
+    otherRoots: readonly string[];
+    recorded?: ConvexServiceAttachment;
+  }): Promise<ConvexServiceAttachment | undefined> {
+    const convex = options.steps.filter(isConvexStep);
+    if (
+      convex.length !== 1 ||
+      options.steps.some(
+        (step) =>
+          !isConvexStep(step) &&
+          !isWorkosStep(step) &&
+          step.providerChanges !== false,
+      )
+    )
+      return undefined;
+    const resources = Object.values(options.resources);
+    if (
+      !resources.some(
+        (resource) =>
+          resource.provider === "convex" && resource.isolation === "isolated",
+      ) ||
+      resources.some((resource) => resource.isolation !== "isolated")
+    )
+      return undefined;
+    return this.convexProvisioner.missingDisposableAttachment(
+      convex[0]!,
+      options.context,
+      options.otherRoots,
+      options.recorded,
+    );
   }
 
   async adoptConvexAttachment(

@@ -240,6 +240,7 @@ describe("CommandSupervisor", () => {
               });
           }),
       ),
+      restoreExternal: vi.fn().mockResolvedValue({ status: 500 }),
       improve: vi.fn().mockResolvedValue(undefined),
       healthy: vi.fn().mockResolvedValue(true),
       remove: vi.fn().mockResolvedValue(undefined),
@@ -292,6 +293,57 @@ describe("CommandSupervisor", () => {
     supervisor.stop(logDirectory, "web");
     expect(supervisor.list()).toEqual([]);
     expect(routePublisher.remove).toHaveBeenCalledWith("web-degraded");
+  });
+
+  it("restores persisted external routes, coalesces wake requests, and lets detach win", async () => {
+    const logDirectory = await mkdtemp(join(tmpdir(), "silvic-supervisor-"));
+    temporaryDirectories.push(logDirectory);
+    const restoreExternal = vi.fn().mockResolvedValue({ status: 200 });
+    const remove = vi.fn().mockResolvedValue(undefined);
+    const publish = vi.fn();
+    const supervisor = new CommandSupervisor({
+      logDirectory,
+      onChange: () => {},
+      routePublisher: {
+        publish,
+        restoreExternal,
+        remove,
+        improve: async () => undefined,
+        healthy: async () => true,
+      },
+    });
+    await supervisor.adopt([
+      {
+        plotPath: logDirectory,
+        id: "web",
+        status: "running",
+        ownership: "external",
+        externalProcessId: 42,
+        targetPort: 4399,
+        expectedPort: 6248,
+        routeName: "web-restored",
+        url: "https://web-restored.localhost",
+      },
+    ]);
+    expect(supervisor.list()[0]).toMatchObject({
+      routeProbe: { url: "https://web-restored.localhost", status: 200 },
+    });
+    let finish: ((value: { status: number }) => void) | undefined;
+    restoreExternal.mockImplementation(
+      () =>
+        new Promise<{ status: number }>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const wake = supervisor.restoreExternalRoute(logDirectory, "web");
+    const anotherWake = supervisor.restoreExternalRoute(logDirectory, "web");
+    expect(restoreExternal).toHaveBeenCalledTimes(2);
+    supervisor.stop(logDirectory, "web");
+    finish?.({ status: 200 });
+    await Promise.all([wake, anotherWake]);
+    expect(supervisor.list()).toEqual([]);
+    expect(remove).toHaveBeenLastCalledWith("web-restored");
+    expect(publish).not.toHaveBeenCalled();
   });
 
   it("turns an unverifiable duplicate server into an actionable failure", async () => {

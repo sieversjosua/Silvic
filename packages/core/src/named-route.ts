@@ -93,6 +93,13 @@ export interface NamedRoutePublisher {
     routeName: string;
     port: number;
   }): Promise<RouteDiagnosis>;
+  restoreExternal?(request: {
+    routeName: string;
+    plotPath: string;
+    commandId: string;
+    processId: number;
+    port: number;
+  }): Promise<{ status: number; detail?: string }>;
   remove(routeName: string): Promise<void>;
 }
 
@@ -304,6 +311,56 @@ export class GateRoutePublisher implements NamedRoutePublisher {
       }
       await this.wait(Math.min(250, Math.max(0, deadline - this.now())));
     }
+  }
+
+  async restoreExternal(request: {
+    routeName: string;
+    plotPath: string;
+    commandId: string;
+    processId: number;
+    port: number;
+  }): Promise<{ status: number; detail?: string }> {
+    const identity = await this.identify(
+      {
+        hostname: "127.0.0.1",
+        port: request.port,
+        processId: request.processId,
+      },
+      request.plotPath,
+    );
+    if (identity.verdict !== "verified") {
+      await this.remove(request.routeName);
+      throw new Error(`External route withheld: ${identity.detail}`);
+    }
+    for (const host of identity.families) {
+      const direct = await this.probe(
+        `http://${host === "::1" ? "[::1]" : host}:${request.port}/`,
+      );
+      if (!direct) continue;
+      await this.link.set({
+        name: request.routeName,
+        host,
+        port: request.port,
+        plotPath: request.plotPath,
+        commandId: request.commandId,
+      });
+      this.families.set(request.routeName, host);
+      const named = await this.probe(`https://${request.routeName}.localhost/`);
+      if (
+        !named ||
+        named.status !== direct.status ||
+        mediaType(named.contentType) !== mediaType(direct.contentType)
+      ) {
+        return {
+          status: named?.status ?? 0,
+          detail: `External named route answered ${named ? `HTTP ${named.status}` : "no HTTP response"}; it did not match the verified listener on port ${request.port} (HTTP ${direct.status}).`,
+        };
+      }
+      return { status: named.status };
+    }
+    throw new Error(
+      `External listener on port ${request.port} did not answer HTTP.`,
+    );
   }
 
   async healthy({

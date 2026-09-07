@@ -29522,7 +29522,10 @@ var recipeSchema = external_exports.object({
   project: external_exports.string().min(1).max(120).optional(),
   packageManager: packageManagerSchema.optional(),
   plots: external_exports.object({ directory: external_exports.string().min(1).max(400).optional() }).strict().optional(),
-  automation: external_exports.object({ adoptDisposablePlots: external_exports.boolean().default(false) }).strict().optional(),
+  automation: external_exports.object({
+    adoptDisposablePlots: external_exports.boolean().default(false),
+    recreateExpiredDevDeployments: external_exports.boolean().optional()
+  }).strict().optional(),
   commands: external_exports.record(
     external_exports.string().regex(/^[a-z][a-z0-9-]*$/).max(60),
     plotCommandSchema
@@ -29591,7 +29594,9 @@ var pullRequestLookupRequestSchema = external_exports.object({
 var plotProvisionRequestSchema = external_exports.object({
   path: external_exports.string().min(1),
   /** Runs before the recipe, when a failure named a repair Silvic can make. */
-  remedy: provisionRemedyIdSchema.optional()
+  remedy: provisionRemedyIdSchema.optional(),
+  /** Request evaluation of the trusted repository policy; never authorizes arbitrary changes. */
+  useRecoveryPolicy: external_exports.boolean().optional()
 }).strict();
 var plotAdoptionPlanRequestSchema = external_exports.object({
   workspaceId: external_exports.string().min(1).max(200),
@@ -29630,7 +29635,7 @@ var codexEnvironmentRequestSchema = external_exports.object({
 // package.json
 var package_default = {
   name: "@silvic/cli",
-  version: "0.1.62",
+  version: "0.1.63",
   description: "Non-interactive runtime and preview control for Silvic",
   repository: "https://github.com/sieversjosua/Silvic",
   license: "MIT",
@@ -29764,7 +29769,7 @@ async function main(argv) {
       rejectOptions(values, ["json", "help", "plot", "confirm", "remedy"]);
       const result = await automationCall("provision", {
         plot: requireOption(values.plot, "--plot"),
-        confirmPlotId: requireOption(values.confirm, "--confirm"),
+        ...values.confirm ? { confirmPlotId: values.confirm } : {},
         ...values.remedy ? { remedy: provisionRemedy(values.remedy) } : {}
       });
       output(result, values.json, formatProvisionResult(result));
@@ -29807,9 +29812,19 @@ async function main(argv) {
       return;
     }
     case "preview": {
-      rejectOptions(values, ["json", "help", "plot", "timeout", "open"]);
+      rejectOptions(values, [
+        "json",
+        "help",
+        "plot",
+        "runtime",
+        "timeout",
+        "open"
+      ]);
       const plot = requireOption(values.plot, "--plot");
-      const started = await automationCall("start", { plot });
+      const started = await automationCall("start", {
+        plot,
+        ...values.runtime ? { runtime: values.runtime } : {}
+      });
       if (started.partialFailure) {
         output(
           { start: started },
@@ -29822,6 +29837,7 @@ async function main(argv) {
         return;
       }
       const preview = await automationCall("wait", {
+        ...values.runtime ? { runtime: values.runtime } : {},
         plot,
         ...values.timeout ? { timeoutMs: positiveInteger(values.timeout, "--timeout") } : {}
       });
@@ -29830,8 +29846,9 @@ async function main(argv) {
       return;
     }
     case "wait": {
-      rejectOptions(values, ["json", "help", "plot", "timeout"]);
+      rejectOptions(values, ["json", "help", "plot", "runtime", "timeout"]);
       const result = await automationCall("wait", {
+        ...values.runtime ? { runtime: values.runtime } : {},
         plot: requireOption(values.plot, "--plot"),
         ...values.timeout ? { timeoutMs: positiveInteger(values.timeout, "--timeout") } : {}
       });
@@ -29988,18 +30005,18 @@ Usage:
   silvic status --plot ID [--json]
   silvic adoption-plan --plot ID [--scope single|family] [--json]
   silvic adopt --plot ID [--scope single|family] --confirm STABLE_ID [--json]
-  silvic provision --plot ID --confirm STABLE_ID [--remedy convex-cli|convex-adopt|convex-recreate] [--json]
+  silvic provision --plot ID [--confirm STABLE_ID] [--remedy convex-cli|convex-adopt|convex-recreate] [--json]
   silvic state-plan [--json]
   silvic state-prune --confirm PLAN_ID [--json]
   silvic start --plot ID [--runtime ID] [--json]
-  silvic preview --plot ID [--timeout MS] [--open] [--json]
+  silvic preview --plot ID [--runtime ID] [--timeout MS] [--open] [--json]
   silvic stop --plot ID [--runtime ID] [--json]
-  silvic wait --plot ID [--timeout MS] [--json]
+  silvic wait --plot ID [--runtime ID] [--timeout MS] [--json]
   silvic logs --plot ID [--runtime ID] [--limit BYTES] [--json]
 
-Plot selectors accept a stable Plot id or an absolute Plot path. Before adoption
-or provisioning, inspect adoption-plan and confirm with its selected stable Plot
-ID. Start never confirms provider changes implicitly. State pruning requires the
+Plot selectors accept a stable Plot id or an absolute Plot path. Before provider changes, inspect adoption-plan
+and confirm its stable Plot ID, or use an explicitly enabled repository recovery
+policy. State pruning requires the
 exact state-plan ID and removes only listed Silvic metadata, never worktrees.
 Start and stop without --runtime apply to every declared runtime and are idempotent.
 `
@@ -30131,10 +30148,10 @@ function buildMcpServer() {
   server.registerTool(
     "provision_plot",
     {
-      description: "Retry provisioning for an adopted Plot after plan_plot_adoption. confirmPlotId must equal the stable Plot ID; optionally run a named offered remedy first.",
+      description: "Retry provisioning for an adopted Plot after plan_plot_adoption. Omit confirmation only to evaluate the repository\u2019s explicit expired-dev recovery policy. Otherwise confirmPlotId must equal the stable Plot ID; optionally run an offered remedy.",
       inputSchema: external_exports.object({
         plot: external_exports.string().min(1),
-        confirmPlotId: external_exports.string().min(1),
+        confirmPlotId: external_exports.string().min(1).optional(),
         remedy: external_exports.enum(["convex-cli", "convex-adopt", "convex-recreate"]).optional()
       }),
       outputSchema,
@@ -30142,7 +30159,11 @@ function buildMcpServer() {
     },
     async ({ plot, confirmPlotId, remedy }, context) => mcpCall(
       "provision",
-      { plot, confirmPlotId, ...remedy ? { remedy } : {} },
+      {
+        plot,
+        ...confirmPlotId ? { confirmPlotId } : {},
+        ...remedy ? { remedy } : {}
+      },
       void 0,
       context.mcpReq.signal
     )
@@ -30211,17 +30232,22 @@ function buildMcpServer() {
   server.registerTool(
     "wait_for_preview",
     {
-      description: "Wait until a Plot preview responds and return its canonical URL.",
+      description: "Wait for a preview runtime and return its published URL. Pass runtime for production signoff; otherwise choose the first active preview runtime.",
       inputSchema: external_exports.object({
         plot: external_exports.string().min(1),
+        runtime: external_exports.string().min(1).optional(),
         timeoutMs: external_exports.number().int().min(1).max(6e5).optional()
       }),
       outputSchema,
       annotations: readOnly
     },
-    async ({ plot, timeoutMs }, context) => mcpCall(
+    async ({ plot, runtime, timeoutMs }, context) => mcpCall(
       "wait",
-      { plot, ...timeoutMs ? { timeoutMs } : {} },
+      {
+        plot,
+        ...runtime ? { runtime } : {},
+        ...timeoutMs ? { timeoutMs } : {}
+      },
       void 0,
       context.mcpReq.signal
     )

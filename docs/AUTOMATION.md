@@ -73,6 +73,10 @@ attachment without signalling the external process.
 
 Start fails closed for a non-primary Plot until it has been adopted and every
 provisioning step required by its current recipe has completed successfully.
+An already attached external runtime can have its route verified and restored
+with `start --runtime web` even when provider provisioning has failed; that
+operation does not launch a process. Status includes its last `routeProbe`
+(timestamp, URL, result or reason), and Stop detaches the route.
 CLI and MCP callers recover without opening the desktop UI, but recovery is a
 separate, explicit operation:
 
@@ -128,11 +132,11 @@ Shared, manually managed, non-expiring, or mismatched deployments are never
 replaced. The failed step instead gives a manual recovery direction.
 
 The MCP equivalents are `plan_plot_adoption`, `adopt_plot`, and
-`provision_plot`. Both mutation tools require `confirmPlotId` to equal the
-selected stable Plot ID. Results retain every member and provisioning step and
-report `failed` and `partialFailure` separately. Starting through CLI or MCP
-never confirms provider changes implicitly. This guard applies equally to one
-named runtime and to starting every declared runtime.
+`provision_plot`. Adoption requires `confirmPlotId` to equal the
+selected stable Plot ID. Provisioning uses the same confirmation unless the
+repository explicitly enables the recovery policy below. Results retain every member and provisioning step and
+report `failed` and `partialFailure` separately. Explicit repository policies
+are evaluated separately from stable-ID confirmation.
 
 ## Disposable Plot policy
 
@@ -163,6 +167,48 @@ The start result includes `automaticAdoption.selectedPlotId`, the evaluated
 plan, and the member result. A blocked policy remains `ADOPTION_REQUIRED` and
 returns its reasons. Without the repository opt-in, behavior is unchanged.
 
+## Expired dev deployment recovery
+
+A trusted repository can separately opt into recovery of adopted Plots:
+
+```json
+{
+  "automation": { "recreateExpiredDevDeployments": true },
+  "resources": {
+    "convex": {
+      "provider": "convex",
+      "kind": "deployment",
+      "isolation": "isolated"
+    }
+  },
+  "provision": [
+    { "convex": { "name": "dev/{plot}", "expiration": "in 7 days" } }
+  ]
+}
+```
+
+When provisioning has failed, `start_runtimes` evaluates this policy before
+starting owned processes. `provision_plot` without `confirmPlotId` (or
+`silvic provision --plot ID --json`) explicitly requests the same evaluation.
+Silvic records a legacy attachment and recreates it within that request only
+when the selected non-primary Plot is adopted, its recipe declares exactly one
+expiring Plot-specific Convex dev deployment, all resources are isolated, and
+no other known workspace selects or records that physical deployment. Shell
+steps must declare `providerChanges: false`.
+
+The pinned Convex CLI checks the physical deployment with the source checkout's
+existing credentials. Only `DeploymentNotFound` authorizes replacement; a
+rejected key, missing project, schema error, or network failure does not.
+Ambiguous identity and shared, primary, production or non-expiring deployments
+retain explicit recovery. The policy is disabled by default and setting it to
+`false` restores that behavior.
+
+The result includes executed provisioning steps and an `automaticRecovery`
+audit with `policy`, `dataLoss: true`, `oldAttachment`, `newAttachment` when
+created, and `adoptedLegacyAttachment`. Start retains the complete provisioning
+result under its `automaticRecovery` field. No conversational confirmation is
+needed after this policy authorizes the operation.
+
 ## Workspace-state diagnostics
 
 State reconciliation is inspect-first and metadata-only:
@@ -183,9 +229,18 @@ Session, process, or provider resource. See the
 safety boundaries.
 
 `preview` combines start and wait, prints the canonical URL, and optionally
-opens it with `--open`. `wait` has no start side effect. It waits until every
-serving runtime reports running and the canonical preview URL answers, then
-prints that canonical URL.
+opens it with `--open`. Both accept `--runtime ID`; MCP `wait_for_preview`
+accepts the same `runtime` selector as `start_runtimes`. For production signoff,
+select the production runtime on both calls, for example
+`silvic preview --plot plot_123 --runtime preview --json`.
+
+`wait` has no start side effect. It waits for the selected runtime and probes
+its published URL, including when its actual target port differs from the
+reserved port. Without a selector it chooses the first running or starting
+preview runtime in declaration order, otherwise the first declared preview.
+Optional stopped runtimes do not block it. The choice stays fixed during the
+wait. Timeout details include `lastProbe` with the runtime ID, attempted URL,
+readiness result, and any connection error.
 
 ## Codex environment actions
 
