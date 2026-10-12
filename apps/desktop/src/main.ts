@@ -164,6 +164,7 @@ import {
   type RuntimePortReservations,
 } from "./runtime-reservations";
 import { WorkspaceStateService } from "./workspace-state";
+import { IdlePreviews } from "./idle-previews";
 
 interface Settings {
   roots: string[];
@@ -180,6 +181,7 @@ interface Settings {
   plotProvisioning: Record<string, PlotProvisioning>;
   /** Whether a plot's commands outlive the window that started them. */
   keepCommandsRunning: boolean;
+  previewIdleMinutes: number;
   /** Plugin version whose refreshed copy still needs a full Codex restart. */
   codexPluginRestartRequiredVersion: string | null;
   /** What was left running, so a new window can take it back. */
@@ -217,6 +219,7 @@ const teardownService = new TeardownService(runner);
 const workspaceRegistry = new WorkspaceRegistry();
 let runtimeObservationRefreshTimer: NodeJS.Timeout | undefined;
 let stopSessionRefreshLoop: (() => void) | undefined;
+let idlePreviews: IdlePreviews | undefined;
 let lastSupervisedPaths = new Set<string>();
 const pendingRuntimeObservationPaths = new Set<string>();
 const pendingConvexAttachmentChecks = new Set<string>();
@@ -231,6 +234,7 @@ const supervisor = new CommandSupervisor({
     // Written down as it changes, so a window that closes does not take the
     // knowledge of what is running with it.
     settings.set("runningCommands", [...processes]);
+    idlePreviews?.synchronize();
     mainWindow?.webContents.send(ipcChannels.plotCommandsChanged, processes);
     connectors.invalidate("local-context");
     const nextPaths = new Set(
@@ -261,6 +265,7 @@ const settings = new Store<Settings>({
     runtimePorts: {},
     plotProvisioning: {},
     keepCommandsRunning: true,
+    previewIdleMinutes: 30,
     codexPluginRestartRequiredVersion: null,
     runningCommands: [],
   },
@@ -379,6 +384,23 @@ if (!app.requestSingleInstanceLock()) {
     void reconcileCodexPluginAtStartup();
     scheduleAutomaticUpdateChecks();
     await paintFromGit(settings.get("roots"), "replace");
+    idlePreviews = new IdlePreviews({
+      minutes: () => settings.get("previewIdleMinutes"),
+      commands: () => supervisor.list(),
+      routes: async () => (await gate.client.status())?.routes,
+      protectedPaths: async () => {
+        const paths = supervisor
+          .list()
+          .map((entry) => normalize(entry.plotPath));
+        return activeHarnessSessionWorkspaceIds(
+          paths.map((path) => ({ workspaceId: path, path })),
+          await readActiveHarnessSessions(runner),
+        );
+      },
+      runner,
+      stop: (command) => supervisor.stop(command.plotPath, command.id),
+    });
+    idlePreviews.synchronize();
     void refreshConnectorObservations();
     stopSessionRefreshLoop = startSessionRefreshLoop({
       isVisible: () => rendererVisible,
@@ -510,6 +532,7 @@ async function showPluginDialog({
 }
 
 app.on("before-quit", () => {
+  idlePreviews?.close();
   void automationServer?.close();
   automationServer = undefined;
   rootWatchers.forEach((watcher) => watcher.close());
@@ -682,6 +705,19 @@ function registerIpc(): void {
     if (typeof keep !== "boolean") throw new Error("Invalid setting");
     settings.set("keepCommandsRunning", keep);
     return keep;
+  });
+  ipcMain.handle(ipcChannels.previewIdleGet, (event) => {
+    assertTrustedSender(event);
+    return settings.get("previewIdleMinutes");
+  });
+  ipcMain.handle(ipcChannels.previewIdleSet, (event, minutes: unknown) => {
+    assertTrustedSender(event);
+    if (typeof minutes !== "number" || ![0, 15, 30, 60].includes(minutes)) {
+      throw new Error("Invalid preview idle timeout");
+    }
+    settings.set("previewIdleMinutes", minutes);
+    idlePreviews?.synchronize();
+    return minutes;
   });
   ipcMain.handle(ipcChannels.plotCommandStart, async (event, request) => {
     assertTrustedSender(event);

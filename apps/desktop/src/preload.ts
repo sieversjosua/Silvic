@@ -53,6 +53,9 @@ const api: SilvicDesktopApi = {
   getKeepCommandsRunning: () => ipcRenderer.invoke(ipcChannels.keepRunningGet),
   setKeepCommandsRunning: (keep: boolean) =>
     ipcRenderer.invoke(ipcChannels.keepRunningSet, keep),
+  getPreviewIdleMinutes: () => ipcRenderer.invoke(ipcChannels.previewIdleGet),
+  setPreviewIdleMinutes: (minutes: number) =>
+    ipcRenderer.invoke(ipcChannels.previewIdleSet, minutes),
   startPlotCommand: (request: PlotCommandRequest) =>
     ipcRenderer.invoke(ipcChannels.plotCommandStart, request),
   stopPlotCommand: (request: PlotCommandRequest) =>

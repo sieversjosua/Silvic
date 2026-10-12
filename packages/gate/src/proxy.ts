@@ -56,6 +56,12 @@ export function createRequestHandler(context: ProxyContext) {
       respondHtml(response, 503, holdingPage(route));
       return;
     }
+    // Supervisor health probes must not keep an unused preview awake.
+    if (request.headers["x-silvic-health-check"] !== "1") {
+      const finish = context.store.beginActivity(route.name);
+      response.once("finish", finish);
+      response.once("close", finish);
+    }
     forward(route, route.port, request, response, context);
   };
 }
@@ -221,12 +227,16 @@ export function createUpgradeHandler(context: ProxyContext) {
       client.destroy();
       return;
     }
+    const finish = context.store.beginActivity(route.name);
+    client.once("close", finish);
     const upstream = connectTcp({
       host: route.host ?? "127.0.0.1",
       port: route.port,
     });
     client.once("error", () => upstream.destroy());
+    client.once("close", () => upstream.destroy());
     upstream.once("error", () => client.destroy());
+    upstream.once("close", () => client.destroy());
     upstream.once("connect", () => {
       const headers = forwardedHeaders(
         request.headers,

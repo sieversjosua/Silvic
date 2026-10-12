@@ -801,7 +801,11 @@ function requestProbe(
         ...(target.port ? { port: target.port } : {}),
         path: `${target.pathname}${target.search}`,
         method,
-        headers: { connection: "close", "accept-encoding": "identity" },
+        headers: {
+          connection: "close",
+          "accept-encoding": "identity",
+          "x-silvic-health-check": "1",
+        },
         ...(target.protocol === "https:" && hostname.endsWith(".localhost")
           ? { rejectUnauthorized: false }
           : {}),

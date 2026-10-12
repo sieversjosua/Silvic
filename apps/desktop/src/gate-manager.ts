@@ -324,7 +324,11 @@ export class GateManager {
           port: 443,
           servername: target.hostname,
           ca: authority,
-          headers: { host: target.hostname, connection: "close" },
+          headers: {
+            host: target.hostname,
+            connection: "close",
+            "x-silvic-health-check": "1",
+          },
           path: "/",
           method: "GET",
         },

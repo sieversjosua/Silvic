@@ -15,6 +15,7 @@ import {
 import { request as httpsRequest } from "node:https";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { connect as connectTls } from "node:tls";
 
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -37,6 +38,48 @@ import { controlSocketPath } from "./state-dir";
 const temporary = () => mkdtempSync(join(tmpdir(), "silvic-gate-test-"));
 
 describe("RouteStore", () => {
+  it("tracks live activity without writing it to disk or counting it twice", () => {
+    const directory = temporary();
+    let now = 1_000;
+    try {
+      const store = new RouteStore(directory, () => new Date(now));
+      store.set({ name: "web-idle", host: "127.0.0.1", port: 4321 });
+      now = 2_000;
+      const finish = store.beginActivity("web-idle");
+      expect(store.list()[0]).toMatchObject({
+        lastActivityAt: 2_000,
+        activeConnections: 1,
+      });
+      now = 3_000;
+      // Republishing the same upstream is not user activity.
+      store.set({ name: "web-idle", host: "127.0.0.1", port: 4321 });
+      expect(store.list()[0]).toMatchObject({
+        lastActivityAt: 2_000,
+        activeConnections: 1,
+      });
+      finish();
+      finish();
+      expect(store.list()[0]).toMatchObject({
+        lastActivityAt: 3_000,
+        activeConnections: 0,
+      });
+      expect(
+        readFileSync(join(directory, "routes.json"), "utf8"),
+      ).not.toContain("lastActivityAt");
+      store.clearUpstream("web-idle");
+      expect(store.list()[0]?.lastActivityAt).toBeUndefined();
+      expect(store.list()[0]?.port).toBeUndefined();
+      now = 4_000;
+      store.set({ name: "web-idle", host: "127.0.0.1", port: 4322 });
+      expect(store.list()[0]).toMatchObject({
+        lastActivityAt: 4_000,
+        activeConnections: 0,
+      });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it("persists routes across instances and tolerates garbage", () => {
     const directory = temporary();
     try {
@@ -400,7 +443,12 @@ describe("gate daemon", () => {
     rmSync(directory, { recursive: true, force: true });
   });
 
-  const get = (host: string, path = "/", port = gate.httpsPort) =>
+  const get = (
+    host: string,
+    path = "/",
+    port = gate.httpsPort,
+    headers: IncomingHttpHeaders = {},
+  ) =>
     new Promise<{ status: number; headers: IncomingHttpHeaders; body: string }>(
       (resolve, reject) => {
         const request = httpsRequest(
@@ -409,7 +457,7 @@ describe("gate daemon", () => {
             port,
             path,
             servername: host,
-            headers: { host },
+            headers: { host, ...headers },
             ca: rootCertificate,
           },
           (response) => {
@@ -482,6 +530,99 @@ describe("gate daemon", () => {
     expect(reply.headers.location).toBe(
       "https://web-live-shop.localhost/after",
     );
+  });
+
+  it("reports browser activity but ignores supervisor and route-status probes", async () => {
+    const client = new GateClient({ socketPath: controlSocketPath(directory) });
+    try {
+      await client.routeSet({
+        name: "web-idle-shop",
+        host: "127.0.0.1",
+        port: upstreamPort,
+        plotPath: "/tmp/idle-plot",
+        commandId: "web",
+      });
+      const before = (await client.status())?.routes.find(
+        (route) => route.name === "web-idle-shop",
+      );
+      await get("web-idle-shop.localhost", "/", gate.httpsPort, {
+        "x-silvic-health-check": "1",
+      });
+      await get("web-idle-shop.localhost", "/__silvic/route-status");
+      const probed = (await client.status())?.routes.find(
+        (route) => route.name === "web-idle-shop",
+      );
+      expect(probed?.lastActivityAt).toBe(before?.lastActivityAt);
+      await get("web-idle-shop.localhost");
+      const visited = (await client.status())?.routes.find(
+        (route) => route.name === "web-idle-shop",
+      );
+      expect(visited?.lastActivityAt).toBeGreaterThanOrEqual(
+        before?.lastActivityAt ?? 0,
+      );
+      expect(visited?.activeConnections).toBe(0);
+    } finally {
+      client.close();
+    }
+  });
+
+  it("protects an open WebSocket and releases it when the browser closes", async () => {
+    const client = new GateClient({ socketPath: controlSocketPath(directory) });
+    const sockets = new Set<import("node:stream").Duplex>();
+    const webSocketServer = createHttpServer();
+    webSocketServer.on("upgrade", (_request, socket) => {
+      sockets.add(socket);
+      socket.once("close", () => sockets.delete(socket));
+      socket.write(
+        "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n",
+      );
+    });
+    await new Promise<void>((resolve) =>
+      webSocketServer.listen(0, "127.0.0.1", resolve),
+    );
+    const address = webSocketServer.address();
+    if (!address || typeof address === "string")
+      throw new Error("Missing test port");
+    const browser = connectTls({
+      host: "127.0.0.1",
+      port: gate.httpsPort,
+      servername: "web-ws-shop.localhost",
+      ca: rootCertificate,
+    });
+    try {
+      await client.routeSet({
+        name: "web-ws-shop",
+        host: "127.0.0.1",
+        port: address.port,
+      });
+      await new Promise<void>((resolve, reject) => {
+        browser.once("error", reject);
+        browser.once("data", () => resolve());
+        browser.write(
+          "GET / HTTP/1.1\r\nHost: web-ws-shop.localhost\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n",
+        );
+      });
+      expect(
+        (await client.status())?.routes.find(
+          (route) => route.name === "web-ws-shop",
+        )?.activeConnections,
+      ).toBe(1);
+      browser.destroy();
+      await vi.waitFor(async () => {
+        expect(
+          (await client.status())?.routes.find(
+            (route) => route.name === "web-ws-shop",
+          )?.activeConnections,
+        ).toBe(0);
+      });
+    } finally {
+      browser.destroy();
+      client.close();
+      for (const socket of sockets) socket.destroy();
+      await new Promise<void>((resolve) =>
+        webSocketServer.close(() => resolve()),
+      );
+    }
   });
 
   it("hides a stale Vite failure behind a self-refreshing recovery page", async () => {
