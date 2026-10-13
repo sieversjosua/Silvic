@@ -722,3 +722,35 @@ async function executeFailure(args: readonly string[], directory: string) {
     };
   }
 }
+
+it("requires an exact artifact confirmation and forwards the separate cleanup API", async () => {
+  const requests: AutomationRequest[] = [];
+  const directory = await serve(async (request) => {
+    requests.push(request);
+    return {
+      planId: "artifacts_exact",
+      routes: [],
+      files: [],
+      retentionDays: 30,
+    };
+  });
+  const env = { ...process.env, SILVIC_AUTOMATION_DIR: directory };
+  await executeFile(executable, ["artifacts-plan", "--json"], { env });
+  await expect(
+    executeFile(executable, ["artifacts-prune", "--json"], { env }),
+  ).rejects.toThrow();
+  await executeFile(
+    executable,
+    ["artifacts-prune", "--confirm", "artifacts_exact", "--json"],
+    { env },
+  );
+  expect(requests.map((r) => ({ method: r.method, params: r.params }))).toEqual(
+    [
+      { method: "runtimeArtifactPlan", params: {} },
+      {
+        method: "pruneRuntimeArtifacts",
+        params: { confirmPlanId: "artifacts_exact" },
+      },
+    ],
+  );
+});

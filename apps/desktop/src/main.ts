@@ -163,6 +163,8 @@ import {
   reserveRuntimePorts,
   type RuntimePortReservations,
 } from "./runtime-reservations";
+import { gateStateDirectory } from "@silvic/gate";
+import { RuntimeArtifacts } from "./runtime-artifacts";
 import { WorkspaceStateService } from "./workspace-state";
 import { IdlePreviews } from "./idle-previews";
 
@@ -286,6 +288,32 @@ const workspaceStateService = new WorkspaceStateService({
     new Set(Object.keys(settings.get("plotProvisioning"))),
   storage: workspaceStorageUsage,
 });
+let pruningArtifacts = false;
+const runtimeArtifacts = new RuntimeArtifacts({
+  gateDirectory: gateStateDirectory(),
+  logDirectory: join(app.getPath("userData"), "command-logs"),
+  routes: async () => (await gate.client.status())?.routes,
+  removablePlotPaths: async () => {
+    if (settings.get("roots").some((root) => !existsSync(root)))
+      return new Set<string>();
+    const plan = await workspaceStateService.inspect();
+    return new Set(
+      plan.staleRecords
+        .filter((record) => record.action === "prune-metadata")
+        .map((record) => record.path),
+    );
+  },
+  protectedLogNames: () =>
+    new Set(
+      supervisor.list().flatMap((entry) => {
+        const name =
+          `${entry.plotPath}::${entry.id}`.replaceAll("/", "-") + ".log";
+        return [name, `${name}.1`];
+      }),
+    ),
+  removeRoute: (name, updatedAt) => gate.client.routeRemove(name, updatedAt),
+  removeCertificate: (file) => gate.client.removeUnusedCertificate(file),
+});
 const automation = new AutomationController({
   snapshot: () => latestSnapshot,
   roots: () => settings.get("roots"),
@@ -295,6 +323,17 @@ const automation = new AutomationController({
   provision: provisionPlot,
   refresh: async () => {
     await refreshSnapshot(true);
+  },
+  inspectRuntimeArtifacts: () => runtimeArtifacts.inspect(),
+  pruneRuntimeArtifacts: async (confirmPlanId) => {
+    if (pruningArtifacts)
+      throw new Error("Artifact cleanup is already running.");
+    pruningArtifacts = true;
+    try {
+      return await runtimeArtifacts.prune(confirmPlanId);
+    } finally {
+      pruningArtifacts = false;
+    }
   },
   inspectWorkspaceState: () => workspaceStateService.inspect(),
   pruneWorkspaceState: (confirmPlanId) =>
@@ -2333,6 +2372,10 @@ async function startPlotCommand(
   /** Whether a person just asked, which may show the admin dialog again. */
   interactive = true,
 ): Promise<void> {
+  if (pruningArtifacts)
+    throw new Error(
+      "Artifact cleanup is running. Retry starting this runtime when it finishes.",
+    );
   if (quitting)
     throw new Error(
       "Silvic is shutting down. Wait before starting another runtime.",
@@ -2386,6 +2429,10 @@ async function startPlotCommand(
     }
   }
 
+  if (pruningArtifacts)
+    throw new Error(
+      "Artifact cleanup is running. Retry starting this runtime when it finishes.",
+    );
   if (quitting)
     throw new Error(
       "Silvic is shutting down. Wait before starting another runtime.",

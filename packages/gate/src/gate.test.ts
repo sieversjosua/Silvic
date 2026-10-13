@@ -1,6 +1,7 @@
 import { X509Certificate } from "node:crypto";
 import {
   mkdtempSync,
+  lstatSync,
   readdirSync,
   readFileSync,
   rmSync,
@@ -774,6 +775,74 @@ describe("gate daemon", () => {
     const reply = await get("web-not-yet-published.localhost");
     expect(reply.status).toBe(404);
     expect(reply.body).toContain("is not registered");
+  });
+
+  it("protects a certificate when a new route starts using it after planning", async () => {
+    const client = new GateClient({ socketPath: controlSocketPath(directory) });
+    const name = "cert-cleanup-race.localhost.pem";
+    const path = join(directory, "certs", name);
+    writeFileSync(path, "certificate");
+    const stat = lstatSync(path);
+    try {
+      await client.routeSet({
+        name: "cert-cleanup-race",
+        host: "127.0.0.1",
+        port: 1234,
+      });
+      await client.routeSuspend("cert-cleanup-race");
+      await expect(
+        client.removeUnusedCertificate({
+          name,
+          bytes: stat.size,
+          modifiedAt: stat.mtimeMs,
+          inode: stat.ino,
+        }),
+      ).rejects.toThrow("registered route");
+      expect(readFileSync(path, "utf8")).toBe("certificate");
+      const gatePath = join(directory, "certs", "silvic-gate.localhost.pem");
+      const gateStat = lstatSync(gatePath);
+      await expect(
+        client.removeUnusedCertificate({
+          name: "silvic-gate.localhost.pem",
+          bytes: gateStat.size,
+          modifiedAt: gateStat.mtimeMs,
+          inode: gateStat.ino,
+        }),
+      ).rejects.toThrow("registered route");
+    } finally {
+      client.close();
+    }
+  });
+
+  it("rejects a stale route cleanup after the upstream is republished", async () => {
+    const client = new GateClient({ socketPath: controlSocketPath(directory) });
+    try {
+      await client.routeSet({
+        name: "cleanup-race",
+        host: "127.0.0.1",
+        port: 1,
+      });
+      await client.routeSuspend("cleanup-race");
+      const suspended = (await client.status())?.routes.find(
+        (route) => route.name === "cleanup-race",
+      );
+      expect(suspended?.updatedAt).toBeDefined();
+      await client.routeSet({
+        name: "cleanup-race",
+        host: "127.0.0.1",
+        port: 1234,
+      });
+      await expect(
+        client.routeRemove("cleanup-race", suspended?.updatedAt),
+      ).rejects.toThrow("Route changed");
+      expect(
+        (await client.status())?.routes.find(
+          (route) => route.name === "cleanup-race",
+        )?.port,
+      ).toBe(1234);
+    } finally {
+      client.close();
+    }
   });
 
   it("wakes a connected app instead of launching one", async () => {

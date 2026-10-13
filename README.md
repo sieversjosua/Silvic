@@ -192,3 +192,5 @@ teardown are next.
 ## License
 
 MIT
+
+`silvic artifacts-plan --json` lists generated route certificates, inactive command logs and suspended routes eligible for cleanup after 30 days. `silvic artifacts-prune --confirm PLAN_ID` rechecks and removes that exact plan. Route cleanup requires a stale, unprotected workspace record and reachable watched roots; valid sleeping previews stay registered. Active or failed runtimes keep their logs. Symlinks, the root CA, worktrees and provider data are excluded. `state-prune` continues to remove registry metadata only. Partial filesystem errors stop cleanup; inspect a fresh plan before retrying.

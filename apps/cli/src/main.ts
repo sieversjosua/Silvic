@@ -184,6 +184,33 @@ async function main(argv: readonly string[]): Promise<void> {
       setRecoveryExitCode(result);
       return;
     }
+    case "artifacts-plan":
+    case "artifacts-prune": {
+      rejectOptions(
+        values,
+        command === "artifacts-plan"
+          ? ["json", "help"]
+          : ["json", "help", "confirm"],
+      );
+      const result = await automationCall<
+        import("@silvic/automation").RuntimeArtifactPlan
+      >(
+        command === "artifacts-plan"
+          ? "runtimeArtifactPlan"
+          : "pruneRuntimeArtifacts",
+        command === "artifacts-plan"
+          ? {}
+          : { confirmPlanId: requireOption(values.confirm, "--confirm") },
+      );
+      output(result, values.json, [
+        `plan\t${result.planId}`,
+        ...result.routes.map((route) => `route\t${route.name}`),
+        ...result.files.map(
+          (file) => `${file.kind}\t${file.bytes}\t${file.path}`,
+        ),
+      ]);
+      return;
+    }
     case "state-plan": {
       rejectOptions(values, ["json", "help"]);
       const result =
@@ -589,7 +616,7 @@ function provisionRemedy(
 
 function writeHelp(): void {
   process.stdout.write(
-    `Silvic ${version}\n\nUsage:\n  silvic projects [--json]\n  silvic plots [--project ID] [--json]\n  silvic cd [--project ID] [--plot ID]\n  silvic shell-init\n  silvic status [--plot ID] [--json]\n  silvic adoption-plan --plot ID [--scope single|family] [--json]\n  silvic adopt --plot ID [--scope single|family] --confirm STABLE_ID [--json]\n  silvic provision [--plot ID] [--refresh] --confirm STABLE_ID [--remedy convex-cli|convex-adopt|convex-recreate] [--json]\n  silvic state-plan [--json]\n  silvic state-prune --confirm PLAN_ID [--json]\n  silvic start [--plot ID] [--runtime ID] [--json]\n  silvic preview [--plot ID] [--runtime ID] [--timeout MS] [--open] [--json]\n  silvic stop [--plot ID] [--runtime ID] [--json]\n  silvic wait [--plot ID] [--runtime ID] [--timeout MS] [--json]\n  silvic logs [--plot ID] [--runtime ID] [--limit BYTES] [--json]\n\nRun eval \"$(silvic shell-init)\" once in zsh or bash to let silvic cd change the\ncurrent shell directory. Omit --plot to use the current Git checkout.\nProvision --refresh stops owned runtimes and reruns the recipe in the existing\nPlot; it requires --confirm and never implicitly recreates a deployment.\nPlot selectors accept a stable Plot id or an absolute\nPlot path. Before adoption or provisioning, inspect adoption-plan and confirm\nwith its selected stable Plot ID. Start never confirms provider changes implicitly.\nState pruning requires the exact state-plan ID and removes only listed Silvic\nmetadata, never worktrees. Start and stop without --runtime apply to every declared\nruntime and are idempotent.\n`,
+    `Silvic ${version}\n\nUsage:\n  silvic projects [--json]\n  silvic plots [--project ID] [--json]\n  silvic cd [--project ID] [--plot ID]\n  silvic shell-init\n  silvic status [--plot ID] [--json]\n  silvic adoption-plan --plot ID [--scope single|family] [--json]\n  silvic adopt --plot ID [--scope single|family] --confirm STABLE_ID [--json]\n  silvic provision [--plot ID] [--refresh] --confirm STABLE_ID [--remedy convex-cli|convex-adopt|convex-recreate] [--json]\n  silvic artifacts-plan [--json]\n  silvic artifacts-prune --confirm PLAN_ID [--json]\n  silvic state-plan [--json]\n  silvic state-prune --confirm PLAN_ID [--json]\n  silvic start [--plot ID] [--runtime ID] [--json]\n  silvic preview [--plot ID] [--runtime ID] [--timeout MS] [--open] [--json]\n  silvic stop [--plot ID] [--runtime ID] [--json]\n  silvic wait [--plot ID] [--runtime ID] [--timeout MS] [--json]\n  silvic logs [--plot ID] [--runtime ID] [--limit BYTES] [--json]\n\nRun eval \"$(silvic shell-init)\" once in zsh or bash to let silvic cd change the\ncurrent shell directory. Omit --plot to use the current Git checkout.\nProvision --refresh stops owned runtimes and reruns the recipe in the existing\nPlot; it requires --confirm and never implicitly recreates a deployment.\nPlot selectors accept a stable Plot id or an absolute\nPlot path. Before adoption or provisioning, inspect adoption-plan and confirm\nwith its selected stable Plot ID. Start never confirms provider changes implicitly.\nState pruning requires the exact state-plan ID and removes only listed Silvic\nmetadata, never worktrees. Start and stop without --runtime apply to every declared\nruntime and are idempotent.\n`,
   );
 }
 

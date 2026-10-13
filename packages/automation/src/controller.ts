@@ -99,6 +99,12 @@ export interface AutomationControllerOptions {
   }): Promise<PlotAdoptionPlan>;
   adopt(request: PlotAdoptionRunRequest): Promise<PlotAdoptionRunResult>;
   provision(request: PlotProvisionRequest): Promise<PlotProvisionRunResult>;
+  inspectRuntimeArtifacts?(): Promise<
+    import("@silvic/contracts").RuntimeArtifactPlan
+  >;
+  pruneRuntimeArtifacts?(
+    confirmPlanId: string,
+  ): Promise<import("@silvic/contracts").RuntimeArtifactPlan>;
   inspectWorkspaceState(): Promise<WorkspaceStatePlan>;
   pruneWorkspaceState(confirmPlanId: string): Promise<{
     plan: WorkspaceStatePlan;
@@ -150,6 +156,24 @@ export class AutomationController {
         return this.adopt(request.params);
       case "provision":
         return this.provision(request.params, signal);
+      case "runtimeArtifactPlan":
+        assertOnly(request.params, []);
+        if (!this.options.inspectRuntimeArtifacts)
+          throw new AutomationError(
+            "UNAVAILABLE",
+            "Artifact cleanup is unavailable.",
+          );
+        return this.options.inspectRuntimeArtifacts();
+      case "pruneRuntimeArtifacts":
+        assertOnly(request.params, ["confirmPlanId"]);
+        if (!this.options.pruneRuntimeArtifacts)
+          throw new AutomationError(
+            "UNAVAILABLE",
+            "Artifact cleanup is unavailable.",
+          );
+        return this.options.pruneRuntimeArtifacts(
+          requiredString(request.params, "confirmPlanId"),
+        );
       case "workspaceStatePlan":
         return this.workspaceStatePlan(request.params);
       case "pruneWorkspaceState":

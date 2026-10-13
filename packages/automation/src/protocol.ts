@@ -11,6 +11,8 @@ export type AutomationMethod =
   | "adoptionPlan"
   | "adopt"
   | "provision"
+  | "runtimeArtifactPlan"
+  | "pruneRuntimeArtifacts"
   | "workspaceStatePlan"
   | "pruneWorkspaceState"
   | "start"
@@ -181,6 +183,8 @@ function isAutomationMethod(value: unknown): value is AutomationMethod {
     value === "adoptionPlan" ||
     value === "adopt" ||
     value === "provision" ||
+    value === "runtimeArtifactPlan" ||
+    value === "pruneRuntimeArtifacts" ||
     value === "workspaceStatePlan" ||
     value === "pruneWorkspaceState" ||
     value === "start" ||
