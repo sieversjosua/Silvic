@@ -45,6 +45,7 @@ import type {
   PlotCreationResult,
   PlotPreview,
   PlotProcess,
+  PlotRuntimeUsage,
   PlotProgressStep,
   PlotProvisionRunResult,
   PlotProvisioning,
@@ -1286,6 +1287,7 @@ function WorkspaceInspector({
           resources={runtimeResources}
           processes={processes}
         />
+        <RuntimeUsage key={workspace.path} path={workspace.path} />
         <PlotResourceSection
           icon={<PackageCheck size={12} />}
           title="Environment"
@@ -1311,6 +1313,92 @@ function WorkspaceInspector({
         <p className="inspector-path mono">{workspace.path}</p>
       </div>
     </>
+  );
+}
+
+function RuntimeUsage({ path }: { path: string }) {
+  const [samples, setSamples] = useState<readonly PlotRuntimeUsage[]>();
+  const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState<string>();
+  const refresh = async () => {
+    setBusy(true);
+    setFailure(undefined);
+    try {
+      setSamples(await window.silvic.sampleRuntimeUsage({ path }));
+    } catch (error) {
+      setFailure(failureMessage(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const uptime = (seconds: number) =>
+    seconds >= 86400
+      ? `${(seconds / 86400).toFixed(1)} days`
+      : seconds >= 3600
+        ? `${(seconds / 3600).toFixed(1)} hours`
+        : `${Math.floor(seconds / 60)} min`;
+  const mib = (bytes: number) => `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
+  return (
+    <Section icon={<Monitor size={12} />} title="Resources">
+      <button
+        className="section-action"
+        type="button"
+        disabled={busy}
+        onClick={() => void refresh()}
+      >
+        {busy
+          ? "Measuring…"
+          : samples
+            ? "Refresh resource usage"
+            : "Measure resource usage"}
+      </button>
+      {failure && (
+        <p className="section-empty" role="alert">
+          {failure}
+        </p>
+      )}
+      {samples?.length === 0 && (
+        <p className="section-empty">No live runtimes attached</p>
+      )}
+      {samples?.map((sample) => (
+        <div key={sample.id} className="sidebar-resource">
+          <div className="sidebar-resource-copy">
+            <strong>
+              {sample.id} ·{" "}
+              {sample.ownership === "external"
+                ? "External process"
+                : "Silvic process group"}
+            </strong>
+          </div>
+          <p className="sidebar-resource-detail mono">
+            {sample.processCount} processes ·{" "}
+            {sample.uptimeSeconds === undefined
+              ? "Uptime unavailable"
+              : `Uptime ${uptime(sample.uptimeSeconds)}`}{" "}
+            · Avg CPU {sample.cpuPercent.toFixed(1)}%
+          </p>
+          <p className="sidebar-resource-detail mono">
+            {sample.footprintBytes === undefined ? "Resident" : "Footprint"}{" "}
+            {mib(sample.footprintBytes ?? sample.residentBytes)}
+            {sample.compressedBytes === undefined
+              ? ""
+              : ` · Compressed ${mib(sample.compressedBytes)}`}
+          </p>
+          {sample.detail && <p className="section-empty">{sample.detail}</p>}
+          <p className="section-empty">
+            Sampled {new Date(sample.sampledAt).toLocaleTimeString()}
+          </p>
+        </div>
+      ))}
+      {samples && (
+        <p className="section-empty">
+          Footprint includes compressed memory; compressed is shown separately,
+          not added again. Group totals sum process accounting. External
+          runtimes show their recorded process only. Values update when you
+          press Refresh.
+        </p>
+      )}
+    </Section>
   );
 }
 

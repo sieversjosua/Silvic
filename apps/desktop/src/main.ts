@@ -164,6 +164,7 @@ import {
   type RuntimePortReservations,
 } from "./runtime-reservations";
 import { gateStateDirectory, type GateWakeResult } from "@silvic/gate";
+import { sampleRuntimeUsage } from "./runtime-usage";
 import { RuntimeArtifacts } from "./runtime-artifacts";
 import { WorkspaceStateService } from "./workspace-state";
 import { IdlePreviews } from "./idle-previews";
@@ -750,6 +751,17 @@ function registerIpc(): void {
     async (event, request: unknown) => {
       assertTrustedSender(event);
       return adoptPlots(plotAdoptionRunRequestSchema.parse(request));
+    },
+  );
+  ipcMain.handle(
+    ipcChannels.plotRuntimeUsage,
+    async (event, request: unknown) => {
+      assertTrustedSender(event);
+      const { path } = workspacePathRequestSchema.parse(request);
+      const workspace = knownWorkspace(path);
+      return sampleRuntimeUsage(
+        supervisor.list().filter((entry) => entry.plotPath === workspace.path),
+      );
     },
   );
   ipcMain.handle(ipcChannels.plotCommandsGet, (event) => {
