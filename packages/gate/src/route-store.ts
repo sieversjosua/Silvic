@@ -13,6 +13,9 @@ export interface GateRoute {
   /** The recipe command that serves it, `web`. */
   commandId?: string;
   updatedAt: string;
+  /** Live usage, reported over the control socket but never persisted. */
+  lastActivityAt?: number;
+  activeConnections?: number;
 }
 
 /**
@@ -23,6 +26,10 @@ export interface GateRoute {
 export class RouteStore {
   private readonly routes = new Map<string, GateRoute>();
   private readonly file: string;
+  private readonly activity = new Map<
+    string,
+    { lastActivityAt: number; activeConnections: number }
+  >();
 
   constructor(
     stateDirectory: string,
@@ -31,11 +38,15 @@ export class RouteStore {
     this.file = join(stateDirectory, "routes.json");
     for (const route of readRoutes(this.file)) {
       this.routes.set(route.name, route);
+      if (route.port !== undefined) this.resetActivity(route.name);
     }
   }
 
   list(): readonly GateRoute[] {
-    return [...this.routes.values()];
+    return [...this.routes.values()].map((route) => ({
+      ...route,
+      ...this.activity.get(route.name),
+    }));
   }
 
   find(name: string): GateRoute | undefined {
@@ -54,6 +65,7 @@ export class RouteStore {
           existing.commandId === route.commandId
         ) {
           this.routes.delete(existing.name);
+          this.activity.delete(existing.name);
         }
       }
     }
@@ -64,6 +76,14 @@ export class RouteStore {
       updatedAt: this.now().toISOString(),
     };
     this.routes.set(route.name, next);
+    if (
+      route.port !== undefined &&
+      (!this.activity.has(route.name) ||
+        previous?.port !== route.port ||
+        previous?.host !== route.host)
+    ) {
+      this.resetActivity(route.name);
+    }
     this.persist();
     return next;
   }
@@ -77,18 +97,45 @@ export class RouteStore {
       ...identity,
       updatedAt: this.now().toISOString(),
     });
+    this.activity.delete(name);
     this.persist();
   }
 
   remove(name: string): void {
     if (!this.routes.delete(name)) return;
+    this.activity.delete(name);
     this.persist();
   }
 
   private persist(): void {
     const draft = `${this.file}.tmp`;
-    writeFileSync(draft, `${JSON.stringify(this.list(), undefined, 2)}\n`);
+    writeFileSync(
+      draft,
+      `${JSON.stringify([...this.routes.values()], undefined, 2)}\n`,
+    );
     renameSync(draft, this.file);
+  }
+
+  /** A request or WebSocket protects its upstream until the client closes. */
+  beginActivity(name: string): () => void {
+    const activity = this.activity.get(name);
+    if (!activity) return () => undefined;
+    activity.lastActivityAt = this.now().getTime();
+    activity.activeConnections++;
+    let finished = false;
+    return () => {
+      if (finished) return;
+      finished = true;
+      activity.activeConnections--;
+      activity.lastActivityAt = this.now().getTime();
+    };
+  }
+
+  private resetActivity(name: string): void {
+    this.activity.set(name, {
+      lastActivityAt: this.now().getTime(),
+      activeConnections: 0,
+    });
   }
 }
 

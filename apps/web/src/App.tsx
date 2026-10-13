@@ -914,6 +914,52 @@ function KeepRunningToggle() {
   );
 }
 
+function PreviewIdleControl() {
+  const [minutes, setMinutes] = useState<number>();
+  const [failure, setFailure] = useState<string>();
+
+  useEffect(() => {
+    let current = true;
+    void window.silvic
+      .getPreviewIdleMinutes()
+      .then((value) => current && setMinutes(value))
+      .catch(() => current && setFailure("Could not load preview auto-stop."));
+    return () => {
+      current = false;
+    };
+  }, []);
+
+  return (
+    <label className="dialog-field">
+      <span className="micro">Stop unused previews after</span>
+      <select
+        className="dialog-select"
+        aria-label="Stop unused previews after"
+        value={minutes ?? 30}
+        disabled={minutes === undefined}
+        onChange={(event) => {
+          const next = Number(event.target.value);
+          setFailure(undefined);
+          void window.silvic
+            .setPreviewIdleMinutes(next)
+            .then(setMinutes)
+            .catch(() => setFailure("Could not save preview auto-stop."));
+        }}
+      >
+        <option value={0}>Never</option>
+        <option value={15}>15 minutes</option>
+        <option value={30}>30 minutes</option>
+        <option value={60}>60 minutes</option>
+      </select>
+      <span className="recipe-hint">
+        Previews restart when you open their URL. Auto-stop runs while Silvic is
+        open.
+      </span>
+      {failure && <span className="dialog-error">{failure}</span>}
+    </label>
+  );
+}
+
 /**
  * The canvas shows how the plots relate; the list shows what they are doing.
  * Both read the same snapshot and drive the same selection, so switching is
@@ -1017,6 +1063,7 @@ function SettingsMenu({
             <span className="micro">Appearance</span>
             <AppearanceControl value={preference} onChange={onChange} />
             <KeepRunningToggle />
+            <PreviewIdleControl />
           </div>
         </>
       )}

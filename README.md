@@ -78,6 +78,12 @@ See [docs/PLOTS.md](docs/PLOTS.md) for the model and the decisions behind it.
   fallback
 - Auto-start commands are supervised with logs and stop/restart controls, and
   start only after the complete provisioning sequence succeeds
+- Owned previews stop after 30 minutes without named-URL activity or active
+  local work. Settings offers 15, 30, 60 minutes or Never. Open HTTP/WebSocket
+  connections, active Harness sessions and recognized CI/test/build jobs
+  protect the preview; health checks do not count as usage. Its URL wakes it
+  again. Auto-stop runs while Silvic is open, including with its window closed;
+  the existing keep-running-on-quit setting still applies after quitting.
 - Diff inspection, Codex-assisted delivery drafts, and confirmed commit/push/PR
 
 **Opening it**

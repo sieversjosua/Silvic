@@ -1159,6 +1159,9 @@ export interface SilvicDesktopApi {
   /** Whether a plot's commands outlive the window that started them. */
   getKeepCommandsRunning(): Promise<boolean>;
   setKeepCommandsRunning(keep: boolean): Promise<boolean>;
+  /** Minutes without preview or local job activity; zero disables auto-stop. */
+  getPreviewIdleMinutes(): Promise<number>;
+  setPreviewIdleMinutes(minutes: number): Promise<number>;
   startPlotCommand(request: PlotCommandRequest): Promise<void>;
   stopPlotCommand(request: PlotCommandRequest): Promise<void>;
   /** Stops every runtime currently managed by Silvic, across all plots. */
@@ -1261,6 +1264,8 @@ export const ipcChannels = {
   plotCommandsGet: "silvic:plot:commands:get",
   keepRunningGet: "silvic:commands:keep:get",
   keepRunningSet: "silvic:commands:keep:set",
+  previewIdleGet: "silvic:preview:idle:get",
+  previewIdleSet: "silvic:preview:idle:set",
   plotCommandStart: "silvic:plot:command:start",
   plotCommandStop: "silvic:plot:command:stop",
   plotCommandsStopAll: "silvic:plot:commands:stop-all",

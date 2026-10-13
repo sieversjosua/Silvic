@@ -14,8 +14,10 @@ import {
 describe("probeUrl", () => {
   it("uses HEAD for normal discovery rounds", async () => {
     const methods: string[] = [];
+    const healthChecks: (string | string[] | undefined)[] = [];
     const server = createServer((request, response) => {
       methods.push(request.method ?? "");
+      healthChecks.push(request.headers["x-silvic-health-check"]);
       response.writeHead(200, { "content-type": "text/html" });
       response.end("<h1>ready</h1>");
     });
@@ -31,6 +33,7 @@ describe("probeUrl", () => {
       await Promise.all([probeUrl(url), probeUrl(url)]);
 
       expect(methods).toEqual(["HEAD", "HEAD", "HEAD", "HEAD"]);
+      expect(healthChecks).toEqual(["1", "1", "1", "1"]);
     } finally {
       await new Promise<void>((resolve, reject) =>
         server.close((error) => (error ? reject(error) : resolve())),
