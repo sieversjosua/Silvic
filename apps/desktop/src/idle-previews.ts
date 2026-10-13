@@ -102,7 +102,8 @@ export class IdlePreviews {
       // Observe local work throughout the idle period, including jobs that
       // finish before the browser's initial timeout expires.
       return (
-        route?.port === command.targetPort &&
+        route !== undefined &&
+        route.port === command.targetPort &&
         route.lastActivityAt !== undefined &&
         route.activeConnections === 0
       );
