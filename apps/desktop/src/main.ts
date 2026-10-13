@@ -163,7 +163,7 @@ import {
   reserveRuntimePorts,
   type RuntimePortReservations,
 } from "./runtime-reservations";
-import { gateStateDirectory } from "@silvic/gate";
+import { gateStateDirectory, type GateWakeResult } from "@silvic/gate";
 import { RuntimeArtifacts } from "./runtime-artifacts";
 import { WorkspaceStateService } from "./workspace-state";
 import { IdlePreviews } from "./idle-previews";
@@ -1935,54 +1935,148 @@ async function revivePlotCommands(
  * is retried briefly rather than dropped.
  */
 async function wakePlotFromGate(wake: GateWake): Promise<void> {
+  const result = await resolveGateWake(wake).catch(
+    (error: unknown): GateWakeResult => ({
+      outcome: "failed",
+      message: (error instanceof Error ? error.message : String(error)).slice(
+        0,
+        1500,
+      ),
+    }),
+  );
+  try {
+    await gate.client.wakeResult(wake, result);
+  } catch {
+    /* Older gates do not accept acknowledgements. */
+  }
+}
+
+async function resolveGateWake(wake: GateWake): Promise<GateWakeResult> {
   const plotPath =
     wake.plotPath ??
     (await gate.client.status())?.routes.find(
       (route) => route.name === wake.route,
     )?.plotPath;
-  if (!plotPath) return;
+  if (!plotPath || !existsSync(plotPath))
+    return {
+      outcome: "plot-missing",
+      message:
+        "This plot no longer exists. Open Silvic to choose another plot or clean up its old route.",
+    };
   const deadline = Date.now() + 30_000;
-  while (Date.now() < deadline) {
-    try {
-      const workspace = knownWorkspace(plotPath);
-      const project = latestSnapshot.projects.find((candidate) =>
-        candidate.workspaces.some(
-          (entry) => entry.workspaceId === workspace.workspaceId,
-        ),
-      );
-      if (!project) throw new Error("The plot's project is not loaded yet");
-      const recipe = await readRecipe(project.rootPath);
-      const plot = plotNameIn(
-        workspace.path,
-        recipe.project,
-        workspace.isPrimary ? undefined : workspace.git.branch,
-      );
-      const id = Object.entries(recipe.commands).find(
-        ([id, command]) =>
-          routeNameFor(
-            {
-              id,
-              ...(command.routeName ? { routeName: command.routeName } : {}),
-            },
-            plot,
-            recipe.project,
-          ) === wake.route,
-      )?.[0];
-      if (!id) return;
-      if (await supervisor.restoreExternalRoute(workspace.path, id)) return;
-      if (
-        !workspace.isPrimary &&
-        (workspace.adoption?.status !== "adopted" ||
-          (recipe.provision.length > 0 &&
-            workspace.provisioning?.status !== "complete"))
-      )
-        return;
-      await startPlotCommand(workspace.path, id, false);
-      return;
-    } catch {
-      await new Promise((resolve) => setTimeout(resolve, 1_000));
-    }
+  while (
+    !latestSnapshot.projects.some((project) =>
+      project.workspaces.some((workspace) => workspace.path === plotPath),
+    )
+  ) {
+    if (Date.now() >= deadline)
+      return {
+        outcome: "plot-missing",
+        message:
+          "This plot is not loaded in Silvic. Check its watched location.",
+      };
+    await new Promise((resolve) => setTimeout(resolve, 500));
   }
+  const workspace = knownWorkspace(plotPath);
+  const project = latestSnapshot.projects.find((candidate) =>
+    candidate.workspaces.some(
+      (entry) => entry.workspaceId === workspace.workspaceId,
+    ),
+  );
+  if (!project)
+    return {
+      outcome: "plot-missing",
+      message: "The plot's project is not loaded.",
+    };
+  const recipe = await readRecipe(project.rootPath);
+  const plot = plotNameIn(
+    workspace.path,
+    recipe.project,
+    workspace.isPrimary ? undefined : workspace.git.branch,
+  );
+  const id = Object.entries(recipe.commands).find(
+    ([id, command]) =>
+      routeNameFor(
+        { id, ...(command.routeName ? { routeName: command.routeName } : {}) },
+        plot,
+        recipe.project,
+      ) === wake.route,
+  )?.[0];
+  if (!id)
+    return {
+      outcome: "failed",
+      message: "The recipe no longer declares a runtime for this route.",
+    };
+  if (await supervisor.restoreExternalRoute(workspace.path, id)) {
+    const runtime = supervisor
+      .list()
+      .find((entry) => entry.plotPath === workspace.path && entry.id === id);
+    const status = runtime?.routeProbe?.status;
+    return status !== undefined && status >= 200 && status < 400
+      ? {
+          outcome: "already-running",
+          message: "Attached to the existing external preview.",
+        }
+      : {
+          outcome: "failed",
+          message: (
+            runtime?.routeProbe?.detail ??
+            runtime?.advice ??
+            "The external preview could not be restored. Check its listener in Silvic."
+          ).slice(0, 1500),
+        };
+  }
+  if (
+    !workspace.isPrimary &&
+    (workspace.adoption?.status !== "adopted" ||
+      (recipe.provision.length > 0 &&
+        workspace.provisioning?.status !== "complete"))
+  )
+    return {
+      outcome: "not-owned",
+      message:
+        "This plot needs adoption or provisioning in Silvic before its URL can start runtimes.",
+    };
+  const alreadyRunning = supervisor
+    .list()
+    .some(
+      (entry) =>
+        entry.plotPath === workspace.path &&
+        entry.id === id &&
+        entry.status === "running",
+    );
+  await startPlotCommand(workspace.path, id, false);
+  const readyDeadline = Date.now() + 30_000;
+  while (Date.now() < readyDeadline) {
+    const runtime = supervisor
+      .list()
+      .find((entry) => entry.plotPath === workspace.path && entry.id === id);
+    if (runtime?.status === "failed")
+      return {
+        outcome: "failed",
+        message: (
+          runtime.advice ??
+          "The preview runtime failed. Open its logs in Silvic."
+        ).slice(0, 1500),
+      };
+    if (runtime?.status === "running")
+      return {
+        outcome: alreadyRunning ? "already-running" : "started",
+        message: "The preview runtime is running.",
+      };
+    if (!runtime || runtime.status === "stopping")
+      return {
+        outcome: "failed",
+        message:
+          "The preview stopped before it was ready. Check its logs in Silvic.",
+      };
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  return {
+    outcome: "failed",
+    message:
+      "The preview did not become ready within 30 seconds. Check its logs in Silvic.",
+  };
 }
 
 function recoverPlotFromGate(failure: GateFailure): void {
@@ -1991,10 +2085,14 @@ function recoverPlotFromGate(failure: GateFailure): void {
 
 /** `open -b dev.silvic.app --args --silvic-wake=<route>`, from the gate. */
 function handleWakeArguments(argv: readonly string[]): void {
+  const requestId = argv
+    .find((value) => value.startsWith("--silvic-wake-request="))
+    ?.slice("--silvic-wake-request=".length);
   for (const argument of argv) {
     if (argument.startsWith("--silvic-wake=")) {
       void wakePlotFromGate({
         route: argument.slice("--silvic-wake=".length),
+        ...(requestId ? { requestId } : {}),
       });
     }
   }

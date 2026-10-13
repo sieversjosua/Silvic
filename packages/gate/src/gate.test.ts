@@ -870,6 +870,41 @@ describe("gate daemon", () => {
     listener.close();
   }, 30_000);
 
+  it("returns acknowledged failure details without another automatic wake", async () => {
+    const onWake = vi.fn();
+    const client = new GateClient({
+      socketPath: controlSocketPath(directory),
+      onWake,
+    });
+    try {
+      await client.routeSet({
+        name: "wake-failure",
+        host: "127.0.0.1",
+        port: 1,
+      });
+      await client.routeSuspend("wake-failure");
+      await get("wake-failure.localhost");
+      await vi.waitFor(() => expect(onWake).toHaveBeenCalledOnce());
+      const event = onWake.mock.calls[0]?.[0];
+      if (!event) throw new Error("No wake event");
+      await client.wakeResult(event, {
+        outcome: "failed",
+        message: "Invalid deploy key",
+      });
+      const reply = await get(
+        "wake-failure.localhost",
+        "/__silvic/route-status",
+      );
+      expect(JSON.parse(reply.body).wake).toMatchObject({
+        outcome: "failed",
+        message: "Invalid deploy key",
+      });
+      expect(onWake).toHaveBeenCalledOnce();
+    } finally {
+      client.close();
+    }
+  });
+
   it("launches the app when nothing is connected", async () => {
     const client = new GateClient({
       socketPath: controlSocketPath(directory),
@@ -884,7 +919,10 @@ describe("gate daemon", () => {
     const reply = await get("web-alone-shop.localhost");
     expect(reply.status).toBe(503);
     await vi.waitFor(() =>
-      expect(launchApp).toHaveBeenCalledWith("web-alone-shop"),
+      expect(launchApp).toHaveBeenCalledWith(
+        "web-alone-shop",
+        expect.any(String),
+      ),
     );
   }, 30_000);
 
@@ -898,7 +936,10 @@ describe("gate daemon", () => {
       "web-sleepy-shop.localhost",
       "/__silvic/route-status",
     );
-    expect(JSON.parse(asleep.body)).toEqual({ ready: false });
+    expect(JSON.parse(asleep.body)).toMatchObject({
+      ready: false,
+      wake: { outcome: "starting" },
+    });
   });
 
   it("redirects plain http to the named https origin", async () => {

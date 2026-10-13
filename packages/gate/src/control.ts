@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { GATE_HOST } from "./constants";
 import {
   parseControlRequest,
+  type GateWakeResult,
   type ControlReply,
   type GateEvent,
 } from "./control-protocol";
@@ -21,11 +22,13 @@ export function startControlServer({
   store,
   version,
   log,
+  onWakeResult,
 }: {
   socketPath: string;
   store: RouteStore;
   version: string;
   log(message: string): void;
+  onWakeResult?(route: string, requestId: string, result: GateWakeResult): void;
 }): Promise<ControlServer> {
   const clients = new Set<Socket>();
   const server = createServer((socket) => {
@@ -58,6 +61,9 @@ export function startControlServer({
       return undefined;
     }
     switch (request.type) {
+      case "wake-result":
+        onWakeResult?.(request.route, request.requestId, request.result);
+        return { id: request.id, type: "ok" };
       case "status":
         return {
           id: request.id,
