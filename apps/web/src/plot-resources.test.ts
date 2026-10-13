@@ -36,6 +36,33 @@ const workspace: WorkspaceSnapshot = {
 };
 
 describe("plotResources", () => {
+  it("shows failed runtime details on declared services", () => {
+    const resources = plotResources({
+      workspace,
+      commands: { agent: { run: "livekit dev" } },
+      declared: {
+        agent: {
+          provider: "livekit",
+          kind: "agent",
+          isolation: "shared",
+          command: "agent",
+        },
+      },
+      processes: [
+        {
+          plotPath: workspace.path,
+          id: "agent",
+          status: "failed",
+          advice: "Connection failed: server refused the connection",
+          failedAt: "2026-10-13T11:00:00Z",
+          failureCount: 3,
+        },
+      ],
+    });
+    expect(resources[0]?.detail).toContain("Connection failed");
+    expect(resources[0]?.detail).toContain("Failure 3");
+    expect(resources[0]?.state).toBe("attention");
+  });
   it("combines declared services, commands and provider observations", () => {
     expect(
       plotResources({

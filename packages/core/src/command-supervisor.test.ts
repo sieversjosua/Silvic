@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CommandSupervisor, type StartRequest } from "./command-supervisor";
+import * as runtimeLogs from "./runtime-log";
 import {
   ExternalRuntimeConflict,
   GateUnreachable,
@@ -33,6 +34,241 @@ afterEach(async () => {
 });
 
 describe("CommandSupervisor", () => {
+  it("allows recovery after process inspection makes shutdown fail", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "silvic-drain-failure-"));
+    temporaryDirectories.push(directory);
+    const supervisor = new CommandSupervisor({
+      logDirectory: directory,
+      onChange: () => undefined,
+    });
+    const request: StartRequest = {
+      plotPath: directory,
+      id: "web",
+      command: { run: "sleep 10" },
+      routeName: "web-drain-failure",
+      environment: {},
+      canRoute: false,
+      detached: false,
+    };
+    await supervisor.start(request);
+    const taskPath = process.env["PATH"];
+    try {
+      process.env["PATH"] = "/silvic-test-no-executables";
+      await expect(supervisor.stopAllAndWait()).rejects.toThrow();
+    } finally {
+      if (taskPath === undefined) delete process.env["PATH"];
+      else process.env["PATH"] = taskPath;
+    }
+    await expect(
+      supervisor.start({ ...request, id: "retry" }),
+    ).resolves.toBeUndefined();
+    await supervisor.stopAllAndWait();
+  });
+  it.each([
+    [false, false],
+    [true, false],
+    [true, true],
+  ])(
+    "discards old recovery after shutdown (failed=%s, log error=%s)",
+    async (failedShutdown, logError) => {
+      const directory = await mkdtemp(join(tmpdir(), "silvic-quit-recovery-"));
+      temporaryDirectories.push(directory);
+      const actualOpen = runtimeLogs.openRuntimeLog;
+      let release: (() => void) | undefined;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let calls = 0;
+      let recoveryWaiting = false;
+      let recoveryFinished = false;
+      const closed = new Set<number>();
+      const opened = new Set<number>();
+      const spy = vi
+        .spyOn(runtimeLogs, "openRuntimeLog")
+        .mockImplementation(async (...args) => {
+          const call = ++calls;
+          if (call === 2) {
+            recoveryWaiting = true;
+            await gate;
+            if (logError) {
+              recoveryFinished = true;
+              throw new Error("old recovery log failed");
+            }
+          }
+          const log = await actualOpen(...args);
+          opened.add(call);
+          return {
+            ...log,
+            end: async () => {
+              await log.end();
+              closed.add(call);
+              if (call === 2) recoveryFinished = true;
+            },
+          };
+        });
+      const publish = vi.fn().mockResolvedValue({ port: 4321 });
+      const supervisor = new CommandSupervisor({
+        logDirectory: directory,
+        onChange: () => undefined,
+        routePublisher: {
+          publish,
+          improve: async () => undefined,
+          healthy: async () => true,
+          verify: async () => true,
+          remove: async () => undefined,
+        },
+      });
+      const request: StartRequest = {
+        plotPath: directory,
+        id: "web",
+        command: { run: "sleep 10", url: true },
+        routeName: "web-recovery-quit",
+        environment: { PORT: "4321" },
+        canRoute: true,
+        detached: false,
+      };
+      try {
+        await supervisor.start(request);
+        await vi.waitFor(() =>
+          expect(supervisor.list()[0]?.status).toBe("running"),
+        );
+        supervisor.reportRouteFailure(
+          "web-recovery-quit",
+          "vite-stale-optimized-dependency",
+        );
+        await vi.waitFor(() => expect(recoveryWaiting).toBe(true));
+        if (failedShutdown) {
+          await supervisor.start({
+            ...request,
+            id: "other",
+            command: { run: "sleep 10" },
+            canRoute: false,
+          });
+          const taskPath = process.env["PATH"];
+          try {
+            process.env["PATH"] = "/silvic-test-no-executables";
+            await expect(supervisor.stopAllAndWait()).rejects.toThrow();
+          } finally {
+            if (taskPath === undefined) delete process.env["PATH"];
+            else process.env["PATH"] = taskPath;
+          }
+          await supervisor.start(request);
+          await vi.waitFor(() =>
+            expect(supervisor.list().find((e) => e.id === "web")?.status).toBe(
+              "running",
+            ),
+          );
+        } else await supervisor.stopAllAndWait();
+        const replacement = supervisor
+          .list()
+          .find((e) => e.id === "web")?.processId;
+        release?.();
+        await vi.waitFor(() => expect(recoveryFinished).toBe(true));
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(publish).toHaveBeenCalledTimes(failedShutdown ? 2 : 1);
+        if (failedShutdown)
+          expect(supervisor.list().find((e) => e.id === "web")).toMatchObject({
+            status: "running",
+            processId: replacement,
+          });
+        else expect(supervisor.list()).toEqual([]);
+        await supervisor.stopAllAndWait();
+        expect(closed).toEqual(opened);
+      } finally {
+        release?.();
+        spy.mockRestore();
+        await supervisor.stopAllAndWait();
+      }
+    },
+  );
+
+  it("counts a failed spawn once and retains the exact start error", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "silvic-spawn-"));
+    temporaryDirectories.push(directory);
+    const supervisor = new CommandSupervisor({
+      logDirectory: directory,
+      onChange: () => undefined,
+    });
+    await supervisor.start({
+      plotPath: directory,
+      id: "web",
+      command: { run: "sleep 10", cwd: "missing" },
+      routeName: "web-spawn",
+      environment: {},
+      canRoute: false,
+      detached: false,
+    });
+    await vi.waitFor(() => expect(supervisor.list()[0]?.status).toBe("failed"));
+    // Both Node events arrive on the same attempt; give close a turn too.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(supervisor.list()[0]).toMatchObject({
+      failureCount: 1,
+      advice: expect.stringContaining("ENOENT"),
+    });
+  });
+
+  it.each([
+    ["Invalid deploy key", "Authentication failed"],
+    ["JavaScript heap out of memory", "Node heap exhausted"],
+    ["failed to connect to LiveKit server", "Connection failed"],
+  ])(
+    "records a useful reason for %s and counts retries",
+    async (message, category) => {
+      const directory = await mkdtemp(join(tmpdir(), "silvic-failed-"));
+      temporaryDirectories.push(directory);
+      const supervisor = new CommandSupervisor({
+        logDirectory: directory,
+        onChange: () => undefined,
+      });
+      const request: StartRequest = {
+        plotPath: directory,
+        id: "agent",
+        command: { run: `printf '%s\\n' '${message}'; exit 1` },
+        routeName: "agent-failed",
+        environment: {},
+        canRoute: false,
+        detached: false,
+      };
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        await supervisor.start(request);
+        await vi.waitFor(() =>
+          expect(supervisor.list()[0]?.status).toBe("failed"),
+        );
+        expect(supervisor.list()[0]).toMatchObject({
+          failureCount: attempt,
+          failedAt: expect.any(String),
+          advice: expect.stringContaining(category),
+        });
+        expect(supervisor.list()[0]?.advice).toContain(message);
+      }
+      const reopened = new CommandSupervisor({
+        logDirectory: directory,
+        onChange: () => undefined,
+      });
+      await reopened.adopt(supervisor.list());
+      expect(reopened.list()[0]?.failureCount).toBe(2);
+    },
+  );
+
+  it("records unexpected signal termination as a failure", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "silvic-signal-"));
+    temporaryDirectories.push(directory);
+    const supervisor = new CommandSupervisor({
+      logDirectory: directory,
+      onChange: () => undefined,
+    });
+    await supervisor.start({
+      plotPath: directory,
+      id: "web",
+      command: { run: "kill -TERM $$" },
+      routeName: "web-signal",
+      environment: {},
+      canRoute: false,
+      detached: false,
+    });
+    await vi.waitFor(() => expect(supervisor.list()[0]?.status).toBe("failed"));
+    expect(supervisor.list()[0]?.advice).toContain("Application exited");
+  });
   it("adopts a live runtime even when log maintenance cannot create its backup", async () => {
     const directory = await mkdtemp(join(tmpdir(), "silvic-adopt-log-"));
     temporaryDirectories.push(directory);
@@ -1497,7 +1733,7 @@ describe("CommandSupervisor", () => {
       canRoute: false,
       detached: false,
     });
-    supervisor.stopAll();
+    await supervisor.stopAllAndWait();
     await stopped;
 
     expect(supervisor.list()).toEqual([]);
