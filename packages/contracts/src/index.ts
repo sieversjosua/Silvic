@@ -1008,6 +1008,20 @@ export interface PlotProgressStep {
  * dialog that created it has been closed.
  */
 /** A command a plot can run, and what it is doing. */
+export interface PlotRuntimeUsage {
+  id: string;
+  ownership: "owned" | "external";
+  sampledAt: string;
+  processCount: number;
+  residentBytes: number;
+  footprintBytes?: number;
+  compressedBytes?: number;
+  /** ps average CPU over the process lifetime; may exceed 100% across cores. */
+  cpuPercent: number;
+  uptimeSeconds?: number;
+  detail?: string;
+}
+
 export interface PlotProcess {
   plotPath: string;
   id: string;
@@ -1157,6 +1171,9 @@ export interface SilvicDesktopApi {
   inspectSourceUpdate(
     request: WorkspacePathRequest,
   ): Promise<SourceUpdatePreview | undefined>;
+  sampleRuntimeUsage(
+    request: WorkspacePathRequest,
+  ): Promise<readonly PlotRuntimeUsage[]>;
   getPlotProcesses(): Promise<readonly PlotProcess[]>;
   /** Whether a plot's commands outlive the window that started them. */
   getKeepCommandsRunning(): Promise<boolean>;
@@ -1263,6 +1280,7 @@ export const ipcChannels = {
   plotProvision: "silvic:plot:provision",
   plotAdoptionPlan: "silvic:plot:adoption:plan",
   plotAdoptionRun: "silvic:plot:adoption:run",
+  plotRuntimeUsage: "silvic:plot:runtime-usage",
   plotCommandsGet: "silvic:plot:commands:get",
   keepRunningGet: "silvic:commands:keep:get",
   keepRunningSet: "silvic:commands:keep:set",

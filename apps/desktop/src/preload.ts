@@ -49,6 +49,8 @@ const api: SilvicDesktopApi = {
     ipcRenderer.invoke(ipcChannels.plotAdoptionPlan, request),
   adoptPlots: (request: PlotAdoptionRunRequest) =>
     ipcRenderer.invoke(ipcChannels.plotAdoptionRun, request),
+  sampleRuntimeUsage: (request) =>
+    ipcRenderer.invoke(ipcChannels.plotRuntimeUsage, request),
   getPlotProcesses: () => ipcRenderer.invoke(ipcChannels.plotCommandsGet),
   getKeepCommandsRunning: () => ipcRenderer.invoke(ipcChannels.keepRunningGet),
   setKeepCommandsRunning: (keep: boolean) =>
