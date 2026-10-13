@@ -4,6 +4,7 @@ import {
   chmod,
   mkdir,
   mkdtemp,
+  open,
   realpath,
   rm,
   writeFile,
@@ -32,6 +33,36 @@ afterEach(async () => {
 });
 
 describe("CommandSupervisor", () => {
+  it("adopts a live runtime even when log maintenance cannot create its backup", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "silvic-adopt-log-"));
+    temporaryDirectories.push(directory);
+    const path = join(directory, `${directory.replaceAll("/", "-")}::web.log`);
+    const file = await open(path, "w");
+    await file.truncate(21 * 1024 * 1024);
+    await file.close();
+    await mkdir(`${path}.1`);
+    const supervisor = new CommandSupervisor({
+      logDirectory: directory,
+      onChange: () => undefined,
+    });
+    await expect(
+      supervisor.adopt([
+        {
+          plotPath: directory,
+          id: "web",
+          status: "running",
+          processId: process.pid,
+          logAppendOnly: true,
+        },
+      ]),
+    ).resolves.toBeUndefined();
+    expect(supervisor.list()[0]).toMatchObject({
+      status: "running",
+      processId: process.pid,
+      notice: expect.stringContaining("log rotation is unavailable"),
+    });
+  });
+
   it("does not report a command started before its log is open", async () => {
     const logDirectory = await mkdtemp(join(tmpdir(), "silvic-supervisor-"));
     temporaryDirectories.push(logDirectory);

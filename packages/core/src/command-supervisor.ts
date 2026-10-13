@@ -1,7 +1,5 @@
 import { execFile, spawn } from "node:child_process";
-import { once } from "node:events";
-import { createWriteStream, readFileSync, type WriteStream } from "node:fs";
-import { access, mkdir, readFile, rm } from "node:fs/promises";
+import { access, mkdir, rm } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 
@@ -17,9 +15,14 @@ import {
   type RouteDiagnosis,
 } from "./named-route";
 import { routes } from "./plot-address";
+import {
+  openRuntimeLog,
+  readLogTail,
+  readLogTailSync,
+  type RuntimeLog,
+} from "./runtime-log";
 
 const executeFile = promisify(execFile);
-type OpenWriteStream = WriteStream & { fd: number };
 
 export interface SupervisedCommand {
   /** The plot this runs in. */
@@ -53,6 +56,8 @@ export interface SupervisedCommand {
   routeProbe?: { url: string; at: string; status?: number; detail?: string };
   /** Restarts already spent in the current recoverable failure episode. */
   recoveryAttempts?: number;
+  /** Safe to truncate in place: the child's inherited descriptor uses O_APPEND. */
+  logAppendOnly?: boolean;
 }
 
 export interface StartRequest {
@@ -85,7 +90,8 @@ export class CommandSupervisor {
   private readonly starts = new Map<string, Promise<void>>();
   private readonly externalRepairs = new Map<string, Promise<void>>();
   private readonly running = new Map<string, SupervisedCommand>();
-  private readonly logs = new Map<string, WriteStream>();
+  private readonly logs = new Map<string, RuntimeLog>();
+  private readonly closingLogs = new Map<string, Promise<void>>();
   private readonly stopping = new Set<string>();
   private readonly forcedFailures = new Map<string, string>();
   private readonly startRequests = new Map<string, StartRequest>();
@@ -266,6 +272,17 @@ export class CommandSupervisor {
       if (!running) continue;
       const key = keyFor(entry.plotPath, entry.id);
       this.running.set(key, entry);
+      if (entry.logAppendOnly) {
+        try {
+          await this.openLog(key, true);
+        } catch {
+          this.running.set(key, {
+            ...entry,
+            notice:
+              "The runtime was adopted, but log rotation is unavailable. Check the local log directory.",
+          });
+        }
+      }
       const expectedPort = entry.expectedPort ?? entry.targetPort;
       if (entry.routeName && expectedPort) {
         void this.reconcileAdoptedRoute(
@@ -368,6 +385,7 @@ export class CommandSupervisor {
       id: request.id,
       status: routed ? "starting" : "running",
       startedAt: new Date().toISOString(),
+      logAppendOnly: true,
       ...(child.pid === undefined ? {} : { processId: child.pid }),
       ...(Number.isSafeInteger(expectedPort) && expectedPort > 0
         ? { expectedPort }
@@ -479,8 +497,7 @@ export class CommandSupervisor {
             ownership: "external",
             advice: externalViteRecoveryAdvice,
           });
-          this.logs.get(key)?.end();
-          this.logs.delete(key);
+          void this.closeLog(key);
           await this.routePublisher.remove(routeName);
           this.announce();
           return;
@@ -510,8 +527,7 @@ export class CommandSupervisor {
         const pendingExit = this.pendingRouteExits.get(key);
         if (pendingExit) {
           this.pendingRouteExits.delete(key);
-          this.logs.get(key)?.end();
-          this.logs.delete(key);
+          void this.closeLog(key);
           void this.restartAfterViteRecovery(recovery);
           return;
         }
@@ -571,8 +587,7 @@ export class CommandSupervisor {
         });
       }
       if (pendingExit) {
-        this.logs.get(key)?.end();
-        this.logs.delete(key);
+        void this.closeLog(key);
       }
       this.announce();
       if (published.ownership !== "external") {
@@ -979,8 +994,7 @@ export class CommandSupervisor {
     if (entry.ownership === "external") {
       this.removeRoute(key, entry);
       this.running.delete(key);
-      this.logs.get(key)?.end();
-      this.logs.delete(key);
+      void this.closeLog(key);
       this.announce();
       return;
     }
@@ -1015,11 +1029,7 @@ export class CommandSupervisor {
   /** The tail of what a command has printed, for showing rather than storing. */
   async output(plotPath: string, id: string, limit = 20_000): Promise<string> {
     try {
-      const contents = await readFile(
-        this.logPath(keyFor(plotPath, id)),
-        "utf8",
-      );
-      return contents.slice(-limit);
+      return await readLogTail(this.logPath(keyFor(plotPath, id)), limit);
     } catch {
       return "";
     }
@@ -1036,8 +1046,7 @@ export class CommandSupervisor {
     // Once an announced external listener is attached, the launcher exit is
     // only the end of discovery. It does not own the server or its route.
     if (entry.ownership === "external") {
-      this.logs.get(key)?.end();
-      this.logs.delete(key);
+      void this.closeLog(key);
       return;
     }
     // A forced-stop watcher can settle the old process before its close event.
@@ -1061,8 +1070,7 @@ export class CommandSupervisor {
     const recovery = this.recoveries.get(key);
     if (recovery) {
       this.recoveries.delete(key);
-      this.logs.get(key)?.end();
-      this.logs.delete(key);
+      void this.closeLog(key);
       void this.restartAfterViteRecovery(recovery);
       return;
     }
@@ -1077,16 +1085,14 @@ export class CommandSupervisor {
         exitCode: exitCode || 1,
         advice: forcedFailure,
       });
-      this.logs.get(key)?.end();
-      this.logs.delete(key);
+      void this.closeLog(key);
       this.announce();
       return;
     }
     const wasStopped = this.stopping.delete(key);
     if (exitCode === 0 || wasStopped) {
       this.running.delete(key);
-      this.logs.get(key)?.end();
-      this.logs.delete(key);
+      void this.closeLog(key);
       this.announce();
       return;
     }
@@ -1098,8 +1104,7 @@ export class CommandSupervisor {
       status: exitCode === 0 ? "stopped" : "failed",
       exitCode,
     });
-    this.logs.get(key)?.end();
-    this.logs.delete(key);
+    void this.closeLog(key);
     this.announce();
   }
 
@@ -1180,30 +1185,33 @@ export class CommandSupervisor {
       // Generous, because a dev server announces its URL once, early — a
       // monorepo's build chatter must not scroll that anchor away before
       // listener discovery reads it.
-      return readFileSync(this.logPath(key), "utf8").slice(-20_000);
+      return readLogTailSync(this.logPath(key));
     } catch {
       return "";
     }
   }
 
-  private async openLog(key: string, append = false): Promise<OpenWriteStream> {
+  private async openLog(key: string, append = false): Promise<RuntimeLog> {
     await mkdir(this.options.logDirectory, { recursive: true });
-    this.logs.get(key)?.end();
-    const stream = createWriteStream(this.logPath(key), {
-      flags: append ? "a" : "w",
-    });
-    stream.on("error", () => {
+    await this.closeLog(key);
+    const log = await openRuntimeLog(this.logPath(key), append, () => {
       // A full or detached volume must not take the whole control plane down.
-      if (this.logs.get(key) === stream) this.logs.delete(key);
+      if (this.logs.get(key) === log) void this.closeLog(key);
     });
-    try {
-      await once(stream, "open");
-    } catch (error) {
-      stream.destroy();
-      throw error;
-    }
-    this.logs.set(key, stream);
-    return stream as OpenWriteStream;
+    this.logs.set(key, log);
+    return log;
+  }
+
+  private closeLog(key: string): Promise<void> {
+    const log = this.logs.get(key);
+    if (!log) return this.closingLogs.get(key) ?? Promise.resolve();
+    this.logs.delete(key);
+    const closing = log.end();
+    this.closingLogs.set(key, closing);
+    void closing.finally(() => {
+      if (this.closingLogs.get(key) === closing) this.closingLogs.delete(key);
+    });
+    return closing;
   }
 }
 
