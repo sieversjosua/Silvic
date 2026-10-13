@@ -1,6 +1,6 @@
 {
   "name": "silvic",
-  "version": "0.1.64",
+  "version": "0.1.65",
   "description": "Start, inspect, and refresh local workspaces through the bundled Silvic CLI.",
   "author": {
     "name": "Josua Sievers",

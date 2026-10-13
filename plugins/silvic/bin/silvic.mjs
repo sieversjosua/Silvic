@@ -32721,7 +32721,7 @@ function parseReply(line, id, clientVersion) {
 // package.json
 var package_default = {
   name: "@silvic/cli",
-  version: "0.1.64",
+  version: "0.1.65",
   description: "Runtime control and interactive Plot navigation for Silvic",
   repository: "https://github.com/sieversjosua/Silvic",
   license: "MIT",
