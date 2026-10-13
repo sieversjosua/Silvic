@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { PlotCommand } from "@silvic/contracts";
 import type { CommandRunner, SupervisedCommand } from "@silvic/core";
 import type { GateRoute } from "@silvic/gate";
 
@@ -8,7 +9,8 @@ import { IdlePreviews } from "./idle-previews";
 const minute = 60_000;
 const openedAt = Date.parse("2026-10-12T10:00:00Z");
 
-function fixture() {
+function fixture(definition?: Readonly<Record<string, PlotCommand>>) {
+  let busy = false;
   let minutes = 30;
   let commands: SupervisedCommand[] = [
     {
@@ -41,8 +43,11 @@ function fixture() {
     previews.synchronize();
   });
   const readRoutes = vi.fn(async () => routes);
+  const readDefinition = vi.fn(async (_path: string) => definition ?? {});
   const previews = new IdlePreviews({
     minutes: () => minutes,
+    busy: () => busy,
+    ...(definition ? { definition: readDefinition } : {}),
     commands: () => commands,
     routes: readRoutes,
     protectedPaths: async () => protectedPaths,
@@ -52,9 +57,13 @@ function fixture() {
   previews.synchronize();
   return {
     previews,
+    setBusy: (value: boolean) => {
+      busy = value;
+    },
     stop,
     run,
     readRoutes,
+    readDefinition,
     setMinutes: (value: number) => {
       minutes = value;
       previews.synchronize();
@@ -253,4 +262,139 @@ describe("idle previews", () => {
     await vi.advanceTimersByTimeAsync(minute);
     expect(state.stop).toHaveBeenCalledOnce();
   });
+});
+
+const companionRecipe = {
+  web: { run: "web", url: true, dependsOn: ["agent"] },
+  agent: { run: "agent", dependsOn: ["convex"], stopWhenUnused: true },
+  convex: { run: "convex", stopWhenUnused: true },
+  worker: { run: "worker", dependsOn: ["agent"] },
+};
+function companionCommands(
+  state: ReturnType<typeof fixture>,
+): SupervisedCommand[] {
+  return [
+    ...state.commands(),
+    { plotPath: "/plots/shop", id: "agent", processId: 43, status: "running" },
+    { plotPath: "/plots/shop", id: "convex", processId: 44, status: "running" },
+  ];
+}
+
+it("sleeps opted-in dependencies after their consumer", async () => {
+  const state = fixture(companionRecipe);
+  state.setCommands(companionCommands(state));
+  await vi.advanceTimersByTimeAsync(30 * minute);
+  expect(state.stop.mock.calls.map((call) => call[0].id)).toEqual([
+    "web",
+    "agent",
+    "convex",
+  ]);
+});
+
+it.each(["external", "starting", "kept", "worker", "busy", "unknown"])(
+  "protects companions needed by %s",
+  async (reason) => {
+    const recipe =
+      reason === "kept"
+        ? {
+            ...companionRecipe,
+            agent: { ...companionRecipe.agent, stopWhenUnused: false },
+          }
+        : companionRecipe;
+    const state = fixture(recipe);
+    const commands = companionCommands(state).map((command) =>
+      command.id !== "agent"
+        ? command
+        : reason === "external"
+          ? { ...command, ownership: "external" as const }
+          : reason === "starting"
+            ? { ...command, status: "starting" as const }
+            : command,
+    );
+    if (reason === "worker")
+      commands.push({
+        plotPath: "/plots/shop",
+        id: "worker",
+        status: "running",
+        processId: 45,
+      });
+    if (reason === "unknown")
+      commands.push({
+        plotPath: "/plots/shop",
+        id: "old-command",
+        status: "running",
+        processId: 46,
+      });
+    state.setCommands(commands);
+    if (reason === "busy") state.setBusy(true);
+    await vi.advanceTimersByTimeAsync(30 * minute);
+    expect(state.stop.mock.calls.map((call) => call[0].id)).toEqual(
+      reason === "busy" ? [] : ["web"],
+    );
+  },
+);
+
+it("stops only opted-in companions and honors disabling the policy", async () => {
+  const state = fixture({
+    ...companionRecipe,
+    convex: { run: "convex", stopWhenUnused: false },
+  });
+  state.setCommands(companionCommands(state));
+  await vi.advanceTimersByTimeAsync(30 * minute);
+  expect(state.stop.mock.calls.map((call) => call[0].id)).toEqual([
+    "web",
+    "agent",
+  ]);
+  expect(state.commands().map((command) => command.id)).toEqual(["convex"]);
+});
+
+it("isolates unavailable plot policy without blocking other idle previews", async () => {
+  const state = fixture(companionRecipe);
+  const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+  state.readDefinition.mockImplementation(async (path) => {
+    if (path === "/offline") throw new Error("Plot missing");
+    return companionRecipe;
+  });
+  state.setCommands([
+    ...companionCommands(state),
+    {
+      plotPath: "/offline",
+      id: "web",
+      processId: 99,
+      status: "running",
+      routeName: "web-offline",
+      targetPort: 4322,
+      startedAt: new Date(openedAt).toISOString(),
+    },
+    { plotPath: "/offline", id: "agent", processId: 100, status: "running" },
+  ]);
+  state.setRoutes([
+    ...(state.routes() ?? []),
+    {
+      name: "web-offline",
+      port: 4322,
+      updatedAt: new Date(openedAt).toISOString(),
+      lastActivityAt: openedAt,
+      activeConnections: 0,
+    },
+  ]);
+  try {
+    await vi.advanceTimersByTimeAsync(30 * minute);
+    expect(
+      state.stop.mock.calls
+        .filter((call) => call[0].plotPath === "/plots/shop")
+        .map((call) => call[0].id),
+    ).toEqual(["web", "agent", "convex"]);
+    expect(
+      state
+        .commands()
+        .find(
+          (command) =>
+            command.plotPath === "/offline" && command.id === "agent",
+        ),
+    ).toBeDefined();
+  } finally {
+    log.mockRestore();
+    state.previews.close();
+  }
 });

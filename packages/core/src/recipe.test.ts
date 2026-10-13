@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { recipeSchema, runtimeDependencyOrder } from "@silvic/contracts";
 import { plotPort, plotUrl } from "./ports";
 import { readRecipe, readRecipeSource } from "./recipe";
 
@@ -211,4 +212,51 @@ describe("plotPort", () => {
   it("builds the address from the port", () => {
     expect(plotUrl(3456)).toBe("http://localhost:3456");
   });
+});
+
+it("preserves explicit companion policy and orders dependencies before their preview", async () => {
+  const commands = {
+    web: { run: "web", url: true, dependsOn: ["agent", "convex"] },
+    agent: { run: "agent", dependsOn: ["convex"], stopWhenUnused: true },
+    convex: { run: "convex", stopWhenUnused: false },
+  };
+  const root = await repository({ commands });
+  expect((await readRecipeSource(root)).recipe.commands).toEqual(commands);
+  expect(runtimeDependencyOrder(commands, "web")).toEqual([
+    "convex",
+    "agent",
+    "web",
+  ]);
+});
+
+it.each([
+  { web: { run: "web", dependsOn: ["missing"] } },
+  { web: { run: "web", dependsOn: ["constructor"] } },
+  { web: { run: "web", dependsOn: ["web"] } },
+  {
+    web: { run: "web", dependsOn: ["agent"] },
+    agent: { run: "agent", dependsOn: ["web"] },
+  },
+  { web: { run: "web", url: true, stopWhenUnused: true } },
+])("rejects invalid companion dependency graphs %j", (commands) => {
+  expect(recipeSchema.safeParse({ commands }).success).toBe(false);
+});
+
+it("visits a dependency chain and shared diamond nodes once", () => {
+  const commands: Record<string, import("@silvic/contracts").PlotCommand> = {
+    base: { run: "base" },
+  };
+  let previous = "base";
+  for (let index = 0; index < 20; index++) {
+    const id = `service-${index}`;
+    commands[id] = { run: id, dependsOn: [previous] };
+    previous = id;
+  }
+  commands["shared"] = { run: "shared", dependsOn: [previous] };
+  commands["web"] = { run: "web", dependsOn: [previous, "shared", "base"] };
+  const order = runtimeDependencyOrder(commands, "web");
+  expect(order).toHaveLength(23);
+  expect(new Set(order).size).toBe(order.length);
+  expect(order.at(-1)).toBe("web");
+  expect(order[0]).toBe("base");
 });
