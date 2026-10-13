@@ -85,6 +85,9 @@ See [docs/PLOTS.md](docs/PLOTS.md) for the model and the decisions behind it.
   again. Auto-stop runs while Silvic is open, including with its window closed;
   the existing keep-running-on-quit setting still applies after quitting.
 - Diff inspection, Codex-assisted delivery drafts, and confirmed commit/push/PR
+- Runtime log tails use bounded reads. While Silvic is running, oversized logs
+  rotate at 20 MiB and keep one bounded backup; inherited append-only file
+  descriptors continue working across rotation and desktop restarts.
 
 **Opening it**
 
