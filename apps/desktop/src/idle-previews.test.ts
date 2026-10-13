@@ -85,7 +85,6 @@ describe("idle previews", () => {
     const state = fixture();
     await vi.advanceTimersByTimeAsync(29 * minute);
     expect(state.stop).not.toHaveBeenCalled();
-    expect(state.run).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(minute);
     expect(state.stop).toHaveBeenCalledWith(
       expect.objectContaining({ processId: 42 }),
@@ -113,6 +112,18 @@ describe("idle previews", () => {
     state.setProtected(new Set(["/plots/shop"]));
     await vi.advanceTimersByTimeAsync(35 * minute);
     expect(state.stop).not.toHaveBeenCalled();
+    state.setProtected(new Set());
+    await vi.advanceTimersByTimeAsync(29 * minute);
+    expect(state.stop).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(minute);
+    expect(state.stop).toHaveBeenCalledOnce();
+  });
+
+  it("starts the idle period after a short job that finishes before the first timeout", async () => {
+    const state = fixture();
+    await vi.advanceTimersByTimeAsync(10 * minute);
+    state.setProtected(new Set(["/plots/shop"]));
+    await vi.advanceTimersByTimeAsync(19 * minute);
     state.setProtected(new Set());
     await vi.advanceTimersByTimeAsync(29 * minute);
     expect(state.stop).not.toHaveBeenCalled();

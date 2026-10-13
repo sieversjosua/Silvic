@@ -75,11 +75,7 @@ export class IdlePreviews {
     return `${normalize(command.plotPath)}::${command.id}::${command.processId}`;
   }
 
-  private idle(
-    command: SupervisedCommand,
-    route: GateRoute,
-    lastBusyAt = this.lastBusyAt.get(this.key(command)) ?? 0,
-  ): boolean {
+  private idle(command: SupervisedCommand, route: GateRoute): boolean {
     if (
       route.port !== command.targetPort ||
       route.lastActivityAt === undefined ||
@@ -91,7 +87,7 @@ export class IdlePreviews {
       this.openedAt,
       Date.parse(command.startedAt ?? "") || this.openedAt,
       route.lastActivityAt,
-      lastBusyAt,
+      this.lastBusyAt.get(this.key(command)) ?? 0,
     );
     return Date.now() - since >= this.options.minutes() * 60_000;
   }
@@ -103,9 +99,13 @@ export class IdlePreviews {
     if (!routes) return;
     const candidates = this.previews().filter((command) => {
       const route = routes.find((entry) => entry.name === command.routeName);
-      // Keep observing local jobs during their grace period, so it starts
-      // after their last observed activity rather than the first idle check.
-      return route !== undefined && this.idle(command, route, 0);
+      // Observe local work throughout the idle period, including jobs that
+      // finish before the browser's initial timeout expires.
+      return (
+        route?.port === command.targetPort &&
+        route.lastActivityAt !== undefined &&
+        route.activeConnections === 0
+      );
     });
     if (candidates.length === 0) return;
     const protectedPaths = await this.options.protectedPaths();
