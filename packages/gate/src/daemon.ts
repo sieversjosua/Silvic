@@ -67,6 +67,8 @@ export async function startGate(options: GateOptions = {}): Promise<Gate> {
     store,
     version: options.version ?? "dev",
     wake: (route: Parameters<Waker["wake"]>[0]) => waker.wake(route),
+    wakeStatus: (name: string) => waker.status(name),
+    retryWake: (route: Parameters<Waker["wake"]>[0]) => waker.retry(route),
     recover: (
       route: Parameters<Waker["wake"]>[0],
       failure: "vite-stale-optimized-dependency",
@@ -167,6 +169,8 @@ export async function startGate(options: GateOptions = {}): Promise<Gate> {
     store,
     version: options.version ?? "dev",
     log,
+    onWakeResult: (route, requestId, result) =>
+      waker.result(route, requestId, result),
   });
   const controlServer = control;
   log(

@@ -1,6 +1,7 @@
 import { connect, type Socket } from "node:net";
 
 import type {
+  GateWakeResult,
   ControlReply,
   ControlRequest,
   GateEvent,
@@ -16,6 +17,7 @@ export interface GateStatus {
 
 export interface GateWake {
   route: string;
+  requestId?: string;
   plotPath?: string;
   commandId?: string;
 }
@@ -110,6 +112,17 @@ export class GateClient {
     if (reply.type === "error") throw new Error(reply.message);
   }
 
+  async wakeResult(wake: GateWake, result: GateWakeResult): Promise<void> {
+    if (!wake.requestId) return;
+    const reply = await this.request({
+      type: "wake-result",
+      route: wake.route,
+      requestId: wake.requestId,
+      result,
+    });
+    if (reply.type === "error") throw new Error(reply.message);
+  }
+
   close(): void {
     this.socket?.destroy();
     this.socket = undefined;
@@ -174,6 +187,7 @@ export class GateClient {
       if (message.type === "wake") {
         this.options.onWake?.({
           route: message.route,
+          ...(message.requestId ? { requestId: message.requestId } : {}),
           ...(message.plotPath ? { plotPath: message.plotPath } : {}),
           ...(message.commandId ? { commandId: message.commandId } : {}),
         });

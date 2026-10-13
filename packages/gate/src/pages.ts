@@ -32,40 +32,42 @@ const page = (title: string, body: string) => `<!doctype html>
 
 /** Served while a known route has no living upstream; polls until it does. */
 export function holdingPage(route: GateRoute): string {
-  return page(
-    "Starting…",
-    `<div class="spin"></div>
-<h1>Waking <code>${escapeHtml(route.name)}</code></h1>
-<p>Silvic is starting this environment. The page reloads by itself.</p>
-<script>
-  const poll = async () => {
-    try {
-      const reply = await fetch("/__silvic/route-status", { cache: "no-store" });
-      const status = await reply.json();
-      if (status.ready) { location.reload(); return; }
-    } catch {}
-    setTimeout(poll, 1200);
-  };
-  poll();
-</script>`,
-  );
+  return waitingPage(route, false);
 }
 
 /** Served while Silvic repairs a known broken upstream. */
 export function recoveryPage(route: GateRoute): string {
+  return waitingPage(route, true);
+}
+
+function waitingPage(route: GateRoute, repairing: boolean): string {
   return page(
-    "Repairing…",
+    repairing ? "Repairing…" : "Starting…",
     `<div class="spin"></div>
-<h1>Repairing <code>${escapeHtml(route.name)}</code></h1>
-<p>Silvic is rebuilding the preview cache. The page reloads by itself.</p>
+<h1>${repairing ? "Repairing" : "Waking"} <code>${escapeHtml(route.name)}</code></h1>
+<p id="wake-message">Silvic is starting this environment. The page reloads by itself.</p>
+<p id="wake-retry-time"></p>
+<button id="wake-retry" type="button" hidden>Retry now</button>
 <script>
   const poll = async () => {
     try {
       const reply = await fetch("/__silvic/route-status", { cache: "no-store" });
       const status = await reply.json();
       if (status.ready) { location.reload(); return; }
+      if (status.wake && document.getElementById("wake-message")) {
+        const failed = !["starting", "started", "already-running"].includes(status.wake.outcome);
+        document.getElementById("wake-message").textContent = status.wake.message;
+        document.getElementById("wake-retry-time").textContent = failed ? "Next attempt after " + new Date(status.wake.retryAt).toLocaleTimeString() + "." : "";
+        document.getElementById("wake-retry").hidden = !failed;
+        document.querySelector(".spin").hidden = failed;
+      }
     } catch {}
     setTimeout(poll, 1200);
+  };
+  document.getElementById("wake-retry").onclick = async () => {
+    document.getElementById("wake-retry").disabled = true;
+    try { await fetch("/__silvic/retry", {method:"POST"}); }
+    finally { document.getElementById("wake-retry").disabled = false; }
   };
   poll();
 </script>`,

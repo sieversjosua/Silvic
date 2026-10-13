@@ -6,6 +6,7 @@ import {
 } from "node:http";
 import { connect as connectTcp, type Socket } from "node:net";
 
+import type { GateWakeStatus } from "./control-protocol";
 import { GATE_HOST } from "./constants";
 import {
   holdingPage,
@@ -19,6 +20,8 @@ export interface ProxyContext {
   store: RouteStore;
   version: string;
   wake(route: GateRoute): void;
+  wakeStatus?(name: string): GateWakeStatus | undefined;
+  retryWake?(route: GateRoute): void;
   recover(route: GateRoute, failure: "vite-stale-optimized-dependency"): void;
 }
 
@@ -44,10 +47,18 @@ export function createRequestHandler(context: ProxyContext) {
       respondHtml(response, 404, unknownRoutePage(host, context.store.list()));
       return;
     }
+    if (request.url === "/__silvic/retry" && request.method === "POST") {
+      context.retryWake?.(route);
+      respondJson(response, 200, { wake: context.wakeStatus?.(route.name) });
+      return;
+    }
     if (request.url === "/__silvic/route-status") {
       void upstreamReady(route).then((ready) => {
         if (!ready) context.wake(route);
-        respondJson(response, 200, { ready });
+        respondJson(response, 200, {
+          ready,
+          wake: context.wakeStatus?.(route.name),
+        });
       });
       return;
     }

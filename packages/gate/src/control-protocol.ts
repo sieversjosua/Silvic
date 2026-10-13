@@ -5,6 +5,13 @@ export type ControlRequest =
   | { id: number; type: "status" }
   | {
       id: number;
+      type: "wake-result";
+      route: string;
+      requestId: string;
+      result: GateWakeResult;
+    }
+  | {
+      id: number;
       type: "route-set";
       name: string;
       host: "127.0.0.1" | "::1";
@@ -41,10 +48,22 @@ export type ControlReply =
       routes: readonly GateRoute[];
     };
 
+export interface GateWakeResult {
+  outcome:
+    "started" | "already-running" | "plot-missing" | "failed" | "not-owned";
+  message: string;
+}
+export interface GateWakeStatus {
+  outcome: GateWakeResult["outcome"] | "starting" | "no-response";
+  message: string;
+  retryAt: number;
+}
+
 /** Pushed to every connected client, without a request. */
 export interface WakeEvent {
   type: "wake";
   route: string;
+  requestId?: string;
   plotPath?: string;
   commandId?: string;
 }
@@ -72,6 +91,33 @@ export function parseControlRequest(line: string): ControlRequest | undefined {
   if (typeof message["id"] !== "number") return undefined;
   const name = message["name"];
   switch (message["type"]) {
+    case "wake-result": {
+      const result = message["result"];
+      if (
+        typeof message["route"] !== "string" ||
+        !validRouteName(message["route"]) ||
+        typeof message["requestId"] !== "string" ||
+        typeof result !== "object" ||
+        result === null ||
+        !("outcome" in result) ||
+        !("message" in result) ||
+        typeof result.message !== "string" ||
+        result.message.length > 1500 ||
+        (result.outcome !== "started" &&
+          result.outcome !== "already-running" &&
+          result.outcome !== "plot-missing" &&
+          result.outcome !== "failed" &&
+          result.outcome !== "not-owned")
+      )
+        return undefined;
+      return {
+        id: message["id"],
+        type: "wake-result",
+        route: message["route"],
+        requestId: message["requestId"],
+        result: { outcome: result.outcome, message: result.message },
+      };
+    }
     case "status":
       return { id: message["id"], type: "status" };
     case "route-set": {
