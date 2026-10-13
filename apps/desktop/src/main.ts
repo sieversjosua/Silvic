@@ -50,6 +50,7 @@ import {
   readActiveHarnessSessions,
 } from "@silvic/connector-local";
 import {
+  runtimeDependencyOrder,
   appearancePreferenceSchema,
   codexEnvironmentRequestSchema,
   createEnvironmentRequestSchema,
@@ -220,6 +221,7 @@ const deliveryService = new DeliveryService(runner);
 const provisioner = new Provisioner(runner);
 const teardownService = new TeardownService(runner);
 const workspaceRegistry = new WorkspaceRegistry();
+const startingPlotCommands = new Map<string, number>();
 let runtimeObservationRefreshTimer: NodeJS.Timeout | undefined;
 let stopSessionRefreshLoop: (() => void) | undefined;
 let idlePreviews: IdlePreviews | undefined;
@@ -428,18 +430,27 @@ if (!app.requestSingleInstanceLock()) {
     await paintFromGit(settings.get("roots"), "replace");
     idlePreviews = new IdlePreviews({
       minutes: () => settings.get("previewIdleMinutes"),
+      busy: (path) => startingPlotCommands.has(normalize(path)),
       commands: () => supervisor.list(),
       routes: async () => (await gate.client.status())?.routes,
       protectedPaths: async () => {
         const paths = supervisor
           .list()
           .map((entry) => normalize(entry.plotPath));
-        return activeHarnessSessionWorkspaceIds(
+        const sessions = activeHarnessSessionWorkspaceIds(
           paths.map((path) => ({ workspaceId: path, path })),
           await readActiveHarnessSessions(runner),
         );
+        return new Set([...sessions, ...startingPlotCommands.keys()]);
       },
       runner,
+      definition: async (path) => {
+        const project = latestSnapshot.projects.find((candidate) =>
+          candidate.workspaces.some((workspace) => workspace.path === path),
+        );
+        if (!project) throw new Error("Idle preview project is unavailable.");
+        return (await readRecipe(project.rootPath)).commands;
+      },
       stop: (command) => supervisor.stop(command.plotPath, command.id),
     });
     idlePreviews.synchronize();
@@ -2479,8 +2490,55 @@ async function commitsHeldOnlyHere(
 async function startPlotCommand(
   path: string,
   id: string,
-  /** Whether a person just asked, which may show the admin dialog again. */
   interactive = true,
+): Promise<void> {
+  const key = normalize(path);
+  startingPlotCommands.set(key, (startingPlotCommands.get(key) ?? 0) + 1);
+  try {
+    const workspace = knownWorkspace(path);
+    const project = latestSnapshot.projects.find((candidate) =>
+      candidate.workspaces.some(
+        (entry) => entry.workspaceId === workspace.workspaceId,
+      ),
+    );
+    if (!project) throw new Error("That plot belongs to no known project");
+    const recipe = await readRecipe(project.rootPath);
+    for (const runtimeId of runtimeDependencyOrder(recipe.commands, id)) {
+      await startPlotCommandNow(
+        path,
+        runtimeId,
+        interactive && runtimeId === id,
+        recipe,
+      );
+      if (runtimeId === id) continue;
+      const runtime = supervisor
+        .list()
+        .find(
+          (entry) =>
+            entry.plotPath === workspace.path && entry.id === runtimeId,
+        );
+      if (
+        !runtime ||
+        runtime.status === "failed" ||
+        runtime.status === "stopping"
+      )
+        throw new Error(
+          `Dependency ${runtimeId} could not start: ${runtime?.advice ?? "No live runtime was reported"}`,
+        );
+    }
+  } finally {
+    const remaining = (startingPlotCommands.get(key) ?? 1) - 1;
+    if (remaining > 0) startingPlotCommands.set(key, remaining);
+    else startingPlotCommands.delete(key);
+  }
+}
+
+async function startPlotCommandNow(
+  path: string,
+  id: string,
+  /** Whether a person just asked, which may show the admin dialog again. */
+  interactive: boolean,
+  recipe: ResolvedRecipe,
 ): Promise<void> {
   if (pruningArtifacts)
     throw new Error(
@@ -2498,7 +2556,6 @@ async function startPlotCommand(
   );
   if (!project) throw new Error("That plot belongs to no known project");
 
-  const recipe = await readRecipe(project.rootPath);
   const command = recipe.commands[id];
   if (!command) {
     throw new Error(`This repository declares no command called ${id}`);

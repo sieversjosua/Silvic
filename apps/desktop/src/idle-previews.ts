@@ -1,14 +1,17 @@
 import { normalize, relative } from "node:path";
 
+import { runtimeDependencyOrder, type PlotCommand } from "@silvic/contracts";
 import type { CommandRunner, SupervisedCommand } from "@silvic/core";
 import type { GateRoute } from "@silvic/gate";
 
 interface IdlePreviewOptions {
   minutes(): number;
+  busy?(plotPath: string): boolean;
   commands(): readonly SupervisedCommand[];
   routes(): Promise<readonly GateRoute[] | undefined>;
   protectedPaths(): Promise<ReadonlySet<string>>;
   runner: CommandRunner;
+  definition?(plotPath: string): Promise<Readonly<Record<string, PlotCommand>>>;
   stop(command: SupervisedCommand): void;
 }
 
@@ -111,12 +114,31 @@ export class IdlePreviews {
     if (candidates.length === 0) return;
     const protectedPaths = await this.options.protectedPaths();
     const jobs = await this.activeJobPaths(candidates);
+    const definitions = new Map<
+      string,
+      Readonly<Record<string, PlotCommand>>
+    >();
+    if (this.options.definition)
+      for (const path of new Set(candidates.map((command) => command.plotPath)))
+        try {
+          definitions.set(path, await this.options.definition(path));
+        } catch (error) {
+          console.error(
+            `Silvic could not load the companion policy for ${path}`,
+            error,
+          );
+        }
+    const sleeping = new Map<string, Set<string>>();
     // A browser request may have arrived while the session/job scan ran.
     const currentRoutes = await this.options.routes();
     if (!currentRoutes || this.closed || this.options.minutes() === 0) return;
     for (const command of candidates) {
       const path = normalize(command.plotPath);
-      if (protectedPaths.has(path) || jobs.has(path)) {
+      if (
+        this.options.busy?.(path) ||
+        protectedPaths.has(path) ||
+        jobs.has(path)
+      ) {
         this.lastBusyAt.set(this.key(command), Date.now());
         continue;
       }
@@ -128,6 +150,70 @@ export class IdlePreviews {
       );
       if (current && route && this.idle(current, route)) {
         this.options.stop(current);
+        const ids = sleeping.get(current.plotPath) ?? new Set<string>();
+        ids.add(current.id);
+        sleeping.set(current.plotPath, ids);
+      }
+    }
+    for (const [path, ids] of sleeping) {
+      const definition = definitions.get(path);
+      if (!definition || [...ids].some((id) => !Object.hasOwn(definition, id)))
+        continue;
+      const dependencies = new Set(
+        [...ids].flatMap((id) =>
+          runtimeDependencyOrder(definition, id).filter(
+            (dependency) => dependency !== id,
+          ),
+        ),
+      );
+      const live = this.options
+        .commands()
+        .filter(
+          (command) =>
+            command.plotPath === path &&
+            ["starting", "running", "stopping"].includes(command.status),
+        );
+      if (
+        live.some(
+          (command) =>
+            !ids.has(command.id) && !Object.hasOwn(definition, command.id),
+        )
+      )
+        continue;
+      const retained = new Set(
+        live
+          .filter(
+            (command) => !ids.has(command.id) && !dependencies.has(command.id),
+          )
+          .flatMap((command) =>
+            definition[command.id]
+              ? runtimeDependencyOrder(definition, command.id)
+              : [],
+          ),
+      );
+      // A kept companion also protects its own dependencies.
+      for (const command of live)
+        if (
+          dependencies.has(command.id) &&
+          (command.status !== "running" ||
+            command.routeName !== undefined ||
+            command.ownership === "external" ||
+            !definition[command.id]?.stopWhenUnused ||
+            retained.has(command.id))
+        )
+          for (const id of runtimeDependencyOrder(definition, command.id))
+            retained.add(id);
+      for (const id of [...dependencies].reverse()) {
+        const command = live.find((entry) => entry.id === id);
+        if (
+          command?.status === "running" &&
+          command.ownership !== "external" &&
+          command.processId !== undefined &&
+          command.routeName === undefined &&
+          definition[id]?.stopWhenUnused &&
+          !retained.has(id)
+        )
+          this.options.stop(command);
       }
     }
   }

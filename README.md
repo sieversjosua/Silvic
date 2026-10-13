@@ -198,3 +198,17 @@ MIT
 The gate logs each wake attempt and its desktop result. Failed wakes back off from 30 seconds to five minutes; missing or unadopted plots wait 30 minutes. A desktop that never acknowledges a request is reported after 60 seconds. The holding page shows the reason and next attempt, with **Retry now** to retry explicitly. A successful preview still reloads automatically.
 
 In a plot’s **Resources** section, **Measure resource usage** takes one OS sample of owned process groups (or the recorded external process). It shows uptime, average CPU and memory. On macOS, `top` supplies physical footprint and compressed memory; elsewhere or if sampling is denied, the UI explicitly falls back to resident memory from `ps`. Footprint includes compressed memory, so the compressed figure is not added again ([Apple’s memory accounting explanation](https://developer.apple.com/videos/play/wwdc2021/10180/)). Summed process accounting is an estimate, not the host’s memory pressure or a Node heap limit. Measurements are requested manually; Silvic does not continuously poll every plot.
+
+To let a preview’s local companion services sleep too, declare dependencies and opt each companion in explicitly:
+
+```json
+{
+  "commands": {
+    "web": { "run": "pnpm dev", "url": true, "dependsOn": ["convex", "agent"] },
+    "convex": { "run": "pnpm convex dev", "stopWhenUnused": true },
+    "agent": { "run": "pnpm agent", "stopWhenUnused": true }
+  }
+}
+```
+
+`dependsOn` launches declared dependencies before their consumer; it is launch ordering, not a service health check. Missing names and cycles are rejected. When an idle preview stops, Silvic may stop its opted-in, owned, non-serving dependencies only if no other live consumer needs them. Kept, starting and external companions protect their own dependencies. Active sessions, local jobs and pending user starts protect the plot. Opening the preview URL starts its dependencies again. Omitting or disabling `stopWhenUnused` leaves companion lifetimes unchanged. This affects local owned processes only, without tearing down provider resources. The recipe editor preserves these fields when saving other edits.

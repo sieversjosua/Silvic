@@ -440,6 +440,18 @@ export const plotCommandSchema = z
     /** Serves the plot's canonical browser and auth address. */
     url: z.boolean().optional(),
     autoStart: z.boolean().optional(),
+    /** Commands to launch before this runtime, in dependency order. */
+    dependsOn: z
+      .array(
+        z
+          .string()
+          .regex(/^[a-z][a-z0-9-]*$/)
+          .max(60),
+      )
+      .max(20)
+      .optional(),
+    /** Opt in: stop this non-serving runtime when idle previews no longer need it. */
+    stopWhenUnused: z.boolean().optional(),
     /** First segment of that name; the command's id when left out. */
     routeName: z.string().min(1).max(60).optional(),
     /** Named HTTPS routing is the default; false keeps the stable port URL. */
@@ -599,6 +611,31 @@ export const plotResourceProviderCatalog: Readonly<
   },
 };
 
+/** Dependencies precede their consumer; rejects missing names and cycles. */
+export function runtimeDependencyOrder(
+  commands: Readonly<Record<string, PlotCommand>>,
+  id: string,
+): readonly string[] {
+  const result: string[] = [];
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  const visit = (name: string) => {
+    if (visiting.has(name))
+      throw new Error(`Runtime dependency cycle at ${name}.`);
+    if (visited.has(name)) return;
+    const command = Object.hasOwn(commands, name) ? commands[name] : undefined;
+    if (!command)
+      throw new Error(`Runtime dependency ${name} is not declared.`);
+    visiting.add(name);
+    for (const dependency of command.dependsOn ?? []) visit(dependency);
+    visiting.delete(name);
+    visited.add(name);
+    result.push(name);
+  };
+  visit(id);
+  return result;
+}
+
 /** A resource projected for one Plot from its recipe and live evidence. */
 export interface PlotResource {
   id: string;
@@ -648,7 +685,24 @@ export const recipeSchema = z
       .optional(),
     provision: z.array(provisionStepSchema).max(50).optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((recipe, context) => {
+    try {
+      for (const [id, command] of Object.entries(recipe.commands ?? {})) {
+        if (command.stopWhenUnused && command.url)
+          throw new Error(
+            `Runtime ${id}: stopWhenUnused applies to non-serving companions.`,
+          );
+        runtimeDependencyOrder(recipe.commands ?? {}, id);
+      }
+    } catch (error) {
+      context.addIssue({
+        code: "custom",
+        path: ["commands"],
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
 export type Recipe = z.infer<typeof recipeSchema>;
 
 /**
