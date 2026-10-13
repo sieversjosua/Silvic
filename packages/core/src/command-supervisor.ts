@@ -49,6 +49,8 @@ export interface SupervisedCommand {
   identity?: string;
   startedAt?: string;
   exitCode?: number;
+  failedAt?: string;
+  failureCount?: number;
   /** Why this is not what was asked for, when Silvic had to settle. */
   advice?: string;
   /** A short local lifecycle note, such as a completed automatic recovery. */
@@ -87,6 +89,8 @@ export interface StartRequest {
  * and everything it forked with it rather than orphaning a dev server.
  */
 export class CommandSupervisor {
+  private draining = false;
+  private shutdownEpoch = 0;
   private readonly starts = new Map<string, Promise<void>>();
   private readonly externalRepairs = new Map<string, Promise<void>>();
   private readonly running = new Map<string, SupervisedCommand>();
@@ -255,6 +259,10 @@ export class CommandSupervisor {
       })),
     );
     for (const { entry, running } of live) {
+      if (entry.status === "failed") {
+        this.running.set(keyFor(entry.plotPath, entry.id), entry);
+        continue;
+      }
       if (
         entry.ownership === "external" &&
         (entry.status === "running" || entry.status === "starting")
@@ -302,6 +310,7 @@ export class CommandSupervisor {
   }
 
   async start(request: StartRequest): Promise<void> {
+    if (this.draining) throw new Error("Silvic is shutting down.");
     const key = keyFor(request.plotPath, request.id);
     const pending = this.starts.get(key);
     if (pending) return pending;
@@ -347,7 +356,9 @@ export class CommandSupervisor {
     } = {},
   ): Promise<void> {
     const key = keyFor(request.plotPath, request.id);
-    const log = await this.openLog(key, state.appendLog ?? false);
+    const epoch = this.shutdownEpoch;
+    const log = await this.openLog(key, state.appendLog ?? false, epoch);
+    if (!log) return;
     const namedUrl = `https://${request.routeName}.localhost`;
     const environment: NodeJS.ProcessEnv = {
       ...process.env,
@@ -379,6 +390,7 @@ export class CommandSupervisor {
     const expectedPort = Number(environment["PORT"]);
     const inspectorPort = Number(environment["SILVIC_INSPECTOR_PORT"]);
     const identity = environment["SILVIC_AGENT_NAME"];
+    const previousFailureCount = this.running.get(key)?.failureCount;
 
     const entry: SupervisedCommand = {
       plotPath: request.plotPath,
@@ -386,6 +398,7 @@ export class CommandSupervisor {
       status: routed ? "starting" : "running",
       startedAt: new Date().toISOString(),
       logAppendOnly: true,
+      ...(previousFailureCount ? { failureCount: previousFailureCount } : {}),
       ...(child.pid === undefined ? {} : { processId: child.pid }),
       ...(Number.isSafeInteger(expectedPort) && expectedPort > 0
         ? { expectedPort }
@@ -411,12 +424,16 @@ export class CommandSupervisor {
     this.running.set(key, entry);
     this.announce();
 
+    let launchSettled = false;
     child.once("error", (error) => {
+      launchSettled = true;
+      this.forcedFailures.set(key, `Runtime could not start: ${error.message}`);
       log.write(`\n${error.message}\n`);
       this.settle(key, 1, child.pid);
     });
-    child.once("close", (exitCode) => {
-      this.settle(key, exitCode ?? 0, child.pid);
+    child.once("close", (exitCode, signal) => {
+      if (launchSettled) return;
+      this.settle(key, exitCode ?? (signal ? 1 : 0), child.pid);
     });
     if (routed && child.pid !== undefined) {
       if (!Number.isSafeInteger(expectedPort) || expectedPort <= 0) {
@@ -490,13 +507,19 @@ export class CommandSupervisor {
             exitCode: _oldExitCode,
             ...failed
           } = entry;
-          this.running.set(key, {
-            ...failed,
-            status: "failed",
-            targetPort: published.port,
-            ownership: "external",
-            advice: externalViteRecoveryAdvice,
-          });
+          this.running.set(
+            key,
+            this.failedCommand(
+              {
+                ...failed,
+                status: "failed",
+                targetPort: published.port,
+                ownership: "external",
+              },
+              1,
+              externalViteRecoveryAdvice,
+            ),
+          );
           void this.closeLog(key);
           await this.routePublisher.remove(routeName);
           this.announce();
@@ -972,13 +995,22 @@ export class CommandSupervisor {
 
   private refuse(request: StartRequest, advice: string): void {
     const key = keyFor(request.plotPath, request.id);
-    this.running.set(key, {
-      plotPath: request.plotPath,
-      id: request.id,
-      status: "failed",
-      exitCode: 1,
-      advice,
-    });
+    const previousFailureCount = this.running.get(key)?.failureCount;
+    this.running.set(
+      key,
+      this.failedCommand(
+        {
+          plotPath: request.plotPath,
+          id: request.id,
+          status: "failed",
+          ...(previousFailureCount
+            ? { failureCount: previousFailureCount }
+            : {}),
+        },
+        1,
+        advice,
+      ),
+    );
     this.announce();
   }
 
@@ -1023,6 +1055,67 @@ export class CommandSupervisor {
       if (entry.status === "starting" || entry.status === "running") {
         this.stop(entry.plotPath, entry.id);
       }
+    }
+  }
+
+  /** Keep the application alive until owned groups, including orphan children, exit. */
+  async stopAllAndWait(): Promise<void> {
+    this.draining = true;
+    this.shutdownEpoch++;
+    this.recoveries.clear();
+    try {
+      await Promise.allSettled(this.starts.values());
+      const groups = new Set(
+        this.list().flatMap((entry) =>
+          entry.ownership !== "external" &&
+          ["starting", "running", "stopping"].includes(entry.status) &&
+          entry.processId !== undefined
+            ? [entry.processId]
+            : [],
+        ),
+      );
+      this.stopAll();
+      const observe = async () => {
+        const live = await readProcessGroups();
+        for (const id of groups) if (!live.has(id)) groups.delete(id);
+      };
+      const deadline = Date.now() + 3_000;
+      while (groups.size > 0) {
+        await observe();
+        if (groups.size === 0) break;
+        if (Date.now() >= deadline) {
+          for (const id of groups) {
+            try {
+              process.kill(-id, "SIGKILL");
+            } catch (error) {
+              if (
+                !(error instanceof Error) ||
+                !("code" in error) ||
+                error.code !== "ESRCH"
+              )
+                throw error;
+            }
+          }
+          break;
+        }
+        await new Promise<void>((resolve) => setTimeout(resolve, 100));
+      }
+      // Reap detection can lag SIGKILL; it must not turn into an unbounded quit.
+      const killedDeadline = Date.now() + 2_000;
+      while (groups.size > 0 && Date.now() < killedDeadline) {
+        await observe();
+        if (groups.size > 0)
+          await new Promise<void>((resolve) => setTimeout(resolve, 100));
+      }
+      if (groups.size > 0)
+        throw new Error(
+          "Some runtime process groups did not stop. Retry quitting Silvic.",
+        );
+      await Promise.all([...this.logs.keys()].map((key) => this.closeLog(key)));
+      await Promise.all(this.closingLogs.values());
+    } catch (error) {
+      this.draining = false;
+      throw error;
     }
   }
 
@@ -1078,13 +1171,10 @@ export class CommandSupervisor {
     if (forcedFailure) {
       this.forcedFailures.delete(key);
       this.stopping.delete(key);
-      const { processId: _ended, ...rest } = entry;
-      this.running.set(key, {
-        ...rest,
-        status: "failed",
-        exitCode: exitCode || 1,
-        advice: forcedFailure,
-      });
+      this.running.set(
+        key,
+        this.failedCommand(entry, exitCode || 1, forcedFailure),
+      );
       void this.closeLog(key);
       this.announce();
       return;
@@ -1098,14 +1188,52 @@ export class CommandSupervisor {
     }
     // The process id goes with the process: keeping it would offer something
     // to stop that is not there any more.
-    const { processId: _ended, ...rest } = entry;
-    this.running.set(key, {
-      ...rest,
-      status: exitCode === 0 ? "stopped" : "failed",
-      exitCode,
-    });
+    this.running.set(key, this.failedCommand(entry, exitCode));
     void this.closeLog(key);
     this.announce();
+  }
+
+  private failedCommand(
+    entry: SupervisedCommand,
+    exitCode: number,
+    advice?: string,
+  ): SupervisedCommand {
+    const { processId: _ended, ...rest } = entry;
+    const tail = this.recentOutput(keyFor(entry.plotPath, entry.id))
+      .replace(/\x1b\[[0-9;]*m/g, "")
+      .trim();
+    const category =
+      /heap out of memory|FatalProcessOutOfMemory|OOMErrorHandler/i.test(tail)
+        ? "Node heap exhausted"
+        : /unauthorized|unauthenticated|invalid.*(?:key|token)|authentication failed/i.test(
+              tail,
+            )
+          ? "Authentication failed"
+          : /failed to connect|connection.*(?:closed|refused)|ECONNREFUSED|ENOTFOUND/i.test(
+                tail,
+              )
+            ? "Connection failed"
+            : "Application exited";
+    const reason =
+      tail
+        .split(/\r?\n/)
+        .filter((line) =>
+          /error|failed|exception|not found|out of memory/i.test(line),
+        )
+        .slice(-3)
+        .join("\n")
+        .slice(-1_500) || tail.slice(-1_000);
+    return {
+      ...rest,
+      status: "failed",
+      exitCode,
+      failedAt: new Date().toISOString(),
+      failureCount: (entry.failureCount ?? 0) + 1,
+      advice:
+        advice ??
+        entry.advice ??
+        `${category} (exit ${exitCode}). ${reason || "No error output was recorded. Open logs or retry this runtime."}`,
+    };
   }
 
   private async restartAfterViteRecovery(recovery: {
@@ -1113,6 +1241,7 @@ export class CommandSupervisor {
     routed: boolean;
     externalAstro?: boolean;
   }): Promise<void> {
+    const epoch = this.shutdownEpoch;
     try {
       if (recovery.externalAstro) {
         await stopExternalAstroServer(recovery.request);
@@ -1121,6 +1250,7 @@ export class CommandSupervisor {
       const key = keyFor(recovery.request.plotPath, recovery.request.id);
       const current = this.running.get(key);
       if (!current || current.status === "stopping") return;
+      if (this.draining || epoch !== this.shutdownEpoch) return;
       await this.spawn(recovery.request, recovery.routed, {
         notice: recovery.externalAstro
           ? "Silvic stopped the stale external Astro server, rebuilt the Vite cache and restarted this preview."
@@ -1129,6 +1259,7 @@ export class CommandSupervisor {
         appendLog: true,
       });
     } catch (error) {
+      if (this.draining || epoch !== this.shutdownEpoch) return;
       this.refuse(
         recovery.request,
         `Silvic could not rebuild the Vite cache and restart the preview: ${error instanceof Error ? error.message : String(error)}`,
@@ -1191,13 +1322,23 @@ export class CommandSupervisor {
     }
   }
 
-  private async openLog(key: string, append = false): Promise<RuntimeLog> {
+  private async openLog(
+    key: string,
+    append = false,
+    epoch = this.shutdownEpoch,
+  ): Promise<RuntimeLog | undefined> {
     await mkdir(this.options.logDirectory, { recursive: true });
+    if (this.draining || epoch !== this.shutdownEpoch) return;
     await this.closeLog(key);
+    if (this.draining || epoch !== this.shutdownEpoch) return;
     const log = await openRuntimeLog(this.logPath(key), append, () => {
       // A full or detached volume must not take the whole control plane down.
       if (this.logs.get(key) === log) void this.closeLog(key);
     });
+    if (this.draining || epoch !== this.shutdownEpoch) {
+      await log.end();
+      return;
+    }
     this.logs.set(key, log);
     return log;
   }
@@ -1357,15 +1498,28 @@ async function stillRunning(
  * the command then starts a second server beside the working one, and both
  * fight over the port.
  */
+async function readProcessGroups(): Promise<ReadonlySet<number>> {
+  const { stdout } = await executeFile("ps", ["-axo", "pgid=,stat="], {
+    encoding: "utf8",
+    timeout: 2_000,
+  });
+  return new Set(
+    stdout.split(/\r?\n/).flatMap((line) => {
+      const [group, status] = line.trim().split(/\s+/);
+      const id = Number(group);
+      return Number.isSafeInteger(id) &&
+        id > 0 &&
+        status &&
+        !status.startsWith("Z")
+        ? [id]
+        : [];
+    }),
+  );
+}
+
 async function groupAlive(processGroupId: number): Promise<boolean> {
   try {
-    const { stdout } = await executeFile("ps", ["-axo", "pgid="], {
-      encoding: "utf8",
-      timeout: 2_000,
-    });
-    return stdout
-      .split(/\r?\n/)
-      .some((line) => Number(line.trim()) === processGroupId);
+    return (await readProcessGroups()).has(processGroupId);
   } catch {
     return false;
   }

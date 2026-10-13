@@ -321,6 +321,8 @@ let queuedFreshRefresh: Promise<SilvicSnapshot> | undefined;
 let rootWatchers: FSWatcher[] = [];
 let filesystemRefreshTimer: NodeJS.Timeout | undefined;
 let rendererVisible = true;
+let quitting = false;
+let quitReady = false;
 const pendingFilesystemPaths = new Set<string>();
 
 app.setName("Silvic");
@@ -531,7 +533,26 @@ async function showPluginDialog({
   return result.response;
 }
 
-app.on("before-quit", () => {
+app.on("before-quit", (event) => {
+  if (!settings.get("keepCommandsRunning") && !quitReady) {
+    event.preventDefault();
+    if (quitting) return;
+    quitting = true;
+    void supervisor
+      .stopAllAndWait()
+      .then(() => {
+        quitReady = true;
+        app.quit();
+      })
+      .catch((error: unknown) => {
+        quitting = false;
+        dialog.showErrorBox(
+          "Silvic could not stop its runtimes",
+          error instanceof Error ? error.message : String(error),
+        );
+      });
+    return;
+  }
   idlePreviews?.close();
   void automationServer?.close();
   automationServer = undefined;
@@ -2312,6 +2333,10 @@ async function startPlotCommand(
   /** Whether a person just asked, which may show the admin dialog again. */
   interactive = true,
 ): Promise<void> {
+  if (quitting)
+    throw new Error(
+      "Silvic is shutting down. Wait before starting another runtime.",
+    );
   const workspace = knownWorkspace(path);
   const project = latestSnapshot.projects.find((candidate) =>
     candidate.workspaces.some(
@@ -2361,6 +2386,10 @@ async function startPlotCommand(
     }
   }
 
+  if (quitting)
+    throw new Error(
+      "Silvic is shutting down. Wait before starting another runtime.",
+    );
   await supervisor.start({
     plotPath: workspace.path,
     id,

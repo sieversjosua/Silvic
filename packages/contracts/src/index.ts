@@ -1029,6 +1029,8 @@ export interface PlotProcess {
   identity?: string;
   startedAt?: string;
   exitCode?: number;
+  failedAt?: string;
+  failureCount?: number;
   /** Why this is not what was asked for, when Silvic had to settle. */
   advice?: string;
   /** A short local lifecycle note, such as a completed automatic recovery. */

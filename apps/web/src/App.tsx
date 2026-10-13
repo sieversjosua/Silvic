@@ -1488,7 +1488,10 @@ function PlotResourceRow({
           )}
         </div>
       </div>
-      <p className="sidebar-resource-detail mono truncate">
+      <p
+        className="sidebar-resource-detail mono truncate"
+        title={failure ?? resource.detail}
+      >
         {failure ?? resource.detail ?? resourceStateLabel(resource.state)}
       </p>
       {address && (

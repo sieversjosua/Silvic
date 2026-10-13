@@ -79,7 +79,7 @@ function declaredResource(
       : process
         ? undefined
         : definition.url;
-  const detail = resourceDetail(definition);
+  const detail = runtimeDetail(process) ?? resourceDetail(definition);
   return {
     id: `declared:${id}`,
     provider: definition.provider,
@@ -118,7 +118,7 @@ function commandResource(
     label: title(id),
     ...profile,
     state: processState(process),
-    detail: process?.advice ?? process?.notice ?? command.run,
+    detail: runtimeDetail(process) ?? command.run,
     ...(url ? { url } : {}),
     commandId: id,
   };
@@ -140,6 +140,13 @@ function observationResource(observation: ConnectorObservation): PlotResource {
     ...(!dashboardUrl && observation.url ? { url: observation.url } : {}),
     ...(dashboardUrl ? { dashboardUrl } : {}),
   };
+}
+
+function runtimeDetail(process: PlotProcess | undefined): string | undefined {
+  const detail = process?.advice ?? process?.notice;
+  return process?.status === "failed" && process.failedAt
+    ? `${detail ?? "Runtime failed"} · Failure ${process.failureCount ?? 1} · ${new Date(process.failedAt).toLocaleString()}`
+    : detail;
 }
 
 function processState(process: PlotProcess | undefined): PlotResource["state"] {
