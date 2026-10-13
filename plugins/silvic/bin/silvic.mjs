@@ -32903,6 +32903,25 @@ async function main(argv) {
       setRecoveryExitCode(result);
       return;
     }
+    case "artifacts-plan":
+    case "artifacts-prune": {
+      rejectOptions(
+        values,
+        command === "artifacts-plan" ? ["json", "help"] : ["json", "help", "confirm"]
+      );
+      const result = await automationCall(
+        command === "artifacts-plan" ? "runtimeArtifactPlan" : "pruneRuntimeArtifacts",
+        command === "artifacts-plan" ? {} : { confirmPlanId: requireOption(values.confirm, "--confirm") }
+      );
+      output(result, values.json, [
+        `plan	${result.planId}`,
+        ...result.routes.map((route) => `route	${route.name}`),
+        ...result.files.map(
+          (file2) => `${file2.kind}	${file2.bytes}	${file2.path}`
+        )
+      ]);
+      return;
+    }
     case "state-plan": {
       rejectOptions(values, ["json", "help"]);
       const result = await automationCall("workspaceStatePlan");
@@ -33149,6 +33168,8 @@ Usage:
   silvic adoption-plan --plot ID [--scope single|family] [--json]
   silvic adopt --plot ID [--scope single|family] --confirm STABLE_ID [--json]
   silvic provision [--plot ID] [--refresh] --confirm STABLE_ID [--remedy convex-cli|convex-adopt|convex-recreate] [--json]
+  silvic artifacts-plan [--json]
+  silvic artifacts-prune --confirm PLAN_ID [--json]
   silvic state-plan [--json]
   silvic state-prune --confirm PLAN_ID [--json]
   silvic start [--plot ID] [--runtime ID] [--json]

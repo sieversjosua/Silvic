@@ -88,8 +88,26 @@ export class GateClient {
     await this.request({ type: "route-suspend", name });
   }
 
-  async routeRemove(name: string): Promise<void> {
-    await this.request({ type: "route-remove", name });
+  async routeRemove(name: string, updatedAt?: string): Promise<void> {
+    const reply = await this.request({
+      ...(updatedAt
+        ? { type: "route-remove-if-unchanged", name, updatedAt }
+        : { type: "route-remove", name }),
+    });
+    if (reply.type === "error") throw new Error(reply.message);
+  }
+
+  async removeUnusedCertificate(file: {
+    name: string;
+    bytes: number;
+    modifiedAt: number;
+    inode: number;
+  }): Promise<void> {
+    const reply = await this.request({
+      type: "certificate-remove-if-unused",
+      ...file,
+    });
+    if (reply.type === "error") throw new Error(reply.message);
   }
 
   close(): void {

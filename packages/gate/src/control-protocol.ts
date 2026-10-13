@@ -14,8 +14,22 @@ export type ControlRequest =
     }
   /** The upstream stopped; keep the identity so the URL can wake it. */
   | { id: number; type: "route-suspend"; name: string }
+  | { id: number; type: "route-remove"; name: string }
   /** The plot is gone; forget the route entirely. */
-  | { id: number; type: "route-remove"; name: string };
+  | {
+      id: number;
+      type: "route-remove-if-unchanged";
+      name: string;
+      updatedAt: string;
+    }
+  | {
+      id: number;
+      type: "certificate-remove-if-unused";
+      name: string;
+      bytes: number;
+      modifiedAt: number;
+      inode: number;
+    };
 
 export type ControlReply =
   | { id: number; type: "ok" }
@@ -91,6 +105,36 @@ export function parseControlRequest(line: string): ControlRequest | undefined {
     case "route-remove":
       if (typeof name !== "string" || !validRouteName(name)) return undefined;
       return { id: message["id"], type: message["type"], name };
+    case "route-remove-if-unchanged":
+      if (
+        typeof name !== "string" ||
+        !validRouteName(name) ||
+        typeof message["updatedAt"] !== "string"
+      )
+        return undefined;
+      return {
+        id: message["id"],
+        type: "route-remove-if-unchanged",
+        name,
+        updatedAt: message["updatedAt"],
+      };
+    case "certificate-remove-if-unused":
+      if (
+        typeof name !== "string" ||
+        !/^[a-z0-9][a-z0-9-]*\.localhost\.(pem|key)$/.test(name) ||
+        typeof message["bytes"] !== "number" ||
+        typeof message["modifiedAt"] !== "number" ||
+        typeof message["inode"] !== "number"
+      )
+        return undefined;
+      return {
+        id: message["id"],
+        type: "certificate-remove-if-unused",
+        name,
+        bytes: message["bytes"],
+        modifiedAt: message["modifiedAt"],
+        inode: message["inode"],
+      };
     default:
       return undefined;
   }

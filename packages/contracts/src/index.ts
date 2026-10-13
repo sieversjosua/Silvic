@@ -1286,3 +1286,16 @@ declare global {
     silvic: SilvicDesktopApi;
   }
 }
+
+export interface RuntimeArtifactPlan {
+  planId: string;
+  retentionDays: number;
+  routes: readonly { name: string; updatedAt: string }[];
+  files: readonly {
+    path: string;
+    kind: "certificate" | "log";
+    bytes: number;
+    modifiedAt: number;
+    inode: number;
+  }[];
+}

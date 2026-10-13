@@ -1,6 +1,8 @@
-import { rmSync } from "node:fs";
+import { lstatSync, unlinkSync, rmSync } from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
 
+import { dirname, join } from "node:path";
+import { GATE_HOST } from "./constants";
 import {
   parseControlRequest,
   type ControlReply,
@@ -73,10 +75,54 @@ export function startControlServer({
         store.clearUpstream(request.name);
         log(`route ${request.name} suspended`);
         return { id: request.id, type: "ok" };
+      case "route-remove-if-unchanged":
       case "route-remove":
+        if (
+          request.type === "route-remove-if-unchanged" &&
+          (store.find(request.name)?.updatedAt !== request.updatedAt ||
+            store.find(request.name)?.port !== undefined)
+        )
+          return {
+            id: request.id,
+            type: "error",
+            message: "Route changed during cleanup. Inspect a fresh plan.",
+          };
+
         store.remove(request.name);
         log(`route ${request.name} removed`);
         return { id: request.id, type: "ok" };
+      case "certificate-remove-if-unused": {
+        const host = request.name.replace(/\.(pem|key)$/, "");
+        if (
+          host === GATE_HOST ||
+          store.find(host.slice(0, -".localhost".length))
+        )
+          return {
+            id: request.id,
+            type: "error",
+            message:
+              "Certificate belongs to a registered route. Inspect a fresh plan.",
+          };
+        try {
+          const path = join(dirname(socketPath), "certs", request.name);
+          const stat = lstatSync(path);
+          if (
+            !stat.isFile() ||
+            stat.size !== request.bytes ||
+            stat.mtimeMs !== request.modifiedAt ||
+            stat.ino !== request.inode
+          )
+            throw new Error("Certificate changed. Inspect a fresh plan.");
+          unlinkSync(path);
+          return { id: request.id, type: "ok" };
+        } catch (error) {
+          return {
+            id: request.id,
+            type: "error",
+            message: error instanceof Error ? error.message : String(error),
+          };
+        }
+      }
     }
   };
 
